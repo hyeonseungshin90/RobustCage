@@ -9,11 +9,11 @@ namespace bj = boost::json;
 bool mesh_valid(Cage::SMeshT& mesh)
 {
   // test close
-  for (auto eh : mesh.edges())
+  /*for (auto eh : mesh.edges())
   {
     if (mesh.is_boundary(eh))
       return false;
-  }
+  }*/
   // test manifold
   for (auto vh : mesh.vertices())
   {

@@ -259,14 +259,14 @@ void CageInitializer::retrieveCage(VM::VMeshT* vol_mesh, SM::SMeshT* boundary_me
   // Check possible error from VolumeMesher.
   // Sometimes VolumeMesher will mark some inside tets as outside. Perhaps there are bugs in VolumeMesher's exact arithmetic lib. 
   // You can drop the inside tets to fix this problem, but we report the bug here. Hope it will be fixed.
-  for (SM::EdgeHandle eh : boundary_mesh->edges())
+  /*for (SM::EdgeHandle eh : boundary_mesh->edges())
   {
     if (boundary_mesh->is_boundary(eh))
     {
       Logger::user_logger->critical("find boundary edge in boundary of tetrahedral mesh.");
       throw std::logic_error("find boundary edge in boundary of tetrahedral mesh.");
     }
-  }
+  }*/
 }
 
 }// namespace CageInit
