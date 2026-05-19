@@ -5,6 +5,20 @@ namespace Cage
 namespace CageInit
 {
 
+namespace
+{
+size_t countBoundaryEdges(SM::SMeshT* mesh)
+{
+  size_t boundary_edges = 0;
+  for (SM::EdgeHandle eh : mesh->edges())
+  {
+    if (mesh->is_boundary(eh))
+      boundary_edges++;
+  }
+  return boundary_edges;
+}
+}
+
 CageInitializer::CageInitializer()
 {
   SMesh = nullptr;
@@ -29,6 +43,7 @@ void CageInitializer::generate()
   SM::pre_calculate_edge_length(SMesh);
   SM::pre_calculate_face_area(SMesh);
   getBoundingBox();
+  const size_t input_boundary_edges = countBoundaryEdges(SMesh);
 
   // step 1. tetrahedralize space around surface mesh.
   tetrahedralizer = std::make_unique<Tetrahedralizer>(SMesh, &param->paramTetrahedralizer, outVMesh);
@@ -37,8 +52,18 @@ void CageInitializer::generate()
 
   tetrahedralizationPostProcess();
 
-  Logger::user_logger->info("separating volume mesh to inside and outside.");
-  separateMeshToInOut();
+  if (input_boundary_edges == 0)
+  {
+    Logger::user_logger->info("separating volume mesh to inside and outside.");
+    separateMeshToInOut();
+  }
+  else
+  {
+    Logger::user_logger->warn(
+      "input mesh is non-watertight ({} boundary edges); "
+      "skip inside/outside separation and extract cage from constraint-adjacent tetrahedra.",
+      input_boundary_edges);
+  }
 
   // step 2.1. trim tetrahedral mesh, including subdiving and removing tets.
   tetMeshTrimmer = std::make_unique<TetMeshTrimmer>(outVMesh);
