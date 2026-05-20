@@ -1,4 +1,5 @@
 #include "CollapseStage.hh"
+#include <cmath>
 #include <random>
 
 #define Np 50
@@ -79,7 +80,7 @@ std::vector<Vec3d> CollapseStage::generate_candidate_points_for_collapse(EdgeHan
 }
 
 bool CollapseStage::find_collapse_hausdorff_deviation(
-  EdgeHandle eh, double& local_hd_before, double& local_hd_after, Vec3d& new_point)
+  EdgeHandle eh, double& local_hd_before, double& local_hd_after, Vec3d& new_point, double& priority_score)
 {
   auto edge_collapser = new_edge_collapser();
 
@@ -105,6 +106,9 @@ bool CollapseStage::find_collapse_hausdorff_deviation(
   // find optimal point that minimize local hausdorff distance.
   size_t minimal_idx = 0;
   double minimal_local_hd = DBL_MAX;
+  double maximal_priority_score = -DBL_MAX;
+  const bool use_post_metric = is_post_metric_priority_mode();
+  const double pre_collapse_metric = use_post_metric ? calc_pre_collapse_metric(eh) : 0.0;
 
 #if USE_TREE_SEARCH
   ot->set_hint(candidate_points[0]);
@@ -112,12 +116,32 @@ bool CollapseStage::find_collapse_hausdorff_deviation(
 #pragma omp parallel for schedule(dynamic)
   for (int i = 0;i < (int)candidate_points_size;i++)
   {
-    double local_hd_i = edge_collapser.local_Hausdorff_after_collapsing(&local_meshes[i], candidate_points[i], minimal_local_hd);
-  #pragma omp critical
-    if (local_hd_i < minimal_local_hd)
+    double hd_threshold = use_post_metric ? max_distance_error : minimal_local_hd;
+    double local_hd_i = edge_collapser.local_Hausdorff_after_collapsing(&local_meshes[i], candidate_points[i], hd_threshold);
+    double candidate_priority_score = 0.0;
+    bool candidate_ok = local_hd_i != DBL_MAX;
+    if (candidate_ok && use_post_metric)
     {
-      minimal_local_hd = local_hd_i;
-      minimal_idx = i;
+      candidate_priority_score = calc_post_collapse_metric_score(pre_collapse_metric, &local_meshes[i]);
+    }
+  #pragma omp critical
+    if (candidate_ok)
+    {
+      if (use_post_metric)
+      {
+        if (candidate_priority_score > maximal_priority_score ||
+          (std::abs(candidate_priority_score - maximal_priority_score) <= 1e-12 && local_hd_i < minimal_local_hd))
+        {
+          maximal_priority_score = candidate_priority_score;
+          minimal_local_hd = local_hd_i;
+          minimal_idx = i;
+        }
+      }
+      else if (local_hd_i < minimal_local_hd)
+      {
+        minimal_local_hd = local_hd_i;
+        minimal_idx = i;
+      }
     }
   }
 #if USE_TREE_SEARCH
@@ -129,6 +153,7 @@ bool CollapseStage::find_collapse_hausdorff_deviation(
     // found a available point
     local_hd_after = minimal_local_hd;
     new_point = candidate_points[minimal_idx];
+    priority_score = use_post_metric ? maximal_priority_score : 0.0;
     return true;
   }
   else return false;
@@ -139,8 +164,116 @@ bool CollapseStage::is_length_priority_mode() const
   return param->priorityMode == "length" || param->priorityMode == "edge_length";
 }
 
+bool CollapseStage::is_post_edge_length_priority_mode() const
+{
+  return param->priorityMode == "post_edge_length" || param->priorityMode == "post-edge-length";
+}
+
+bool CollapseStage::is_post_face_area_priority_mode() const
+{
+  return param->priorityMode == "post_face_area" || param->priorityMode == "post-face-area";
+}
+
+bool CollapseStage::is_triangle_quality_priority_mode() const
+{
+  return param->priorityMode == "triangle_quality" || param->priorityMode == "triangle-quality";
+}
+
+bool CollapseStage::is_post_metric_priority_mode() const
+{
+  return is_post_edge_length_priority_mode() ||
+    is_post_face_area_priority_mode() ||
+    is_triangle_quality_priority_mode();
+}
+
+double CollapseStage::calc_pre_collapse_metric(EdgeHandle eh) const
+{
+  std::set<FaceHandle> faces;
+  one_ring_faces_around_edge(rm, rm->halfedge_handle(eh, 0), faces);
+
+  if (is_post_edge_length_priority_mode())
+    return calc_max_edge_length(rm, faces);
+  if (is_post_face_area_priority_mode())
+    return calc_max_face_area(rm, faces);
+  if (is_triangle_quality_priority_mode())
+    return calc_min_triangle_quality(rm, faces);
+  return 0.0;
+}
+
+double CollapseStage::calc_post_collapse_metric_score(double pre_metric, SMeshT* local_mesh) const
+{
+  if (is_post_edge_length_priority_mode())
+    return pre_metric - calc_max_edge_length(local_mesh);
+  if (is_post_face_area_priority_mode())
+    return pre_metric - calc_max_face_area(local_mesh);
+  if (is_triangle_quality_priority_mode())
+    return calc_min_triangle_quality(local_mesh) - pre_metric;
+  return 0.0;
+}
+
+double CollapseStage::calc_max_edge_length(SMeshT* mesh) const
+{
+  double max_edge_length = 0.0;
+  for (EdgeHandle eh : mesh->edges())
+    max_edge_length = std::max(max_edge_length, mesh->data(eh).edge_length);
+  return max_edge_length;
+}
+
+double CollapseStage::calc_max_edge_length(SMeshT* mesh, const std::set<FaceHandle>& faces) const
+{
+  double max_edge_length = 0.0;
+  for (FaceHandle fh : faces)
+    for (EdgeHandle eh : mesh->fe_range(fh))
+      max_edge_length = std::max(max_edge_length, mesh->data(eh).edge_length);
+  return max_edge_length;
+}
+
+double CollapseStage::calc_max_face_area(SMeshT* mesh) const
+{
+  double max_face_area = 0.0;
+  for (FaceHandle fh : mesh->faces())
+    max_face_area = std::max(max_face_area, mesh->data(fh).face_area);
+  return max_face_area;
+}
+
+double CollapseStage::calc_max_face_area(SMeshT* mesh, const std::set<FaceHandle>& faces) const
+{
+  double max_face_area = 0.0;
+  for (FaceHandle fh : faces)
+    max_face_area = std::max(max_face_area, mesh->data(fh).face_area);
+  return max_face_area;
+}
+
+double CollapseStage::calc_triangle_quality(SMeshT* mesh, FaceHandle fh) const
+{
+  HalfedgeHandle heh = mesh->halfedge_handle(fh);
+  const double a = mesh->data(mesh->edge_handle(heh)).edge_length;
+  const double b = mesh->data(mesh->edge_handle(mesh->next_halfedge_handle(heh))).edge_length;
+  const double c = mesh->data(mesh->edge_handle(mesh->prev_halfedge_handle(heh))).edge_length;
+  const double denom = a * a + b * b + c * c;
+  if (denom <= 0.0)
+    return 0.0;
+  return 4.0 * std::sqrt(3.0) * mesh->data(fh).face_area / denom;
+}
+
+double CollapseStage::calc_min_triangle_quality(SMeshT* mesh) const
+{
+  double min_quality = DBL_MAX;
+  for (FaceHandle fh : mesh->faces())
+    min_quality = std::min(min_quality, calc_triangle_quality(mesh, fh));
+  return min_quality == DBL_MAX ? 0.0 : min_quality;
+}
+
+double CollapseStage::calc_min_triangle_quality(SMeshT* mesh, const std::set<FaceHandle>& faces) const
+{
+  double min_quality = DBL_MAX;
+  for (FaceHandle fh : faces)
+    min_quality = std::min(min_quality, calc_triangle_quality(mesh, fh));
+  return min_quality == DBL_MAX ? 0.0 : min_quality;
+}
+
 bool CollapseStage::try_enqueue_collapse_candidate(
-  EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after, const Vec3d& new_point)
+  EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after, const Vec3d& new_point, double priority_score)
 {
   if (is_length_priority_mode())
   {
@@ -152,6 +285,15 @@ bool CollapseStage::try_enqueue_collapse_candidate(
       return false;
 
     edges_to_collapse.emplace(eh, state, length_score, new_point);
+    return true;
+  }
+
+  if (is_post_metric_priority_mode())
+  {
+    if (local_hd_after >= max_distance_error)
+      return false;
+
+    edges_to_collapse.emplace(eh, state, priority_score, new_point);
     return true;
   }
 
@@ -196,9 +338,10 @@ void CollapseStage::initialize_collapse_edges_reward()
   for (EdgeHandle eh : rm->edges())
   {
     double local_hd_after, local_hd_before;
+    double priority_score;
     Vec3d new_point;
-    if (find_collapse_hausdorff_deviation(eh, local_hd_before, local_hd_after, new_point))
-      try_enqueue_collapse_candidate(eh, 0, local_hd_before, local_hd_after, new_point);
+    if (find_collapse_hausdorff_deviation(eh, local_hd_before, local_hd_after, new_point, priority_score))
+      try_enqueue_collapse_candidate(eh, 0, local_hd_before, local_hd_after, new_point, priority_score);
   }
 }
 
@@ -232,9 +375,10 @@ void CollapseStage::update_after_collapsing(VertexHandle collapsed_center)
     update_states[eh.idx()]++;
 
     double local_hd_after, local_hd_before;
+    double priority_score;
     Vec3d new_point;
-    if (find_collapse_hausdorff_deviation(eh, local_hd_before, local_hd_after, new_point))
-      try_enqueue_collapse_candidate(eh, update_states[eh.idx()], local_hd_before, local_hd_after, new_point);
+    if (find_collapse_hausdorff_deviation(eh, local_hd_before, local_hd_after, new_point, priority_score))
+      try_enqueue_collapse_candidate(eh, update_states[eh.idx()], local_hd_before, local_hd_after, new_point, priority_score);
   }
 }
 

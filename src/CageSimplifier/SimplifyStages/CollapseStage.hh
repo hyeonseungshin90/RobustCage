@@ -77,12 +77,25 @@ private:
 
   std::vector<Vec3d> generate_candidate_points_for_collapse(EdgeHandle e, EdgeCollapser& edge_collapser);
   bool find_collapse_hausdorff_deviation(
-    EdgeHandle eh, double& local_hd_before, double& local_hd_after, Vec3d& new_point);
+    EdgeHandle eh, double& local_hd_before, double& local_hd_after, Vec3d& new_point, double& priority_score);
   void initialize_collapse_edges_reward();
   void update_after_collapsing(VertexHandle collapsed_center);
   bool try_enqueue_collapse_candidate(
-    EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after, const Vec3d& new_point);
+    EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after, const Vec3d& new_point, double priority_score);
   bool is_length_priority_mode() const;
+  bool is_post_edge_length_priority_mode() const;
+  bool is_post_face_area_priority_mode() const;
+  bool is_triangle_quality_priority_mode() const;
+  bool is_post_metric_priority_mode() const;
+  double calc_pre_collapse_metric(EdgeHandle eh) const;
+  double calc_post_collapse_metric_score(double pre_metric, SMeshT* local_mesh) const;
+  double calc_max_edge_length(SMeshT* mesh) const;
+  double calc_max_edge_length(SMeshT* mesh, const std::set<FaceHandle>& faces) const;
+  double calc_max_face_area(SMeshT* mesh) const;
+  double calc_max_face_area(SMeshT* mesh, const std::set<FaceHandle>& faces) const;
+  double calc_triangle_quality(SMeshT* mesh, FaceHandle fh) const;
+  double calc_min_triangle_quality(SMeshT* mesh) const;
+  double calc_min_triangle_quality(SMeshT* mesh, const std::set<FaceHandle>& faces) const;
   EdgeSide classify_edge_side(EdgeHandle eh) const;
   EdgeSideStats collect_candidate_edge_side_stats() const;
   void add_edge_side(EdgeSideStats& stats, EdgeSide side) const;

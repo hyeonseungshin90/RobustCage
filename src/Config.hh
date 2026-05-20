@@ -56,7 +56,7 @@ struct ParamCollapseStage
 {
   // constraints
   size_t maxValence;
-  // "hausdorff": original behavior, "length": edge-length priority with Hausdorff as constraint.
+  // Supported modes: "hausdorff", "length", "post_edge_length", "post_face_area", "triangle_quality".
   std::string priorityMode;
 
   boost::json::object serialize()const

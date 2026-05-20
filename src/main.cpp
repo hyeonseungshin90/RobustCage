@@ -105,6 +105,9 @@ int main(int argc, char* argv[])
     printf("arg[0]: parameters.\n");
     printf("input \"default\" to set default parameters\n");
     printf("input \"default-length\" to set default parameters with length-based collapse priority\n");
+    printf("input \"default-post-edge-length\" to use post-collapse edge length priority\n");
+    printf("input \"default-post-face-area\" to use post-collapse face area priority\n");
+    printf("input \"default-triangle-quality\" to use triangle quality priority\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
     printf("arg[2]: output dir path.\n");
@@ -125,6 +128,18 @@ int main(int argc, char* argv[])
   if (arg_param == "default-length" || arg_param == "default_length")
   {
     param.paramCageSimplifier.paramCollapse.priorityMode = "length";
+  }
+  else if (arg_param == "default-post-edge-length" || arg_param == "default_post_edge_length")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "post_edge_length";
+  }
+  else if (arg_param == "default-post-face-area" || arg_param == "default_post_face_area")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "post_face_area";
+  }
+  else if (arg_param == "default-triangle-quality" || arg_param == "default_triangle_quality")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "triangle_quality";
   }
   else if (arg_param != "default")
   {
