@@ -235,6 +235,96 @@ void CollapseStage::update_after_collapsing(VertexHandle collapsed_center)
   }
 }
 
+CollapseStage::EdgeSide CollapseStage::classify_edge_side(EdgeHandle eh) const
+{
+  if (!eh.is_valid() || rm->status(eh).deleted())
+    return EdgeSide::Unknown;
+
+  HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
+  const Vec3d midpoint =
+    (rm->point(rm->from_vertex_handle(heh)) + rm->point(rm->to_vertex_handle(heh))) * 0.5;
+
+  Vec3d closest_point;
+  FaceHandle closest_face;
+#ifdef USE_TREE_SEARCH
+  if (!ot)
+    return EdgeSide::Unknown;
+  auto closest = ot->closest_point(midpoint);
+  closest_point = closest.first;
+  closest_face = FaceHandle(closest.second);
+#else
+  if (!og)
+    return EdgeSide::Unknown;
+  auto closest = og->closest_point(midpoint);
+  closest_point = closest.first.first;
+  closest_face = FaceHandle(closest.second);
+#endif
+
+  if (!closest_face.is_valid() || closest_face.idx() < 0 ||
+    closest_face.idx() >= static_cast<int>(om->n_faces()))
+    return EdgeSide::Unknown;
+
+  const Vec3d& normal = om->normal(closest_face);
+  const double signed_distance = (midpoint - closest_point) | normal;
+  const double side_eps = original_diagonal_length * 1e-9;
+
+  if (signed_distance > side_eps)
+    return EdgeSide::Outside;
+  if (signed_distance < -side_eps)
+    return EdgeSide::Inside;
+  return EdgeSide::OnSurface;
+}
+
+void CollapseStage::add_edge_side(EdgeSideStats& stats, EdgeSide side) const
+{
+  switch (side)
+  {
+  case EdgeSide::Inside:
+    stats.inside++;
+    break;
+  case EdgeSide::Outside:
+    stats.outside++;
+    break;
+  case EdgeSide::OnSurface:
+    stats.on_surface++;
+    break;
+  default:
+    stats.unknown++;
+    break;
+  }
+}
+
+CollapseStage::EdgeSideStats CollapseStage::collect_candidate_edge_side_stats() const
+{
+  EdgeSideStats stats;
+  CollapseEdgeRewardQueue queue_copy = edges_to_collapse;
+  while (!queue_copy.empty())
+  {
+    const auto edge_reward = queue_copy.top();
+    queue_copy.pop();
+    add_edge_side(stats, classify_edge_side(edge_reward.eh));
+  }
+  return stats;
+}
+
+void CollapseStage::log_edge_side_stats(const char* label, const EdgeSideStats& stats) const
+{
+  const size_t total = stats.total();
+  const auto ratio = [total](size_t count)
+  {
+    return total == 0 ? 0.0 : 100.0 * static_cast<double>(count) / static_cast<double>(total);
+  };
+
+  Logger::user_logger->info(
+    "{}: total {}, normal_positive(+N) {} ({:.2f}%), normal_negative(-N) {} ({:.2f}%), on_surface {} ({:.2f}%), unknown {} ({:.2f}%).",
+    label,
+    total,
+    stats.outside, ratio(stats.outside),
+    stats.inside, ratio(stats.inside),
+    stats.on_surface, ratio(stats.on_surface),
+    stats.unknown, ratio(stats.unknown));
+}
+
 void CollapseStage::do_collapse(size_t edge_num_to_collapse, size_t& total_collapsed_edge_num)
 {
   auto edge_collapser = new_edge_collapser();
@@ -243,8 +333,12 @@ void CollapseStage::do_collapse(size_t edge_num_to_collapse, size_t& total_colla
     /*check_wrinkle*/true, /*check_selfinter*/true, /*check_inter*/true);
 
   initialize_collapse_edges_reward();
+  log_edge_side_stats("collapse candidates", collect_candidate_edge_side_stats());
+
   size_t n_vertices = rm->n_vertices();
   size_t collapsed_edge_num = 0;
+  EdgeSideStats attempted_stats;
+  EdgeSideStats collapsed_stats;
   while (!edges_to_collapse.empty())
   {
     auto edge_reward = edges_to_collapse.top();
@@ -256,8 +350,12 @@ void CollapseStage::do_collapse(size_t edge_num_to_collapse, size_t& total_colla
     if (rm->status(edge_reward.eh).deleted())
       continue;
 
+    EdgeSide edge_side = classify_edge_side(edge_reward.eh);
+    add_edge_side(attempted_stats, edge_side);
+
     if (edge_collapser.try_collapse_edge(edge_reward.eh, edge_reward.new_point, nullptr))
     {
+      add_edge_side(collapsed_stats, edge_side);
       VertexHandle center_v = edge_collapser.get_collapsed_center();
       update_after_collapsing(center_v);
 
@@ -272,6 +370,8 @@ void CollapseStage::do_collapse(size_t edge_num_to_collapse, size_t& total_colla
     }
   }
   Logger::user_logger->info("collapsed {} edges.", collapsed_edge_num);
+  log_edge_side_stats("collapse attempted edges", attempted_stats);
+  log_edge_side_stats("collapse succeeded edges", collapsed_stats);
   rm->garbage_collection();
   lrt->collect_garbage();
   init_one_ring_faces(rm);

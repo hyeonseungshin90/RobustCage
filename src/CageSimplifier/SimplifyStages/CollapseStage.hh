@@ -57,11 +57,33 @@ private:
   typedef std::priority_queue<CollapseEdgeReward> CollapseEdgeRewardQueue;
   CollapseEdgeRewardQueue edges_to_collapse;
 
+  enum class EdgeSide
+  {
+    Inside,
+    Outside,
+    OnSurface,
+    Unknown
+  };
+
+  struct EdgeSideStats
+  {
+    size_t inside = 0;
+    size_t outside = 0;
+    size_t on_surface = 0;
+    size_t unknown = 0;
+
+    size_t total() const { return inside + outside + on_surface + unknown; }
+  };
+
   std::vector<Vec3d> generate_candidate_points_for_collapse(EdgeHandle e, EdgeCollapser& edge_collapser);
   bool find_collapse_hausdorff_deviation(
     EdgeHandle eh, double& local_hd_before, double& local_hd_after, Vec3d& new_point);
   void initialize_collapse_edges_reward();
   void update_after_collapsing(VertexHandle collapsed_center);
+  EdgeSide classify_edge_side(EdgeHandle eh) const;
+  EdgeSideStats collect_candidate_edge_side_stats() const;
+  void add_edge_side(EdgeSideStats& stats, EdgeSide side) const;
+  void log_edge_side_stats(const char* label, const EdgeSideStats& stats) const;
 
 
   inline EdgeCollapser new_edge_collapser() { return EdgeCollapser(om, rm, ot, lrt, og); }
