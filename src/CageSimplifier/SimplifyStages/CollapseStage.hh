@@ -80,6 +80,9 @@ private:
     EdgeHandle eh, double& local_hd_before, double& local_hd_after, Vec3d& new_point);
   void initialize_collapse_edges_reward();
   void update_after_collapsing(VertexHandle collapsed_center);
+  bool try_enqueue_collapse_candidate(
+    EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after, const Vec3d& new_point);
+  bool is_length_priority_mode() const;
   EdgeSide classify_edge_side(EdgeHandle eh) const;
   EdgeSideStats collect_candidate_edge_side_stats() const;
   void add_edge_side(EdgeSideStats& stats, EdgeSide side) const;

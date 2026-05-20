@@ -6,7 +6,8 @@
     "initError": 0.005,
     "errorStep": 0.005,
     "paramCollapse": {
-      "maxValence": 8
+      "maxValence": 8,
+      "priorityMode": "hausdorff"
     },
     "paramFlip": {
       "maxValence": 8

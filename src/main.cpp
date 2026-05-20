@@ -104,6 +104,7 @@ int main(int argc, char* argv[])
     printf("Need args:\n");
     printf("arg[0]: parameters.\n");
     printf("input \"default\" to set default parameters\n");
+    printf("input \"default-length\" to set default parameters with length-based collapse priority\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
     printf("arg[2]: output dir path.\n");
@@ -121,7 +122,11 @@ int main(int argc, char* argv[])
   std::string arg_param(argv[1]);
   Cage::ParamCageGenerator param;
 
-  if (arg_param != "default")
+  if (arg_param == "default-length" || arg_param == "default_length")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "length";
+  }
+  else if (arg_param != "default")
   {
     bf::path json_file_path(argv[1]);
     if (bf::is_regular_file(json_file_path))

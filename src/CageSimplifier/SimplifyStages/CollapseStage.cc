@@ -134,6 +134,51 @@ bool CollapseStage::find_collapse_hausdorff_deviation(
   else return false;
 }
 
+bool CollapseStage::is_length_priority_mode() const
+{
+  return param->priorityMode == "length" || param->priorityMode == "edge_length";
+}
+
+bool CollapseStage::try_enqueue_collapse_candidate(
+  EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after, const Vec3d& new_point)
+{
+  if (is_length_priority_mode())
+  {
+    if (local_hd_after >= max_distance_error)
+      return false;
+
+    const double length_score = avg_edge_length - rm->data(eh).edge_length;
+    if (length_score <= 0.0)
+      return false;
+
+    edges_to_collapse.emplace(eh, state, length_score, new_point);
+    return true;
+  }
+
+  if (allow_negtive)
+  {
+    // Original behavior: collapse smallest post-collapse local HD first.
+    if (local_hd_after < max_distance_error)
+    {
+      double error = local_hd_after + 0.1 * (rm->data(eh).edge_length - avg_edge_length);
+      edges_to_collapse.emplace(eh, state, -error, new_point);
+      return true;
+    }
+  }
+  else
+  {
+    // Original behavior: collapse largest local HD gain first.
+    if (local_hd_before - local_hd_after >= 0.0)
+    {
+      double error = local_hd_before - local_hd_after + 0.1 * (avg_edge_length - rm->data(eh).edge_length);
+      edges_to_collapse.emplace(eh, state, error, new_point);
+      return true;
+    }
+  }
+
+  return false;
+}
+
 void CollapseStage::initialize_collapse_edges_reward()
 {
   // clear
@@ -153,28 +198,7 @@ void CollapseStage::initialize_collapse_edges_reward()
     double local_hd_after, local_hd_before;
     Vec3d new_point;
     if (find_collapse_hausdorff_deviation(eh, local_hd_before, local_hd_after, new_point))
-    {
-      if (allow_negtive)
-      {
-        // we collapse closest first.
-        if (local_hd_after < max_distance_error)
-        {
-          //edges_to_collapse.emplace(eh, 0, -local_hd_after, new_point);
-          double error = local_hd_after + 0.1 * (rm->data(eh).edge_length - avg_edge_length);
-          edges_to_collapse.emplace(eh, 0, -error, new_point);
-        }
-      }
-      else
-      {
-        // we collapse largest gain of hd first.
-        if (local_hd_before - local_hd_after >= 0.0)
-        {
-          //edges_to_collapse.emplace(eh, 0, local_hd_before - local_hd_after, new_point);
-          double error = local_hd_before - local_hd_after + 0.1 * (avg_edge_length - rm->data(eh).edge_length);
-          edges_to_collapse.emplace(eh, 0, error, new_point);
-        }
-      }
-    }
+      try_enqueue_collapse_candidate(eh, 0, local_hd_before, local_hd_after, new_point);
   }
 }
 
@@ -210,28 +234,7 @@ void CollapseStage::update_after_collapsing(VertexHandle collapsed_center)
     double local_hd_after, local_hd_before;
     Vec3d new_point;
     if (find_collapse_hausdorff_deviation(eh, local_hd_before, local_hd_after, new_point))
-    {
-      if (allow_negtive)
-      {
-        // we collapse closest first.
-        if (local_hd_after < max_distance_error)
-        {
-          //edges_to_collapse.emplace(eh, update_states[eh.idx()], -local_hd_after, new_point);
-          double error = local_hd_after + 0.1 * (rm->data(eh).edge_length - avg_edge_length);
-          edges_to_collapse.emplace(eh, update_states[eh.idx()], -error, new_point);
-        }
-      }
-      else
-      {
-        // we collapse largest gain of hd first.
-        if (local_hd_before - local_hd_after >= 0.0)
-        {
-          //edges_to_collapse.emplace(eh, update_states[eh.idx()], local_hd_before - local_hd_after, new_point);
-          double error = local_hd_before - local_hd_after + 0.1 * (avg_edge_length - rm->data(eh).edge_length);
-          edges_to_collapse.emplace(eh, update_states[eh.idx()], error, new_point);
-        }
-      }
-    }
+      try_enqueue_collapse_candidate(eh, update_states[eh.idx()], local_hd_before, local_hd_after, new_point);
   }
 }
 
@@ -333,6 +336,7 @@ void CollapseStage::do_collapse(size_t edge_num_to_collapse, size_t& total_colla
     /*check_wrinkle*/true, /*check_selfinter*/true, /*check_inter*/true);
 
   initialize_collapse_edges_reward();
+  Logger::user_logger->info("collapse priority mode: {}", param->priorityMode);
   log_edge_side_stats("collapse candidates", collect_candidate_edge_side_stats());
 
   size_t n_vertices = rm->n_vertices();

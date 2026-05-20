@@ -56,16 +56,24 @@ struct ParamCollapseStage
 {
   // constraints
   size_t maxValence;
+  // "hausdorff": original behavior, "length": edge-length priority with Hausdorff as constraint.
+  std::string priorityMode;
 
   boost::json::object serialize()const
   {
     boost::json::object jo;
     jo["maxValence"] = maxValence;
+    jo["priorityMode"] = priorityMode;
     return jo;
   }
   void deserialize(const boost::json::object& jo)
   {
     maxValence = jo.at("maxValence").as_int64();
+    auto priority_mode_it = jo.find("priorityMode");
+    if (priority_mode_it != jo.end())
+      priorityMode = std::string(priority_mode_it->value().as_string().c_str());
+    else
+      priorityMode = "hausdorff";
   }
 };
 
@@ -170,6 +178,7 @@ struct ParamCageGenerator
 
     auto& collapse = paramCageSimplifier.paramCollapse;
     collapse.maxValence = 8;
+    collapse.priorityMode = "hausdorff";
 
     auto& relocate = paramCageSimplifier.paramRelocate;
     relocate.smoothIter = 3;
