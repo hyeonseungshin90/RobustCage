@@ -1,4 +1,6 @@
 #include "CageInitializer.hh"
+#include <fstream>
+#include <iomanip>
 
 namespace Cage
 {
@@ -16,6 +18,42 @@ size_t countBoundaryEdges(SM::SMeshT* mesh)
       boundary_edges++;
   }
   return boundary_edges;
+}
+
+void writeVolumeMeshFacesObj(VM::VMeshT* mesh, const std::string& file_name)
+{
+  std::fstream fout(file_name, std::fstream::out);
+  ASSERT(fout.is_open(), "fail to open {}", file_name);
+
+  fout << std::setprecision(17);
+  fout << "# volume mesh face dump\n";
+  fout << "# vertices " << mesh->nVertices() << "\n";
+  fout << "# faces " << mesh->nFaces() << "\n";
+  fout << "# cells " << mesh->nCells() << "\n";
+
+  for (size_t vidx = 0; vidx < mesh->nVertices(); vidx++)
+  {
+    auto& p = mesh->point(VM::VertexHandle(vidx));
+    fout << "v " << p.x() << " " << p.y() << " " << p.z() << "\n";
+  }
+
+  size_t written_faces = 0;
+  for (size_t fidx = 0; fidx < mesh->nFaces(); fidx++)
+  {
+    VM::FaceHandle fh(fidx);
+    if (mesh->face(fh).nConnCells() == 0)
+      continue;
+
+    auto fv = mesh->findFV(fh);
+    fout << "f "
+      << fv[0].idx() + 1 << " "
+      << fv[1].idx() + 1 << " "
+      << fv[2].idx() + 1 << "\n";
+    written_faces++;
+  }
+
+  fout.close();
+  Logger::user_logger->info("wrote volume mesh face OBJ: {} ({} faces)", file_name, written_faces);
 }
 }
 
@@ -49,6 +87,9 @@ void CageInitializer::generate()
   tetrahedralizer = std::make_unique<Tetrahedralizer>(SMesh, &param->paramTetrahedralizer, outVMesh);
   tetrahedralizer->tetrahedralize();
   tetrahedralizer.reset();
+  writeVolumeMeshFacesObj(
+    outVMesh,
+    param->fileOutPath + param->fileName + "_debug_tetrahedralize.obj");
 
   tetrahedralizationPostProcess();
 
@@ -68,9 +109,16 @@ void CageInitializer::generate()
   // step 2.1. trim tetrahedral mesh, including subdiving and removing tets.
   tetMeshTrimmer = std::make_unique<TetMeshTrimmer>(outVMesh);
   tetMeshTrimmer->trim();
+  writeVolumeMeshFacesObj(
+    outVMesh,
+    param->fileOutPath + param->fileName + "_debug_trim.obj");
 
   // step 2.2. retrieve cage from tetrahedral mesh.
   retrieveCage(outVMesh, outSMesh);
+  const std::string retrieve_cage_path =
+    param->fileOutPath + param->fileName + "_debug_retrieve_cage.obj";
+  OpenMesh::IO::write_mesh(*outSMesh, retrieve_cage_path, OpenMesh::IO::Options::Default, 15);
+  Logger::user_logger->info("wrote retrieved cage OBJ: {}", retrieve_cage_path);
   tetMeshTrimmer.reset();
   {Logger::user_logger->info("generating initial cage done!");}
   {Logger::user_logger->info("peak memory used: {} MB", getPeakMegabytesUsed());}

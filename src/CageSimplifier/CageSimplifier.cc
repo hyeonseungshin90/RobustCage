@@ -41,6 +41,10 @@ void CageSimplifier::simplify()
 
   degeneration_remover->perform();
   fast_simplifier->simplify();
+  const std::string fast_simplify_path =
+    param->fileOutPath + param->fileName + "_debug_fast_simplify.obj";
+  OpenMesh::IO::write_mesh(*rm, fast_simplify_path, OpenMesh::IO::Options::Default, 15);
+  Logger::user_logger->info("wrote fast simplify OBJ: {}", fast_simplify_path);
 
   #ifdef OUTPUT_MIDDLE_RESULT
     OpenMesh::IO::write_mesh(*rm, param->fileOutPath + std::to_string(param->cageLabel) + "_fast_simplify.obj",
