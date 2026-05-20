@@ -120,9 +120,16 @@ bool CollapseStage::find_collapse_hausdorff_deviation(
     double local_hd_i = edge_collapser.local_Hausdorff_after_collapsing(&local_meshes[i], candidate_points[i], hd_threshold);
     double candidate_priority_score = 0.0;
     bool candidate_ok = local_hd_i != DBL_MAX;
+    if (candidate_ok && use_post_metric && local_hd_i >= max_distance_error)
+      candidate_ok = false;
     if (candidate_ok && use_post_metric)
     {
       candidate_priority_score = calc_post_collapse_metric_score(pre_collapse_metric, &local_meshes[i]);
+      if (is_length_quality_priority_mode())
+      {
+        const double post_quality = pre_collapse_metric + candidate_priority_score;
+        candidate_ok = is_length_quality_allowed(pre_collapse_metric, post_quality);
+      }
     }
   #pragma omp critical
     if (candidate_ok)
@@ -164,6 +171,33 @@ bool CollapseStage::is_length_priority_mode() const
   return param->priorityMode == "length" || param->priorityMode == "edge_length";
 }
 
+bool CollapseStage::is_length_quality_priority_mode() const
+{
+  return param->priorityMode == "length_quality" || param->priorityMode == "length-quality";
+}
+
+bool CollapseStage::is_length_quality_weighted_submode() const
+{
+  return param->lengthQualitySubMode == "weighted" || param->lengthQualitySubMode == "weight";
+}
+
+bool CollapseStage::is_length_quality_relative_reject_submode() const
+{
+  return param->lengthQualitySubMode == "relative_reject" || param->lengthQualitySubMode == "relative-reject" ||
+    param->lengthQualitySubMode == "relative";
+}
+
+bool CollapseStage::is_length_quality_absolute_reject_submode() const
+{
+  return param->lengthQualitySubMode == "absolute_reject" || param->lengthQualitySubMode == "absolute-reject" ||
+    param->lengthQualitySubMode == "absolute";
+}
+
+bool CollapseStage::is_length_quality_lexicographic_submode() const
+{
+  return param->lengthQualitySubMode == "lexicographic" || param->lengthQualitySubMode == "lex";
+}
+
 bool CollapseStage::is_post_edge_length_priority_mode() const
 {
   return param->priorityMode == "post_edge_length" || param->priorityMode == "post-edge-length";
@@ -183,7 +217,27 @@ bool CollapseStage::is_post_metric_priority_mode() const
 {
   return is_post_edge_length_priority_mode() ||
     is_post_face_area_priority_mode() ||
-    is_triangle_quality_priority_mode();
+    is_triangle_quality_priority_mode() ||
+    is_length_quality_priority_mode();
+}
+
+bool CollapseStage::is_length_quality_allowed(double pre_quality, double post_quality) const
+{
+  if (is_length_quality_relative_reject_submode())
+    return post_quality >= pre_quality * param->lengthQualityDegradationRatio;
+  if (is_length_quality_absolute_reject_submode())
+    return post_quality >= param->lengthQualityMinQuality;
+  return true;
+}
+
+double CollapseStage::calc_length_quality_reward(double normalized_length_score, double quality_delta) const
+{
+  if (is_length_quality_weighted_submode() ||
+    (!is_length_quality_relative_reject_submode() &&
+      !is_length_quality_absolute_reject_submode() &&
+      !is_length_quality_lexicographic_submode()))
+    return normalized_length_score + param->lengthQualityWeight * quality_delta;
+  return normalized_length_score + quality_delta;
 }
 
 double CollapseStage::calc_pre_collapse_metric(EdgeHandle eh) const
@@ -195,7 +249,7 @@ double CollapseStage::calc_pre_collapse_metric(EdgeHandle eh) const
     return calc_max_edge_length(rm, faces);
   if (is_post_face_area_priority_mode())
     return calc_max_face_area(rm, faces);
-  if (is_triangle_quality_priority_mode())
+  if (is_triangle_quality_priority_mode() || is_length_quality_priority_mode())
     return calc_min_triangle_quality(rm, faces);
   return 0.0;
 }
@@ -206,7 +260,7 @@ double CollapseStage::calc_post_collapse_metric_score(double pre_metric, SMeshT*
     return pre_metric - calc_max_edge_length(local_mesh);
   if (is_post_face_area_priority_mode())
     return pre_metric - calc_max_face_area(local_mesh);
-  if (is_triangle_quality_priority_mode())
+  if (is_triangle_quality_priority_mode() || is_length_quality_priority_mode())
     return calc_min_triangle_quality(local_mesh) - pre_metric;
   return 0.0;
 }
@@ -275,6 +329,28 @@ double CollapseStage::calc_min_triangle_quality(SMeshT* mesh, const std::set<Fac
 bool CollapseStage::try_enqueue_collapse_candidate(
   EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after, const Vec3d& new_point, double priority_score)
 {
+  if (is_length_quality_priority_mode())
+  {
+    if (local_hd_after >= max_distance_error)
+      return false;
+
+    const double length_score = avg_edge_length - rm->data(eh).edge_length;
+    if (length_score <= 0.0)
+      return false;
+
+    const double pre_quality = calc_pre_collapse_metric(eh);
+    const double post_quality = pre_quality + priority_score;
+    if (!is_length_quality_allowed(pre_quality, post_quality))
+      return false;
+
+    const double normalized_length_score = avg_edge_length > 0.0 ? length_score / avg_edge_length : length_score;
+    if (is_length_quality_lexicographic_submode())
+      edges_to_collapse.emplace(eh, state, normalized_length_score, new_point, priority_score);
+    else
+      edges_to_collapse.emplace(eh, state, calc_length_quality_reward(normalized_length_score, priority_score), new_point);
+    return true;
+  }
+
   if (is_length_priority_mode())
   {
     if (local_hd_after >= max_distance_error)
@@ -480,7 +556,18 @@ void CollapseStage::do_collapse(size_t edge_num_to_collapse, size_t& total_colla
     /*check_wrinkle*/true, /*check_selfinter*/true, /*check_inter*/true);
 
   initialize_collapse_edges_reward();
-  Logger::user_logger->info("collapse priority mode: {}", param->priorityMode);
+  if (is_length_quality_priority_mode())
+  {
+    Logger::user_logger->info(
+      "collapse priority mode: {} (submode {}, weight {}, relative ratio {}, min quality {})",
+      param->priorityMode,
+      param->lengthQualitySubMode,
+      param->lengthQualityWeight,
+      param->lengthQualityDegradationRatio,
+      param->lengthQualityMinQuality);
+  }
+  else
+    Logger::user_logger->info("collapse priority mode: {}", param->priorityMode);
   log_edge_side_stats("collapse candidates", collect_candidate_edge_side_stats());
 
   size_t n_vertices = rm->n_vertices();

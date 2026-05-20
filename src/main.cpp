@@ -105,6 +105,11 @@ int main(int argc, char* argv[])
     printf("arg[0]: parameters.\n");
     printf("input \"default\" to set default parameters\n");
     printf("input \"default-length\" to set default parameters with length-based collapse priority\n");
+    printf("input \"default-length-quality\" to use weighted length + triangle quality priority\n");
+    printf("input \"default-length-quality-weighted\" to use weighted quality penalty\n");
+    printf("input \"default-length-quality-relative\" to reject large relative quality drops\n");
+    printf("input \"default-length-quality-absolute\" to reject triangles below a quality threshold\n");
+    printf("input \"default-length-quality-lexicographic\" to use length first and quality as tie-break\n");
     printf("input \"default-post-edge-length\" to use post-collapse edge length priority\n");
     printf("input \"default-post-face-area\" to use post-collapse face area priority\n");
     printf("input \"default-triangle-quality\" to use triangle quality priority\n");
@@ -128,6 +133,31 @@ int main(int argc, char* argv[])
   if (arg_param == "default-length" || arg_param == "default_length")
   {
     param.paramCageSimplifier.paramCollapse.priorityMode = "length";
+  }
+  else if (arg_param == "default-length-quality" || arg_param == "default_length_quality")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "length_quality";
+    param.paramCageSimplifier.paramCollapse.lengthQualitySubMode = "weighted";
+  }
+  else if (arg_param == "default-length-quality-weighted" || arg_param == "default_length_quality_weighted")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "length_quality";
+    param.paramCageSimplifier.paramCollapse.lengthQualitySubMode = "weighted";
+  }
+  else if (arg_param == "default-length-quality-relative" || arg_param == "default_length_quality_relative")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "length_quality";
+    param.paramCageSimplifier.paramCollapse.lengthQualitySubMode = "relative_reject";
+  }
+  else if (arg_param == "default-length-quality-absolute" || arg_param == "default_length_quality_absolute")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "length_quality";
+    param.paramCageSimplifier.paramCollapse.lengthQualitySubMode = "absolute_reject";
+  }
+  else if (arg_param == "default-length-quality-lexicographic" || arg_param == "default_length_quality_lexicographic")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "length_quality";
+    param.paramCageSimplifier.paramCollapse.lengthQualitySubMode = "lexicographic";
   }
   else if (arg_param == "default-post-edge-length" || arg_param == "default_post_edge_length")
   {
