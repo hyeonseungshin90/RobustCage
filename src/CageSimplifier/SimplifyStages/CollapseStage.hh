@@ -98,6 +98,7 @@ private:
   bool is_post_face_area_priority_mode() const;
   bool is_triangle_quality_priority_mode() const;
   bool is_post_metric_priority_mode() const;
+  bool is_hard_post_metric_priority_mode() const;
   bool is_length_quality_allowed(double pre_quality, double post_quality) const;
   double calc_length_quality_reward(double normalized_length_score, double quality_delta) const;
   double calc_pre_collapse_metric(EdgeHandle eh) const;

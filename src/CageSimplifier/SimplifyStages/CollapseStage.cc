@@ -130,6 +130,10 @@ bool CollapseStage::find_collapse_hausdorff_deviation(
         const double post_quality = pre_collapse_metric + candidate_priority_score;
         candidate_ok = is_length_quality_allowed(pre_collapse_metric, post_quality);
       }
+      else if (is_hard_post_metric_priority_mode())
+      {
+        candidate_ok = candidate_priority_score >= 0.0;
+      }
     }
   #pragma omp critical
     if (candidate_ok)
@@ -200,17 +204,20 @@ bool CollapseStage::is_length_quality_lexicographic_submode() const
 
 bool CollapseStage::is_post_edge_length_priority_mode() const
 {
-  return param->priorityMode == "post_edge_length" || param->priorityMode == "post-edge-length";
+  return param->priorityMode == "post_edge_length" || param->priorityMode == "post-edge-length" ||
+    param->priorityMode == "post_edge_length_hard" || param->priorityMode == "post-edge-length-hard";
 }
 
 bool CollapseStage::is_post_face_area_priority_mode() const
 {
-  return param->priorityMode == "post_face_area" || param->priorityMode == "post-face-area";
+  return param->priorityMode == "post_face_area" || param->priorityMode == "post-face-area" ||
+    param->priorityMode == "post_face_area_hard" || param->priorityMode == "post-face-area-hard";
 }
 
 bool CollapseStage::is_triangle_quality_priority_mode() const
 {
-  return param->priorityMode == "triangle_quality" || param->priorityMode == "triangle-quality";
+  return param->priorityMode == "triangle_quality" || param->priorityMode == "triangle-quality" ||
+    param->priorityMode == "triangle_quality_hard" || param->priorityMode == "triangle-quality-hard";
 }
 
 bool CollapseStage::is_post_metric_priority_mode() const
@@ -219,6 +226,13 @@ bool CollapseStage::is_post_metric_priority_mode() const
     is_post_face_area_priority_mode() ||
     is_triangle_quality_priority_mode() ||
     is_length_quality_priority_mode();
+}
+
+bool CollapseStage::is_hard_post_metric_priority_mode() const
+{
+  return param->priorityMode == "post_edge_length_hard" || param->priorityMode == "post-edge-length-hard" ||
+    param->priorityMode == "post_face_area_hard" || param->priorityMode == "post-face-area-hard" ||
+    param->priorityMode == "triangle_quality_hard" || param->priorityMode == "triangle-quality-hard";
 }
 
 bool CollapseStage::is_length_quality_allowed(double pre_quality, double post_quality) const
@@ -367,6 +381,8 @@ bool CollapseStage::try_enqueue_collapse_candidate(
   if (is_post_metric_priority_mode())
   {
     if (local_hd_after >= max_distance_error)
+      return false;
+    if (is_hard_post_metric_priority_mode() && priority_score < 0.0)
       return false;
 
     edges_to_collapse.emplace(eh, state, priority_score, new_point);

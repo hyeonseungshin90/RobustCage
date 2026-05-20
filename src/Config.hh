@@ -56,7 +56,9 @@ struct ParamCollapseStage
 {
   // constraints
   size_t maxValence;
-  // Supported modes: "hausdorff", "length", "length_quality", "post_edge_length", "post_face_area", "triangle_quality".
+  // Supported modes: "hausdorff", "length", "length_quality",
+  // "post_edge_length", "post_face_area", "triangle_quality",
+  // "post_edge_length_hard", "post_face_area_hard", "triangle_quality_hard".
   std::string priorityMode;
   // Supported length-quality submodes: "weighted", "relative_reject", "absolute_reject", "lexicographic".
   std::string lengthQualitySubMode;

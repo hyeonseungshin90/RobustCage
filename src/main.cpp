@@ -111,8 +111,11 @@ int main(int argc, char* argv[])
     printf("input \"default-length-quality-absolute\" to reject triangles below a quality threshold\n");
     printf("input \"default-length-quality-lexicographic\" to use length first and quality as tie-break\n");
     printf("input \"default-post-edge-length\" to use post-collapse edge length priority\n");
+    printf("input \"default-post-edge-length-hard\" to require post-collapse max edge length not to increase\n");
     printf("input \"default-post-face-area\" to use post-collapse face area priority\n");
+    printf("input \"default-post-face-area-hard\" to require post-collapse max face area not to increase\n");
     printf("input \"default-triangle-quality\" to use triangle quality priority\n");
+    printf("input \"default-triangle-quality-hard\" to require post-collapse min triangle quality not to decrease\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
     printf("arg[2]: output dir path.\n");
@@ -163,13 +166,25 @@ int main(int argc, char* argv[])
   {
     param.paramCageSimplifier.paramCollapse.priorityMode = "post_edge_length";
   }
+  else if (arg_param == "default-post-edge-length-hard" || arg_param == "default_post_edge_length_hard")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "post_edge_length_hard";
+  }
   else if (arg_param == "default-post-face-area" || arg_param == "default_post_face_area")
   {
     param.paramCageSimplifier.paramCollapse.priorityMode = "post_face_area";
   }
+  else if (arg_param == "default-post-face-area-hard" || arg_param == "default_post_face_area_hard")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "post_face_area_hard";
+  }
   else if (arg_param == "default-triangle-quality" || arg_param == "default_triangle_quality")
   {
     param.paramCageSimplifier.paramCollapse.priorityMode = "triangle_quality";
+  }
+  else if (arg_param == "default-triangle-quality-hard" || arg_param == "default_triangle_quality_hard")
+  {
+    param.paramCageSimplifier.paramCollapse.priorityMode = "triangle_quality_hard";
   }
   else if (arg_param != "default")
   {
