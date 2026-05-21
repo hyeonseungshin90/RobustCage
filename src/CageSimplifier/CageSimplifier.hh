@@ -56,6 +56,9 @@ private:
   void update_strategy();
 
   void simplify_to_target_num();
+  double calc_triangle_quality(FaceHandle fh) const;
+  double calc_min_triangle_quality() const;
+  void log_min_triangle_quality(const char* label) const;
 };
 }// namespace CageSimp
 }// namespace Cage

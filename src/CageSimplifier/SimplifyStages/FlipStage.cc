@@ -135,14 +135,18 @@ double FlipStage::calc_post_flip_quality(EdgeHandle eh) const
 
 double FlipStage::calc_triangle_quality(FaceHandle fh) const
 {
-  HalfedgeHandle heh = rm->halfedge_handle(fh);
-  const double a = rm->data(rm->edge_handle(heh)).edge_length;
-  const double b = rm->data(rm->edge_handle(rm->next_halfedge_handle(heh))).edge_length;
-  const double c = rm->data(rm->edge_handle(rm->prev_halfedge_handle(heh))).edge_length;
-  const double denom = a * a + b * b + c * c;
-  if (denom <= 0.0)
+  Vec3d pts[3];
+  size_t vertex_count = 0;
+  for (VertexHandle vh : rm->fv_range(fh))
+  {
+    if (vertex_count >= 3)
+      return 0.0;
+    pts[vertex_count++] = rm->point(vh);
+  }
+  if (vertex_count != 3)
     return 0.0;
-  return 4.0 * std::sqrt(3.0) * rm->data(fh).face_area / denom;
+
+  return calc_triangle_quality(pts[0], pts[1], pts[2]);
 }
 
 double FlipStage::calc_triangle_quality(const Vec3d& p0, const Vec3d& p1, const Vec3d& p2) const

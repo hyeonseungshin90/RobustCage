@@ -1,4 +1,6 @@
 #include "RelocateStage.hh"
+#include <algorithm>
+#include <cmath>
 #include <random>
 
 namespace Cage
@@ -79,6 +81,9 @@ bool RelocateStage::find_relocate_hausdorff_deviation(
   // find optimal point that minimize local hausdorff distance.
   size_t minimal_idx = 0;
   double minimal_local_hd = DBL_MAX;
+  double maximal_quality_delta = -DBL_MAX;
+  const bool use_quality_hard = is_triangle_quality_hard_priority_mode();
+  const double pre_relocate_quality = use_quality_hard ? calc_pre_relocate_quality(vh) : 0.0;
 
 #if USE_TREE_SEARCH
   ot->set_hint(candidate_points[0]);
@@ -86,12 +91,34 @@ bool RelocateStage::find_relocate_hausdorff_deviation(
 #pragma omp parallel for schedule(dynamic)
   for (int i = 0;i < (int)candidate_points_size;i++)
   {
-    double local_hd_i = vertex_relocater.local_Hausdorff_after_relocating(&local_meshes[i], candidate_points[i], minimal_local_hd);
-  #pragma omp critical 
-    if (local_hd_i < minimal_local_hd)
+    const double hd_threshold = use_quality_hard ? DBL_MAX : minimal_local_hd;
+    double local_hd_i = vertex_relocater.local_Hausdorff_after_relocating(&local_meshes[i], candidate_points[i], hd_threshold);
+    double quality_delta = 0.0;
+    bool candidate_ok = local_hd_i != DBL_MAX;
+    if (candidate_ok && use_quality_hard)
     {
-      minimal_local_hd = local_hd_i;
-      minimal_idx = i;
+      quality_delta = calc_min_triangle_quality(&local_meshes[i]) - pre_relocate_quality;
+      if (quality_delta < 0.0)
+        candidate_ok = false;
+    }
+  #pragma omp critical 
+    if (candidate_ok)
+    {
+      if (use_quality_hard)
+      {
+        if (quality_delta > maximal_quality_delta ||
+          (std::abs(quality_delta - maximal_quality_delta) <= 1e-12 && local_hd_i < minimal_local_hd))
+        {
+          maximal_quality_delta = quality_delta;
+          minimal_local_hd = local_hd_i;
+          minimal_idx = i;
+        }
+      }
+      else if (local_hd_i < minimal_local_hd)
+      {
+        minimal_local_hd = local_hd_i;
+        minimal_idx = i;
+      }
     }
   }
 #if USE_TREE_SEARCH
@@ -106,6 +133,59 @@ bool RelocateStage::find_relocate_hausdorff_deviation(
     return true;
   }
   else return false;
+}
+
+bool RelocateStage::is_triangle_quality_hard_priority_mode() const
+{
+  return param->priorityMode == "triangle_quality_hard" || param->priorityMode == "triangle-quality-hard";
+}
+
+double RelocateStage::calc_pre_relocate_quality(VertexHandle vh) const
+{
+  std::vector<FaceHandle> faces;
+  for (FaceHandle vf : rm->vf_range(vh))
+    faces.push_back(vf);
+  return calc_min_triangle_quality(rm, faces);
+}
+
+double RelocateStage::calc_triangle_quality(SMeshT* mesh, FaceHandle fh) const
+{
+  Vec3d pts[3];
+  size_t vertex_count = 0;
+  for (VertexHandle vh : mesh->fv_range(fh))
+  {
+    if (vertex_count >= 3)
+      return 0.0;
+    pts[vertex_count++] = mesh->point(vh);
+  }
+  if (vertex_count != 3)
+    return 0.0;
+
+  const double a = (pts[1] - pts[0]).length();
+  const double b = (pts[2] - pts[1]).length();
+  const double c = (pts[0] - pts[2]).length();
+  const double denom = a * a + b * b + c * c;
+  if (denom <= 0.0)
+    return 0.0;
+
+  const double area = 0.5 * (pts[1] - pts[0]).cross(pts[2] - pts[0]).length();
+  return 4.0 * std::sqrt(3.0) * area / denom;
+}
+
+double RelocateStage::calc_min_triangle_quality(SMeshT* mesh) const
+{
+  double min_quality = DBL_MAX;
+  for (FaceHandle fh : mesh->faces())
+    min_quality = std::min(min_quality, calc_triangle_quality(mesh, fh));
+  return min_quality == DBL_MAX ? 0.0 : min_quality;
+}
+
+double RelocateStage::calc_min_triangle_quality(SMeshT* mesh, const std::vector<FaceHandle>& faces) const
+{
+  double min_quality = DBL_MAX;
+  for (FaceHandle fh : faces)
+    min_quality = std::min(min_quality, calc_triangle_quality(mesh, fh));
+  return min_quality == DBL_MAX ? 0.0 : min_quality;
 }
 
 void RelocateStage::update_after_relocating(VertexHandle relocate_center)
@@ -137,6 +217,7 @@ void RelocateStage::do_relocate()
 {
   auto vertex_relocater = new_vertex_relocater();
   vertex_relocater.set_flags(/*update_links*/true, /*update_target_length*/false, /*update_normals*/true, /*check_wrinkle*/false);
+  Logger::user_logger->info("relocate priority mode: {}", param->priorityMode);
   size_t relocated_vertex_num = 0;
   for (size_t it = 0;it < param->smoothIter;it++)
   {

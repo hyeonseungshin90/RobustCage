@@ -1,4 +1,6 @@
 #include "CageSimplifier.hh"
+#include <algorithm>
+#include <cmath>
 
 namespace Cage
 {
@@ -41,6 +43,7 @@ void CageSimplifier::simplify()
 
   degeneration_remover->perform();
   fast_simplifier->simplify();
+  log_min_triangle_quality("after fast simplify");
   const std::string fast_simplify_path =
     param->fileOutPath + param->fileName + "_debug_fast_simplify.obj";
   OpenMesh::IO::write_mesh(*rm, fast_simplify_path, OpenMesh::IO::Options::Default, 15);
@@ -111,6 +114,43 @@ void CageSimplifier::update_strategy()
   flip_stage->update(allow_negtive, max_distance_error);
 }
 
+double CageSimplifier::calc_triangle_quality(FaceHandle fh) const
+{
+  Vec3d pts[3];
+  size_t vertex_count = 0;
+  for (VertexHandle vh : rm->fv_range(fh))
+  {
+    if (vertex_count >= 3)
+      return 0.0;
+    pts[vertex_count++] = rm->point(vh);
+  }
+  if (vertex_count != 3)
+    return 0.0;
+
+  const double a = (pts[1] - pts[0]).length();
+  const double b = (pts[2] - pts[1]).length();
+  const double c = (pts[0] - pts[2]).length();
+  const double denom = a * a + b * b + c * c;
+  if (denom <= 0.0)
+    return 0.0;
+
+  const double area = 0.5 * (pts[1] - pts[0]).cross(pts[2] - pts[0]).length();
+  return 4.0 * std::sqrt(3.0) * area / denom;
+}
+
+double CageSimplifier::calc_min_triangle_quality() const
+{
+  double min_quality = DBL_MAX;
+  for (FaceHandle fh : rm->faces())
+    min_quality = std::min(min_quality, calc_triangle_quality(fh));
+  return min_quality == DBL_MAX ? 0.0 : min_quality;
+}
+
+void CageSimplifier::log_min_triangle_quality(const char* label) const
+{
+  Logger::user_logger->info("{} min triangle quality {}.", label, calc_min_triangle_quality());
+}
+
 void CageSimplifier::simplify_to_target_num()
 {
   if (rm->n_vertices() <= param->targetVerticesNum)
@@ -142,8 +182,11 @@ void CageSimplifier::simplify_to_target_num()
   {
     update_strategy();
     collapse_stage->do_collapse(force_skip_en.front(), total_cen);
+    log_min_triangle_quality("after collapse");
     flip_stage->do_flip();
+    log_min_triangle_quality("after flip");
     relocate_stage->do_relocate();
+    log_min_triangle_quality("after relocate");
     size_t collapsed_this_iter = total_cen - last_iter_cen;
     last_iter_cen = total_cen;
     // forced to jump out,

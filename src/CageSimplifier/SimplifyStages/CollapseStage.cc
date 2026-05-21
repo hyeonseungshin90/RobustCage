@@ -314,14 +314,26 @@ double CollapseStage::calc_max_face_area(SMeshT* mesh, const std::set<FaceHandle
 
 double CollapseStage::calc_triangle_quality(SMeshT* mesh, FaceHandle fh) const
 {
-  HalfedgeHandle heh = mesh->halfedge_handle(fh);
-  const double a = mesh->data(mesh->edge_handle(heh)).edge_length;
-  const double b = mesh->data(mesh->edge_handle(mesh->next_halfedge_handle(heh))).edge_length;
-  const double c = mesh->data(mesh->edge_handle(mesh->prev_halfedge_handle(heh))).edge_length;
+  Vec3d pts[3];
+  size_t vertex_count = 0;
+  for (VertexHandle vh : mesh->fv_range(fh))
+  {
+    if (vertex_count >= 3)
+      return 0.0;
+    pts[vertex_count++] = mesh->point(vh);
+  }
+  if (vertex_count != 3)
+    return 0.0;
+
+  const double a = (pts[1] - pts[0]).length();
+  const double b = (pts[2] - pts[1]).length();
+  const double c = (pts[0] - pts[2]).length();
   const double denom = a * a + b * b + c * c;
   if (denom <= 0.0)
     return 0.0;
-  return 4.0 * std::sqrt(3.0) * mesh->data(fh).face_area / denom;
+
+  const double area = 0.5 * (pts[1] - pts[0]).cross(pts[2] - pts[0]).length();
+  return 4.0 * std::sqrt(3.0) * area / denom;
 }
 
 double CollapseStage::calc_min_triangle_quality(SMeshT* mesh) const

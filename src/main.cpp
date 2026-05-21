@@ -192,6 +192,7 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
 {
   const std::string token = normalize_parameter_token(raw_token);
   auto& collapse = param.paramCageSimplifier.paramCollapse;
+  auto& relocate = param.paramCageSimplifier.paramRelocate;
   auto& flip = param.paramCageSimplifier.paramFlip;
 
   if (token.empty() || token == "default")
@@ -266,6 +267,16 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
     flip.priorityMode = "triangle_quality_hard";
     return true;
   }
+  if (token == "relocate-hausdorff")
+  {
+    relocate.priorityMode = "hausdorff";
+    return true;
+  }
+  if (token == "relocate-triangle-quality-hard")
+  {
+    relocate.priorityMode = "triangle_quality_hard";
+    return true;
+  }
 
   Logger::user_logger->error("unknown parameter token: {}", raw_token);
   return false;
@@ -323,7 +334,8 @@ int main(int argc, char* argv[])
     printf("input \"default-triangle-quality\" to use triangle quality priority\n");
     printf("input \"default-triangle-quality-hard\" to require post-collapse min triangle quality not to decrease\n");
     printf("input \"flip-triangle-quality-hard\" to require post-flip min triangle quality not to decrease\n");
-    printf("combine presets with '+' or ',', for example \"default-length+flip-triangle-quality-hard\".\n");
+    printf("input \"relocate-triangle-quality-hard\" to require post-relocate min triangle quality not to decrease\n");
+    printf("combine presets with '+' or ',', for example \"default-length+flip-triangle-quality-hard+relocate-triangle-quality-hard\".\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
     printf("arg[2]: output dir path.\n");

@@ -41,6 +41,11 @@ private:
   bool find_relocate_hausdorff_deviation(
     VertexRelocater& relocater, VertexHandle vh, double& local_hd_before, double& local_hd_after, Vec3d& new_point);
   void update_after_relocating(VertexHandle relocate_center);
+  bool is_triangle_quality_hard_priority_mode() const;
+  double calc_pre_relocate_quality(VertexHandle vh) const;
+  double calc_triangle_quality(SMeshT* mesh, FaceHandle fh) const;
+  double calc_min_triangle_quality(SMeshT* mesh) const;
+  double calc_min_triangle_quality(SMeshT* mesh, const std::vector<FaceHandle>& faces) const;
 
   inline VertexRelocater new_vertex_relocater() { return VertexRelocater(om, rm, ot, lrt, vt, og); }
 };

@@ -107,6 +107,28 @@ struct ParamRelocateStage
 {
   // simplification parameter
   size_t smoothIter;
+  // Supported modes: "hausdorff", "triangle_quality_hard".
+  std::string priorityMode;
+
+  boost::json::object serialize()const
+  {
+    boost::json::object jo;
+    jo["smoothIter"] = smoothIter;
+    jo["priorityMode"] = priorityMode;
+    return jo;
+  }
+  void deserialize(const boost::json::object& jo)
+  {
+    auto smooth_iter_it = jo.find("smoothIter");
+    if (smooth_iter_it != jo.end())
+      smoothIter = smooth_iter_it->value().as_int64();
+
+    auto priority_mode_it = jo.find("priorityMode");
+    if (priority_mode_it != jo.end())
+      priorityMode = std::string(priority_mode_it->value().as_string().c_str());
+    else
+      priorityMode = "hausdorff";
+  }
 };
 
 struct ParamFlipStage
@@ -166,6 +188,7 @@ struct ParamCageSimplifier
     jo["initError"] = initError;
     jo["errorStep"] = errorStep;
     jo["paramCollapse"] = paramCollapse.serialize();
+    jo["paramRelocate"] = paramRelocate.serialize();
     jo["paramFlip"] = paramFlip.serialize();
     return jo;
   }
@@ -177,7 +200,12 @@ struct ParamCageSimplifier
     initError = jo.at("initError").as_double();
     errorStep = jo.at("errorStep").as_double();
     paramCollapse.deserialize(jo.at("paramCollapse").as_object());
-    paramFlip.deserialize(jo.at("paramFlip").as_object());
+    auto relocate_it = jo.find("paramRelocate");
+    if (relocate_it != jo.end())
+      paramRelocate.deserialize(relocate_it->value().as_object());
+    auto flip_it = jo.find("paramFlip");
+    if (flip_it != jo.end())
+      paramFlip.deserialize(flip_it->value().as_object());
   }
 };
 
@@ -220,6 +248,7 @@ struct ParamCageGenerator
 
     auto& relocate = paramCageSimplifier.paramRelocate;
     relocate.smoothIter = 3;
+    relocate.priorityMode = "hausdorff";
 
     auto& flip = paramCageSimplifier.paramFlip;
     flip.maxValence = 8;
