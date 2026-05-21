@@ -54,6 +54,14 @@ private:
 
   void initialize_flip_edges_reward();
   void update_after_flipping(EdgeHandle flipped_edge);
+  bool try_enqueue_flip_candidate(EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after);
+  bool is_triangle_quality_hard_priority_mode() const;
+  bool is_flip_quality_allowed(EdgeHandle eh) const;
+  double calc_flip_quality_delta(EdgeHandle eh) const;
+  double calc_pre_flip_quality(EdgeHandle eh) const;
+  double calc_post_flip_quality(EdgeHandle eh) const;
+  double calc_triangle_quality(FaceHandle fh) const;
+  double calc_triangle_quality(const Vec3d& p0, const Vec3d& p1, const Vec3d& p2) const;
 
   inline EdgeFlipper new_edge_flipper() { return EdgeFlipper(om, rm, ot, lrt, og); }
 };

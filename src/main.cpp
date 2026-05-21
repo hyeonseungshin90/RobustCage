@@ -96,6 +96,129 @@ void generate_cages(
   Logger::user_logger->flush();
 }
 
+std::string normalize_parameter_token(std::string token)
+{
+  boost::trim(token);
+  boost::replace_all(token, "_", "-");
+  if (token.rfind("default-", 0) == 0)
+    token = token.substr(std::string("default-").size());
+  return token;
+}
+
+bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerator& param)
+{
+  const std::string token = normalize_parameter_token(raw_token);
+  auto& collapse = param.paramCageSimplifier.paramCollapse;
+  auto& flip = param.paramCageSimplifier.paramFlip;
+
+  if (token.empty() || token == "default")
+    return true;
+
+  if (token == "length")
+  {
+    collapse.priorityMode = "length";
+    return true;
+  }
+  if (token == "length-quality" || token == "length-quality-weighted")
+  {
+    collapse.priorityMode = "length_quality";
+    collapse.lengthQualitySubMode = "weighted";
+    return true;
+  }
+  if (token == "length-quality-relative")
+  {
+    collapse.priorityMode = "length_quality";
+    collapse.lengthQualitySubMode = "relative_reject";
+    return true;
+  }
+  if (token == "length-quality-absolute")
+  {
+    collapse.priorityMode = "length_quality";
+    collapse.lengthQualitySubMode = "absolute_reject";
+    return true;
+  }
+  if (token == "length-quality-lexicographic")
+  {
+    collapse.priorityMode = "length_quality";
+    collapse.lengthQualitySubMode = "lexicographic";
+    return true;
+  }
+  if (token == "post-edge-length")
+  {
+    collapse.priorityMode = "post_edge_length";
+    return true;
+  }
+  if (token == "post-edge-length-hard")
+  {
+    collapse.priorityMode = "post_edge_length_hard";
+    return true;
+  }
+  if (token == "post-face-area")
+  {
+    collapse.priorityMode = "post_face_area";
+    return true;
+  }
+  if (token == "post-face-area-hard")
+  {
+    collapse.priorityMode = "post_face_area_hard";
+    return true;
+  }
+  if (token == "triangle-quality")
+  {
+    collapse.priorityMode = "triangle_quality";
+    return true;
+  }
+  if (token == "triangle-quality-hard")
+  {
+    collapse.priorityMode = "triangle_quality_hard";
+    return true;
+  }
+  if (token == "flip-valence")
+  {
+    flip.priorityMode = "valence";
+    return true;
+  }
+  if (token == "flip-triangle-quality-hard")
+  {
+    flip.priorityMode = "triangle_quality_hard";
+    return true;
+  }
+
+  Logger::user_logger->error("unknown parameter token: {}", raw_token);
+  return false;
+}
+
+bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator& param)
+{
+  bf::path json_file_path(arg_param);
+  if (bf::is_regular_file(json_file_path))
+  {
+    fstream json_file;
+    json_file.open(json_file_path.string(), fstream::in);
+    if (!json_file.is_open())
+    {
+      Logger::user_logger->error("fail to open json file.");
+      return false;
+    }
+
+    std::string json_str((std::istreambuf_iterator<char>(json_file)), std::istreambuf_iterator<char>());
+    bj::stream_parser sp;
+    sp.write(json_str.c_str());
+    param.deserialize(sp.release().as_object());
+    json_file.close();
+    return true;
+  }
+
+  std::vector<std::string> parameter_tokens;
+  boost::split(parameter_tokens, arg_param, boost::is_any_of("+,"), boost::token_compress_on);
+  for (const std::string& token : parameter_tokens)
+  {
+    if (!apply_parameter_token(token, param))
+      return false;
+  }
+  return true;
+}
+
 int main(int argc, char* argv[])
 {
   // args tips
@@ -116,6 +239,8 @@ int main(int argc, char* argv[])
     printf("input \"default-post-face-area-hard\" to require post-collapse max face area not to increase\n");
     printf("input \"default-triangle-quality\" to use triangle quality priority\n");
     printf("input \"default-triangle-quality-hard\" to require post-collapse min triangle quality not to decrease\n");
+    printf("input \"flip-triangle-quality-hard\" to require post-flip min triangle quality not to decrease\n");
+    printf("combine presets with '+' or ',', for example \"default-length+flip-triangle-quality-hard\".\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
     printf("arg[2]: output dir path.\n");
@@ -132,87 +257,8 @@ int main(int argc, char* argv[])
   // parse parameters
   std::string arg_param(argv[1]);
   Cage::ParamCageGenerator param;
-
-  if (arg_param == "default-length" || arg_param == "default_length")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "length";
-  }
-  else if (arg_param == "default-length-quality" || arg_param == "default_length_quality")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "length_quality";
-    param.paramCageSimplifier.paramCollapse.lengthQualitySubMode = "weighted";
-  }
-  else if (arg_param == "default-length-quality-weighted" || arg_param == "default_length_quality_weighted")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "length_quality";
-    param.paramCageSimplifier.paramCollapse.lengthQualitySubMode = "weighted";
-  }
-  else if (arg_param == "default-length-quality-relative" || arg_param == "default_length_quality_relative")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "length_quality";
-    param.paramCageSimplifier.paramCollapse.lengthQualitySubMode = "relative_reject";
-  }
-  else if (arg_param == "default-length-quality-absolute" || arg_param == "default_length_quality_absolute")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "length_quality";
-    param.paramCageSimplifier.paramCollapse.lengthQualitySubMode = "absolute_reject";
-  }
-  else if (arg_param == "default-length-quality-lexicographic" || arg_param == "default_length_quality_lexicographic")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "length_quality";
-    param.paramCageSimplifier.paramCollapse.lengthQualitySubMode = "lexicographic";
-  }
-  else if (arg_param == "default-post-edge-length" || arg_param == "default_post_edge_length")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "post_edge_length";
-  }
-  else if (arg_param == "default-post-edge-length-hard" || arg_param == "default_post_edge_length_hard")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "post_edge_length_hard";
-  }
-  else if (arg_param == "default-post-face-area" || arg_param == "default_post_face_area")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "post_face_area";
-  }
-  else if (arg_param == "default-post-face-area-hard" || arg_param == "default_post_face_area_hard")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "post_face_area_hard";
-  }
-  else if (arg_param == "default-triangle-quality" || arg_param == "default_triangle_quality")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "triangle_quality";
-  }
-  else if (arg_param == "default-triangle-quality-hard" || arg_param == "default_triangle_quality_hard")
-  {
-    param.paramCageSimplifier.paramCollapse.priorityMode = "triangle_quality_hard";
-  }
-  else if (arg_param != "default")
-  {
-    bf::path json_file_path(argv[1]);
-    if (bf::is_regular_file(json_file_path))
-    {
-      fstream json_file;
-      json_file.open(json_file_path.string(), fstream::in);
-      if (json_file.is_open())
-      {
-        std::string json_str((std::istreambuf_iterator<char>(json_file)), std::istreambuf_iterator<char>());
-        bj::stream_parser sp;
-        sp.write(json_str.c_str());
-        param.deserialize(sp.release().as_object());
-        json_file.close();
-      }
-      else
-      {
-        Logger::user_logger->error("fail to open json file.");
-        return 1;
-      }
-    }
-    else
-    {
-      Logger::user_logger->error("wrong json file.");
-      return 1;
-    }
-  }
+  if (!parse_parameter_arg(arg_param, param))
+    return 1;
 
   // parse input/output file/directory.
   bf::path in_model_path(argv[2]);

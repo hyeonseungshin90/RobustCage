@@ -113,16 +113,24 @@ struct ParamFlipStage
 {
   // constraints
   size_t maxValence;
+  // Supported modes: "valence", "triangle_quality_hard".
+  std::string priorityMode;
 
   boost::json::object serialize()const
   {
     boost::json::object jo;
     jo["maxValence"] = maxValence;
+    jo["priorityMode"] = priorityMode;
     return jo;
   }
   void deserialize(const boost::json::object& jo)
   {
     maxValence = jo.at("maxValence").as_int64();
+    auto priority_mode_it = jo.find("priorityMode");
+    if (priority_mode_it != jo.end())
+      priorityMode = std::string(priority_mode_it->value().as_string().c_str());
+    else
+      priorityMode = "valence";
   }
 };
 
@@ -208,13 +216,14 @@ struct ParamCageGenerator
     collapse.lengthQualitySubMode = "weighted";
     collapse.lengthQualityWeight = 5.0;
     collapse.lengthQualityDegradationRatio = 0.5;
-    collapse.lengthQualityMinQuality = 0.05;
+    collapse.lengthQualityMinQuality = 0.1;
 
     auto& relocate = paramCageSimplifier.paramRelocate;
     relocate.smoothIter = 3;
 
     auto& flip = paramCageSimplifier.paramFlip;
     flip.maxValence = 8;
+    flip.priorityMode = "valence";
   }
 
   void setOutputPath(const std::string& outDir, const std::string& outFile)
