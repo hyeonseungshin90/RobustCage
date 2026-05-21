@@ -1,6 +1,8 @@
 #include "CageGenerator.hh"
 #include "boost/filesystem.hpp"
 #include "boost/algorithm/string.hpp"
+#include <cfloat>
+#include <cmath>
 
 using namespace Cage;
 namespace bf = boost::filesystem;
@@ -21,6 +23,84 @@ bool mesh_valid(Cage::SMeshT& mesh)
       return false;
   }
   return true;
+}
+
+double calc_triangle_quality(Cage::SM::SMeshT& mesh, Cage::SM::FaceHandle fh)
+{
+  Cage::SM::Vec3d pts[3];
+  size_t vertex_count = 0;
+  for (Cage::SM::VertexHandle vh : mesh.fv_range(fh))
+  {
+    if (vertex_count >= 3)
+      return 0.0;
+    pts[vertex_count++] = mesh.point(vh);
+  }
+  if (vertex_count != 3)
+    return 0.0;
+
+  const double a = (pts[1] - pts[0]).length();
+  const double b = (pts[2] - pts[1]).length();
+  const double c = (pts[0] - pts[2]).length();
+  const double denom = a * a + b * b + c * c;
+  if (denom <= 0.0)
+    return 0.0;
+
+  const double area = 0.5 * (pts[1] - pts[0]).cross(pts[2] - pts[0]).length();
+  return 4.0 * std::sqrt(3.0) * area / denom;
+}
+
+struct TriangleQualityStats
+{
+  size_t face_count = 0;
+  double min_quality = DBL_MAX;
+  double max_quality = 0.0;
+  double avg_quality = 0.0;
+  Cage::SM::FaceHandle min_face = Cage::SM::FaceHandle(-1);
+  Cage::SM::FaceHandle max_face = Cage::SM::FaceHandle(-1);
+};
+
+TriangleQualityStats calc_triangle_quality_stats(Cage::SM::SMeshT& mesh)
+{
+  TriangleQualityStats stats;
+  for (Cage::SM::FaceHandle fh : mesh.faces())
+  {
+    const double quality = calc_triangle_quality(mesh, fh);
+    if (quality < stats.min_quality)
+    {
+      stats.min_quality = quality;
+      stats.min_face = fh;
+    }
+    if (quality > stats.max_quality)
+    {
+      stats.max_quality = quality;
+      stats.max_face = fh;
+    }
+    stats.avg_quality += quality;
+    stats.face_count++;
+  }
+
+  if (stats.face_count == 0)
+  {
+    stats.min_quality = 0.0;
+    stats.max_quality = 0.0;
+  }
+  else
+    stats.avg_quality /= static_cast<double>(stats.face_count);
+  return stats;
+}
+
+void log_triangle_quality_stats(Cage::SM::SMeshT& mesh, const std::string& label)
+{
+  const TriangleQualityStats stats = calc_triangle_quality_stats(mesh);
+  Logger::user_logger->info(
+    "{} triangle quality: min {} (face {}), max {} (face {}), avg {}, faces {}.",
+    label,
+    stats.min_quality,
+    stats.min_face.idx(),
+    stats.max_quality,
+    stats.max_face.idx(),
+    stats.avg_quality,
+    stats.face_count);
 }
 
 void generate_cages(
@@ -71,6 +151,9 @@ void generate_cages(
       cage_generator.param.setCageLabel(it);
       cage_generator.param.setTargetNumber(target_vn[it]);
       cage_generator.generate();
+      log_triangle_quality_stats(
+        *cage_generator.cage,
+        file_name + "_cage_" + std::to_string(it));
 
       bf::path mesh_out_file = file_out_dir;
       mesh_out_file.append(file_name + "_cage_" + std::to_string(it) + ".obj");
