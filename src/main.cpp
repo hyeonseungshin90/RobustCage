@@ -182,9 +182,7 @@ void generate_cages(
 std::string normalize_parameter_token(std::string token)
 {
   boost::trim(token);
-  boost::replace_all(token, "_", "-");
-  if (token.rfind("default-", 0) == 0)
-    token = token.substr(std::string("default-").size());
+  boost::replace_all(token, "-", "_");
   return token;
 }
 
@@ -203,76 +201,76 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
     collapse.priorityMode = "length";
     return true;
   }
-  if (token == "length-quality" || token == "length-quality-weighted")
+  if (token == "length_quality" || token == "length_quality_weighted")
   {
     collapse.priorityMode = "length_quality";
     collapse.lengthQualitySubMode = "weighted";
     return true;
   }
-  if (token == "length-quality-relative")
+  if (token == "length_quality_relative")
   {
     collapse.priorityMode = "length_quality";
     collapse.lengthQualitySubMode = "relative_reject";
     return true;
   }
-  if (token == "length-quality-absolute")
+  if (token == "length_quality_absolute")
   {
     collapse.priorityMode = "length_quality";
     collapse.lengthQualitySubMode = "absolute_reject";
     return true;
   }
-  if (token == "length-quality-lexicographic")
+  if (token == "length_quality_lexicographic")
   {
     collapse.priorityMode = "length_quality";
     collapse.lengthQualitySubMode = "lexicographic";
     return true;
   }
-  if (token == "post-edge-length")
+  if (token == "post_edge_length")
   {
     collapse.priorityMode = "post_edge_length";
     return true;
   }
-  if (token == "post-edge-length-hard")
+  if (token == "post_edge_length_hard")
   {
     collapse.priorityMode = "post_edge_length_hard";
     return true;
   }
-  if (token == "post-face-area")
+  if (token == "post_face_area")
   {
     collapse.priorityMode = "post_face_area";
     return true;
   }
-  if (token == "post-face-area-hard")
+  if (token == "post_face_area_hard")
   {
     collapse.priorityMode = "post_face_area_hard";
     return true;
   }
-  if (token == "triangle-quality")
+  if (token == "triangle_quality")
   {
     collapse.priorityMode = "triangle_quality";
     return true;
   }
-  if (token == "triangle-quality-hard")
+  if (token == "triangle_quality_hard")
   {
     collapse.priorityMode = "triangle_quality_hard";
     return true;
   }
-  if (token == "flip-valence")
+  if (token == "flip_valence")
   {
     flip.priorityMode = "valence";
     return true;
   }
-  if (token == "flip-triangle-quality-hard")
+  if (token == "flip_triangle_quality_hard")
   {
     flip.priorityMode = "triangle_quality_hard";
     return true;
   }
-  if (token == "relocate-hausdorff")
+  if (token == "relocate_hausdorff")
   {
     relocate.priorityMode = "hausdorff";
     return true;
   }
-  if (token == "relocate-triangle-quality-hard")
+  if (token == "relocate_triangle_quality_hard")
   {
     relocate.priorityMode = "triangle_quality_hard";
     return true;
@@ -321,21 +319,21 @@ int main(int argc, char* argv[])
     printf("Need args:\n");
     printf("arg[0]: parameters.\n");
     printf("input \"default\" to set default parameters\n");
-    printf("input \"default-length\" to set default parameters with length-based collapse priority\n");
-    printf("input \"default-length-quality\" to use weighted length + triangle quality priority\n");
-    printf("input \"default-length-quality-weighted\" to use weighted quality penalty\n");
-    printf("input \"default-length-quality-relative\" to reject large relative quality drops\n");
-    printf("input \"default-length-quality-absolute\" to reject triangles below a quality threshold\n");
-    printf("input \"default-length-quality-lexicographic\" to use length first and quality as tie-break\n");
-    printf("input \"default-post-edge-length\" to use post-collapse edge length priority\n");
-    printf("input \"default-post-edge-length-hard\" to require post-collapse max edge length not to increase\n");
-    printf("input \"default-post-face-area\" to use post-collapse face area priority\n");
-    printf("input \"default-post-face-area-hard\" to require post-collapse max face area not to increase\n");
-    printf("input \"default-triangle-quality\" to use triangle quality priority\n");
-    printf("input \"default-triangle-quality-hard\" to require post-collapse min triangle quality not to decrease\n");
-    printf("input \"flip-triangle-quality-hard\" to require post-flip min triangle quality not to decrease\n");
-    printf("input \"relocate-triangle-quality-hard\" to require post-relocate min triangle quality not to decrease\n");
-    printf("combine presets with '+' or ',', for example \"default-length+flip-triangle-quality-hard+relocate-triangle-quality-hard\".\n");
+    printf("input \"length\" to set length-based collapse priority\n");
+    printf("input \"length_quality\" to use weighted length + triangle quality priority\n");
+    printf("input \"length_quality_weighted\" to use weighted quality penalty\n");
+    printf("input \"length_quality_relative\" to reject large relative quality drops\n");
+    printf("input \"length_quality_absolute\" to reject triangles below a quality threshold\n");
+    printf("input \"length_quality_lexicographic\" to use length first and quality as tie-break\n");
+    printf("input \"post_edge_length\" to use post-collapse edge length priority\n");
+    printf("input \"post_edge_length_hard\" to require post-collapse max edge length not to increase\n");
+    printf("input \"post_face_area\" to use post-collapse face area priority\n");
+    printf("input \"post_face_area_hard\" to require post-collapse max face area not to increase\n");
+    printf("input \"triangle_quality\" to use triangle quality priority\n");
+    printf("input \"triangle_quality_hard\" to require post-collapse min triangle quality not to decrease\n");
+    printf("input \"flip_triangle_quality_hard\" to require post-flip min triangle quality not to decrease\n");
+    printf("input \"relocate_triangle_quality_hard\" to require post-relocate min triangle quality not to decrease\n");
+    printf("combine presets with '+' or ',', for example \"length+flip_triangle_quality_hard+relocate_triangle_quality_hard\".\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
     printf("arg[2]: output dir path.\n");
