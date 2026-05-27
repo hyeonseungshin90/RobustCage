@@ -8,21 +8,31 @@ using namespace Cage;
 namespace bf = boost::filesystem;
 namespace bj = boost::json;
 
-bool mesh_valid(Cage::SMeshT& mesh)
+struct MeshDiagnostics
 {
-  // test close
-  /*for (auto eh : mesh.edges())
+  size_t boundary_edges = 0;
+  size_t non_manifold_vertices = 0;
+};
+
+MeshDiagnostics analyze_mesh(Cage::SMeshT& mesh)
+{
+  MeshDiagnostics diagnostics;
+  for (auto eh : mesh.edges())
   {
     if (mesh.is_boundary(eh))
-      return false;
-  }*/
-  // test manifold
+      diagnostics.boundary_edges++;
+  }
   for (auto vh : mesh.vertices())
   {
     if (!mesh.is_manifold(vh))
-      return false;
+      diagnostics.non_manifold_vertices++;
   }
-  return true;
+  return diagnostics;
+}
+
+bool mesh_valid(Cage::SMeshT& mesh)
+{
+  return mesh.n_vertices() > 0 && mesh.n_faces() > 0;
 }
 
 double calc_triangle_quality(Cage::SM::SMeshT& mesh, Cage::SM::FaceHandle fh)
@@ -133,12 +143,34 @@ void generate_cages(
     Logger::updateFileLog(true, spdlog::level::trace, log_path.string());
     Logger::user_logger->info("processing {}", file_name);
     // read input mesh
-    OpenMesh::IO::read_mesh(*cage_generator.originalMesh, file_path);
+    if (!OpenMesh::IO::read_mesh(*cage_generator.originalMesh, file_path))
+    {
+      Logger::user_logger->warn("fail to read input mesh: {}", file_path);
+      throw logic_error("fail to read input mesh");
+    }
     // check input
     if (!mesh_valid(*cage_generator.originalMesh))
     {
-      Logger::user_logger->warn("invalid mesh.");
+      Logger::user_logger->warn("invalid mesh: input mesh has no vertices or faces.");
       throw logic_error("invalid mesh");
+    }
+    const MeshDiagnostics mesh_diagnostics = analyze_mesh(*cage_generator.originalMesh);
+    Logger::user_logger->info(
+      "input mesh: {} vertices, {} edges, {} faces.",
+      cage_generator.originalMesh->n_vertices(),
+      cage_generator.originalMesh->n_edges(),
+      cage_generator.originalMesh->n_faces());
+    if (mesh_diagnostics.non_manifold_vertices > 0)
+    {
+      Logger::user_logger->warn(
+        "input mesh has {} non-manifold vertices; continuing anyway.",
+        mesh_diagnostics.non_manifold_vertices);
+    }
+    if (mesh_diagnostics.boundary_edges > 0)
+    {
+      Logger::user_logger->warn(
+        "input mesh has {} boundary edges (non-watertight); continuing anyway.",
+        mesh_diagnostics.boundary_edges);
     }
     // set output dir and filename.
     cage_generator.param.setOutputPath(file_out_dir.string() + "/", file_name);
