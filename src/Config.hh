@@ -21,6 +21,8 @@ struct ParamLatticePointsGenerator
 
   /// good approximation: 4, high efficiency: 16.
   double areaThresholdRate;
+  /// Multiplier for offset point distance from the surface.
+  double offsetLengthScale;
 };
 
 struct ParamTetrahedralizer
@@ -221,6 +223,7 @@ struct ParamCageGenerator
     Lpg.bboxScale = 1.5;
     Lpg.pointNumAlongAxis = 10;
     Lpg.areaThresholdRate = 16;
+    Lpg.offsetLengthScale = 1.0;
 
     auto& simplifier = paramCageSimplifier;
     simplifier.maxIter = 30;

@@ -122,7 +122,7 @@ void LatticePointsGenerator::offsetVertices()
       auto hint = aabbTree->best_hint(center);
       while (offset_length_scale >= 0.5)
       {
-        Vec3d offset = normal * offset_length_scale * avg_length;
+        Vec3d offset = normal * offset_length_scale * avg_length * param->offsetLengthScale;
         Vec3d up = center + offset;
         auto closest = aabbTree->closest_point(up, hint);
         if (closest.second->index == fh.idx())
@@ -180,7 +180,7 @@ void LatticePointsGenerator::offsetPoint(
     double offset_length_scale = 1.0;
     auto hint = aabbTree->best_hint(center);
 
-    Vec3d offset = n * avg_length;
+    Vec3d offset = n * avg_length * param->offsetLengthScale;
     Vec3d up = center + offset;
     Vec3d down = center - offset;
     if (aabbTree->closest_point(up, hint).second->index == fh.idx())
