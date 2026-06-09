@@ -131,7 +131,14 @@ JSON 설정 파일 사용:
 
 ## Output
 
-출력은 `<output_dir_path>\<input_file_name_without_ext>\` 아래에 생성됩니다.
+출력은 기본적으로 `<output_dir_path>\<input_file_name_without_ext>\` 아래에 새 실행별 하위 폴더로 생성됩니다.
+
+```text
+<output_dir_path>\<input_name>\
+  <run_timestamp>__collapse_<mode>__flip_<mode>__relocate_<mode>\
+```
+
+같은 하위 폴더명이 이미 있으면 `_001`, `_002`처럼 번호를 붙여 기존 결과를 덮어쓰지 않습니다. 날짜는 실행 시점의 시스템 날짜/시간이며 `YYYYMMDD_HHMMSS` 형식입니다.
 
 | 파일 | 설명 |
 |---|---|
@@ -141,7 +148,7 @@ JSON 설정 파일 사용:
 
 ## Notes
 
-- `<output_dir_path>`는 실행 전에 존재해야 합니다. 프로그램은 그 아래에 입력 파일 이름의 하위 디렉터리를 만듭니다.
+- `<output_dir_path>`는 실행 전에 존재해야 합니다. 프로그램은 그 아래에 입력 파일 이름의 하위 디렉터리와 실행별 결과 디렉터리를 만듭니다.
 - `<target_Nv_i>`는 정수로 파싱됩니다. 의도와 다른 결과를 피하려면 양의 정수를 사용하세요.
 - 입력 메쉬가 non-manifold이거나 non-watertight이면 경고를 남기고 계속 진행합니다. 단, 읽기 실패 또는 vertex/face가 없는 입력은 `invalid mesh`로 중단됩니다.
 - 현재 `main.cpp`의 도움말 출력은 인덱스 표기가 일부 어긋나 있습니다. 실제 파싱 기준은 이 문서의 명령 형식입니다.

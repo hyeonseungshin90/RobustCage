@@ -32,3 +32,9 @@ Use `collapse` to keep the default collapse priority while changing only flip/re
 `exeCageGenerator.exe collapse+flip_triangle_quality_hard+relocate_triangle_quality_hard path-to-input path-to-out-dir target_Nv`
 
 Collapse-specific presets use the `collapse_` prefix, such as `collapse_length` or `collapse_triangle_quality_hard`.
+
+Outputs are written under a unique run directory inside the input-name folder:
+
+`path-to-out-dir/input_name/<run_timestamp>__collapse_<mode>__flip_<mode>__relocate_<mode>/`
+
+If that directory already exists, the program appends `_001`, `_002`, and so on to avoid overwriting previous results.

@@ -1,8 +1,12 @@
 #include "CageGenerator.hh"
 #include "boost/filesystem.hpp"
 #include "boost/algorithm/string.hpp"
+#include <cctype>
 #include <cfloat>
 #include <cmath>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
 
 using namespace Cage;
 namespace bf = boost::filesystem;
@@ -113,6 +117,85 @@ void log_triangle_quality_stats(Cage::SM::SMeshT& mesh, const std::string& label
     stats.face_count);
 }
 
+std::string sanitize_path_component(std::string value)
+{
+  if (value.empty())
+    return "unknown";
+
+  for (char& ch : value)
+  {
+    const unsigned char uch = static_cast<unsigned char>(ch);
+    if (!std::isalnum(uch) && ch != '_' && ch != '-')
+      ch = '_';
+  }
+  return value;
+}
+
+std::string format_timestamp(std::time_t time_value)
+{
+  if (time_value <= 0)
+    return "unknown";
+
+  std::tm local_time{};
+#ifdef _WIN32
+  localtime_s(&local_time, &time_value);
+#else
+  localtime_r(&time_value, &local_time);
+#endif
+
+  std::ostringstream oss;
+  oss << std::put_time(&local_time, "%Y%m%d_%H%M%S");
+  return oss.str();
+}
+
+std::string collapse_mode_label(const Cage::ParamCollapseStage& param)
+{
+  std::string mode = sanitize_path_component(param.priorityMode);
+  if (mode == "length_quality")
+    mode += "_" + sanitize_path_component(param.lengthQualitySubMode);
+  return "collapse_" + mode;
+}
+
+std::string flip_mode_label(const Cage::ParamFlipStage& param)
+{
+  return "flip_" + sanitize_path_component(param.priorityMode);
+}
+
+std::string relocate_mode_label(const Cage::ParamRelocateStage& param)
+{
+  return "relocate_" + sanitize_path_component(param.priorityMode);
+}
+
+std::string build_run_dir_name(const Cage::ParamCageGenerator& param)
+{
+  const auto& simplifier = param.paramCageSimplifier;
+  std::ostringstream oss;
+  oss
+    << format_timestamp(std::time(nullptr))
+    << "__" << collapse_mode_label(simplifier.paramCollapse)
+    << "__" << flip_mode_label(simplifier.paramFlip)
+    << "__" << relocate_mode_label(simplifier.paramRelocate);
+  return oss.str();
+}
+
+bf::path create_unique_output_dir(const bf::path& parent_dir, const std::string& dir_name)
+{
+  for (size_t i = 0;; i++)
+  {
+    std::ostringstream suffix;
+    if (i > 0)
+      suffix << "_" << std::setw(3) << std::setfill('0') << i;
+
+    bf::path candidate = parent_dir;
+    candidate.append(dir_name + suffix.str());
+    if (!bf::exists(candidate))
+    {
+      bf::create_directory(candidate);
+      return candidate;
+    }
+  }
+}
+
 void generate_cages(
   Cage::ParamCageGenerator param,
   bf::path in_model_path,
@@ -133,15 +216,22 @@ void generate_cages(
   try
   {
     // create output directory
-    bf::path file_out_dir = out_data_path;
-    file_out_dir.append(file_name);
-    if (!bf::exists(file_out_dir))
-      bf::create_directory(file_out_dir);
+    bf::path input_out_dir = out_data_path;
+    input_out_dir.append(file_name);
+    if (bf::exists(input_out_dir) && !bf::is_directory(input_out_dir))
+      throw logic_error("input output path already exists as a file");
+    if (!bf::exists(input_out_dir))
+      bf::create_directory(input_out_dir);
+
+    bf::path file_out_dir = create_unique_output_dir(
+      input_out_dir,
+      build_run_dir_name(param));
     // create log file
     bf::path log_path = file_out_dir;
     log_path.append("log.txt");
     Logger::updateFileLog(true, spdlog::level::trace, log_path.string());
     Logger::user_logger->info("processing {}", file_name);
+    Logger::user_logger->info("output directory: {}", file_out_dir.string());
     // read input mesh
     if (!OpenMesh::IO::read_mesh(*cage_generator.originalMesh, file_path))
     {
