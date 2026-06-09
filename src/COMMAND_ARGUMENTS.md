@@ -23,13 +23,13 @@ exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path>
 1. 같은 경로에 실제 파일이 있으면 JSON 설정 파일로 읽습니다.
 2. 파일이 아니면 프리셋 토큰 문자열로 처리합니다.
 
-토큰은 `+` 또는 `,`로 조합할 수 있습니다. `-`는 내부적으로 `_`로 바뀌므로 `length-quality`와 `length_quality`는 같은 의미로 처리됩니다.
+토큰은 `+` 또는 `,`로 조합할 수 있습니다. `-`는 내부적으로 `_`로 바뀌므로 `collapse-length-quality`와 `collapse_length_quality`는 같은 의미로 처리됩니다.
 
 ```text
 default
 collapse+flip_triangle_quality_hard+relocate_triangle_quality_hard
-length+flip_triangle_quality_hard+relocate_triangle_quality_hard
-length_quality_relative,flip_triangle_quality_hard
+collapse_length+flip_triangle_quality_hard+relocate_triangle_quality_hard
+collapse_length_quality_relative,flip_triangle_quality_hard
 config.json
 ```
 
@@ -39,18 +39,18 @@ config.json
 |---|---|---|
 | `default` | 전체 | 기본 파라미터를 그대로 사용합니다. |
 | `collapse` / `collapse_default` / `collapse_hausdorff` | collapse | `priorityMode = "hausdorff"` |
-| `length` | collapse | `priorityMode = "length"` |
-| `length_quality` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "weighted"` |
-| `length_quality_weighted` | collapse | `length_quality`와 동일합니다. |
-| `length_quality_relative` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "relative_reject"` |
-| `length_quality_absolute` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "absolute_reject"` |
-| `length_quality_lexicographic` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "lexicographic"` |
-| `post_edge_length` | collapse | `priorityMode = "post_edge_length"` |
-| `post_edge_length_hard` | collapse | `priorityMode = "post_edge_length_hard"` |
-| `post_face_area` | collapse | `priorityMode = "post_face_area"` |
-| `post_face_area_hard` | collapse | `priorityMode = "post_face_area_hard"` |
-| `triangle_quality` | collapse | `priorityMode = "triangle_quality"` |
-| `triangle_quality_hard` | collapse | `priorityMode = "triangle_quality_hard"` |
+| `collapse_length` | collapse | `priorityMode = "length"` |
+| `collapse_length_quality` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "weighted"` |
+| `collapse_length_quality_weighted` | collapse | `collapse_length_quality`와 동일합니다. |
+| `collapse_length_quality_relative` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "relative_reject"` |
+| `collapse_length_quality_absolute` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "absolute_reject"` |
+| `collapse_length_quality_lexicographic` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "lexicographic"` |
+| `collapse_post_edge_length` | collapse | `priorityMode = "post_edge_length"` |
+| `collapse_post_edge_length_hard` | collapse | `priorityMode = "post_edge_length_hard"` |
+| `collapse_post_face_area` | collapse | `priorityMode = "post_face_area"` |
+| `collapse_post_face_area_hard` | collapse | `priorityMode = "post_face_area_hard"` |
+| `collapse_triangle_quality` | collapse | `priorityMode = "triangle_quality"` |
+| `collapse_triangle_quality_hard` | collapse | `priorityMode = "triangle_quality_hard"` |
 | `flip_valence` | flip | `priorityMode = "valence"` |
 | `flip_triangle_quality_hard` | flip | `priorityMode = "triangle_quality_hard"` |
 | `relocate_hausdorff` | relocate | `priorityMode = "hausdorff"` |
@@ -120,7 +120,7 @@ nested cage 생성:
 프리셋 조합 사용:
 
 ```powershell
-.\exeCageGenerator.exe length_quality_relative+flip_triangle_quality_hard C:\models\bunny.obj C:\out 500
+.\exeCageGenerator.exe collapse_length_quality_relative+flip_triangle_quality_hard C:\models\bunny.obj C:\out 500
 ```
 
 JSON 설정 파일 사용:
