@@ -228,6 +228,11 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   if (token.empty() || token == "default")
     return true;
 
+  if (token == "collapse" || token == "collapse_default" || token == "collapse_hausdorff")
+  {
+    collapse.priorityMode = "hausdorff";
+    return true;
+  }
   if (token == "length")
   {
     collapse.priorityMode = "length";
@@ -351,6 +356,7 @@ int main(int argc, char* argv[])
     printf("Need args:\n");
     printf("arg[0]: parameters.\n");
     printf("input \"default\" to set default parameters\n");
+    printf("input \"collapse\" to use default collapse priority; combine with flip/relocate presets to change only those stages\n");
     printf("input \"length\" to set length-based collapse priority\n");
     printf("input \"length_quality\" to use weighted length + triangle quality priority\n");
     printf("input \"length_quality_weighted\" to use weighted quality penalty\n");

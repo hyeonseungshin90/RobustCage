@@ -26,3 +26,7 @@ To generate nested cages with target numbers of vertices, run the executable fil
 `exeCageGenerator.exe default path-to-input path-to-out-dir target_Nv_0 target_Nv_1 ... target_Nv_n`
 
 The `default` can be substituted by a configure file. We provide an example at "src/config.json".
+
+Use `collapse` to keep the default collapse priority while changing only flip/relocate presets, for example:
+
+`exeCageGenerator.exe collapse+flip_triangle_quality_hard+relocate_triangle_quality_hard path-to-input path-to-out-dir target_Nv`

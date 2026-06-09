@@ -27,6 +27,7 @@ exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path>
 
 ```text
 default
+collapse+flip_triangle_quality_hard+relocate_triangle_quality_hard
 length+flip_triangle_quality_hard+relocate_triangle_quality_hard
 length_quality_relative,flip_triangle_quality_hard
 config.json
@@ -37,6 +38,7 @@ config.json
 | 토큰 | 적용 대상 | 효과 |
 |---|---|---|
 | `default` | 전체 | 기본 파라미터를 그대로 사용합니다. |
+| `collapse` / `collapse_default` / `collapse_hausdorff` | collapse | `priorityMode = "hausdorff"` |
 | `length` | collapse | `priorityMode = "length"` |
 | `length_quality` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "weighted"` |
 | `length_quality_weighted` | collapse | `length_quality`와 동일합니다. |
