@@ -68,11 +68,13 @@ add_library(lib${PROJECT_NAME} STATIC
 target_include_directories(lib${PROJECT_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${EIGEN3_INCLUDE_DIR}
+    ${AUTODIFF_INCLUDE_DIR}
     ${OpenMesh_INCLUDE_DIR}
 )
 target_link_libraries(lib${PROJECT_NAME} PUBLIC
     mesh_generator_lib
     spdlog::spdlog
+    autodiff::autodiff
     indirectPredicates
     ${OpenMesh_LIBRARIES}
     CGAL::CGAL

@@ -68,6 +68,42 @@ struct ParamCollapseStage
   double lengthQualityDegradationRatio;
   double lengthQualityMinQuality;
 
+  // Placement mode:
+  // "sampling" keeps the original candidate sampling strategy.
+  // "newton" optimizes the post-collapse vertex position with local energies.
+  std::string placementMode;
+  // Newton solver mode: "damped" or "trust_region".
+  std::string newtonSolverMode;
+  // Robustness mode:
+  // "exact_reject": optimize first, then reject invalid final positions.
+  // "exact_backtracking": use exact local checks during backtracking.
+  // "ipc_line_search": additionally sample the step path with exact checks.
+  std::string robustnessMode;
+  // Curvature mode: "none", "weighted_qem", "normal_matching".
+  std::string curvatureMode;
+  // Uniformity mode: "none", "source", "global".
+  std::string uniformityMode;
+
+  size_t newtonMaxIter;
+  double newtonGradTol;
+  double newtonStepTol;
+  double newtonFiniteDiffScale;
+  double trustRegionRadiusScale;
+  size_t lineSearchMaxIter;
+  size_t lineSearchCcdSamples;
+  double phase2NewtonQualityThreshold;
+  double phase2NewtonResidualThreshold;
+  double phase2NewtonResidualGrowth;
+  size_t phase2NewtonFinalRefineCollapses;
+
+  double qemWeight;
+  double selfBarrierWeight;
+  double originalBarrierWeight;
+  double curvatureWeight;
+  double triangleQualityWeight;
+  double uniformityWeight;
+  double barrierActivationDistanceFactor;
+
   boost::json::object serialize()const
   {
     boost::json::object jo;
@@ -77,6 +113,29 @@ struct ParamCollapseStage
     jo["lengthQualityWeight"] = lengthQualityWeight;
     jo["lengthQualityDegradationRatio"] = lengthQualityDegradationRatio;
     jo["lengthQualityMinQuality"] = lengthQualityMinQuality;
+    jo["placementMode"] = placementMode;
+    jo["newtonSolverMode"] = newtonSolverMode;
+    jo["robustnessMode"] = robustnessMode;
+    jo["curvatureMode"] = curvatureMode;
+    jo["uniformityMode"] = uniformityMode;
+    jo["newtonMaxIter"] = newtonMaxIter;
+    jo["newtonGradTol"] = newtonGradTol;
+    jo["newtonStepTol"] = newtonStepTol;
+    jo["newtonFiniteDiffScale"] = newtonFiniteDiffScale;
+    jo["trustRegionRadiusScale"] = trustRegionRadiusScale;
+    jo["lineSearchMaxIter"] = lineSearchMaxIter;
+    jo["lineSearchCcdSamples"] = lineSearchCcdSamples;
+    jo["phase2NewtonQualityThreshold"] = phase2NewtonQualityThreshold;
+    jo["phase2NewtonResidualThreshold"] = phase2NewtonResidualThreshold;
+    jo["phase2NewtonResidualGrowth"] = phase2NewtonResidualGrowth;
+    jo["phase2NewtonFinalRefineCollapses"] = phase2NewtonFinalRefineCollapses;
+    jo["qemWeight"] = qemWeight;
+    jo["selfBarrierWeight"] = selfBarrierWeight;
+    jo["originalBarrierWeight"] = originalBarrierWeight;
+    jo["curvatureWeight"] = curvatureWeight;
+    jo["triangleQualityWeight"] = triangleQualityWeight;
+    jo["uniformityWeight"] = uniformityWeight;
+    jo["barrierActivationDistanceFactor"] = barrierActivationDistanceFactor;
     return jo;
   }
   void deserialize(const boost::json::object& jo)
@@ -102,6 +161,79 @@ struct ParamCollapseStage
 
     auto lq_min_quality_it = jo.find("lengthQualityMinQuality");
     lengthQualityMinQuality = lq_min_quality_it != jo.end() ? lq_min_quality_it->value().as_double() : 0.05;
+
+    auto placement_mode_it = jo.find("placementMode");
+    placementMode = placement_mode_it != jo.end() ? std::string(placement_mode_it->value().as_string().c_str()) : "sampling";
+
+    auto solver_mode_it = jo.find("newtonSolverMode");
+    newtonSolverMode = solver_mode_it != jo.end() ? std::string(solver_mode_it->value().as_string().c_str()) : "damped";
+
+    auto robustness_mode_it = jo.find("robustnessMode");
+    robustnessMode = robustness_mode_it != jo.end() ? std::string(robustness_mode_it->value().as_string().c_str()) : "exact_backtracking";
+
+    auto curvature_mode_it = jo.find("curvatureMode");
+    curvatureMode = curvature_mode_it != jo.end() ? std::string(curvature_mode_it->value().as_string().c_str()) : "none";
+
+    auto uniformity_mode_it = jo.find("uniformityMode");
+    uniformityMode = uniformity_mode_it != jo.end() ? std::string(uniformity_mode_it->value().as_string().c_str()) : "none";
+
+    auto newton_max_iter_it = jo.find("newtonMaxIter");
+    newtonMaxIter = newton_max_iter_it != jo.end() ? newton_max_iter_it->value().as_int64() : 4;
+
+    auto newton_grad_tol_it = jo.find("newtonGradTol");
+    newtonGradTol = newton_grad_tol_it != jo.end() ? newton_grad_tol_it->value().as_double() : 1e-8;
+
+    auto newton_step_tol_it = jo.find("newtonStepTol");
+    newtonStepTol = newton_step_tol_it != jo.end() ? newton_step_tol_it->value().as_double() : 1e-8;
+
+    auto finite_diff_scale_it = jo.find("newtonFiniteDiffScale");
+    newtonFiniteDiffScale = finite_diff_scale_it != jo.end() ? finite_diff_scale_it->value().as_double() : 1e-4;
+
+    auto trust_radius_it = jo.find("trustRegionRadiusScale");
+    trustRegionRadiusScale = trust_radius_it != jo.end() ? trust_radius_it->value().as_double() : 0.25;
+
+    auto line_search_max_iter_it = jo.find("lineSearchMaxIter");
+    lineSearchMaxIter = line_search_max_iter_it != jo.end() ? line_search_max_iter_it->value().as_int64() : 6;
+
+    auto line_search_ccd_samples_it = jo.find("lineSearchCcdSamples");
+    lineSearchCcdSamples = line_search_ccd_samples_it != jo.end() ? line_search_ccd_samples_it->value().as_int64() : 4;
+
+    auto phase2_quality_threshold_it = jo.find("phase2NewtonQualityThreshold");
+    phase2NewtonQualityThreshold =
+      phase2_quality_threshold_it != jo.end() ? phase2_quality_threshold_it->value().as_double() : 0.12;
+
+    auto phase2_residual_threshold_it = jo.find("phase2NewtonResidualThreshold");
+    phase2NewtonResidualThreshold =
+      phase2_residual_threshold_it != jo.end() ? phase2_residual_threshold_it->value().as_double() : 0.25;
+
+    auto phase2_residual_growth_it = jo.find("phase2NewtonResidualGrowth");
+    phase2NewtonResidualGrowth =
+      phase2_residual_growth_it != jo.end() ? phase2_residual_growth_it->value().as_double() : 1.5;
+
+    auto phase2_final_refine_it = jo.find("phase2NewtonFinalRefineCollapses");
+    phase2NewtonFinalRefineCollapses =
+      phase2_final_refine_it != jo.end() ? phase2_final_refine_it->value().as_int64() : 25;
+
+    auto qem_weight_it = jo.find("qemWeight");
+    qemWeight = qem_weight_it != jo.end() ? qem_weight_it->value().as_double() : 1.0;
+
+    auto self_barrier_weight_it = jo.find("selfBarrierWeight");
+    selfBarrierWeight = self_barrier_weight_it != jo.end() ? self_barrier_weight_it->value().as_double() : 0.0;
+
+    auto original_barrier_weight_it = jo.find("originalBarrierWeight");
+    originalBarrierWeight = original_barrier_weight_it != jo.end() ? original_barrier_weight_it->value().as_double() : 0.1;
+
+    auto curvature_weight_it = jo.find("curvatureWeight");
+    curvatureWeight = curvature_weight_it != jo.end() ? curvature_weight_it->value().as_double() : 1.0;
+
+    auto triangle_quality_weight_it = jo.find("triangleQualityWeight");
+    triangleQualityWeight = triangle_quality_weight_it != jo.end() ? triangle_quality_weight_it->value().as_double() : 2.0;
+
+    auto uniformity_weight_it = jo.find("uniformityWeight");
+    uniformityWeight = uniformity_weight_it != jo.end() ? uniformity_weight_it->value().as_double() : 1.0;
+
+    auto barrier_activation_it = jo.find("barrierActivationDistanceFactor");
+    barrierActivationDistanceFactor = barrier_activation_it != jo.end() ? barrier_activation_it->value().as_double() : 0.01;
   }
 };
 
@@ -162,6 +294,9 @@ struct ParamCageSimplifier
 {
   // target
   size_t targetVerticesNum;
+  // Phase 2 simplification mode: "fast" keeps the original FastSimplifier,
+  // "newton" replaces Phase 2 with energy-driven edge collapses.
+  std::string phase2Mode;
   // iterations
   size_t maxIter;
   // distance error control
@@ -185,6 +320,7 @@ struct ParamCageSimplifier
   {
     boost::json::object jo;
     jo["maxIter"] = maxIter;
+    jo["phase2Mode"] = phase2Mode;
     jo["relaxErrorIterStep"] = relaxErrorIterStep;
     jo["maxErrorRelaxIter"] = maxErrorRelaxIter;
     jo["initError"] = initError;
@@ -197,6 +333,8 @@ struct ParamCageSimplifier
   void deserialize(const boost::json::object& jo)
   {
     maxIter = jo.at("maxIter").as_int64();
+    auto phase2_mode_it = jo.find("phase2Mode");
+    phase2Mode = phase2_mode_it != jo.end() ? std::string(phase2_mode_it->value().as_string().c_str()) : "fast";
     relaxErrorIterStep = jo.at("relaxErrorIterStep").as_int64();
     maxErrorRelaxIter = jo.at("maxErrorRelaxIter").as_int64();
     initError = jo.at("initError").as_double();
@@ -226,6 +364,7 @@ struct ParamCageGenerator
     Lpg.offsetLengthScale = 1.0;
 
     auto& simplifier = paramCageSimplifier;
+    simplifier.phase2Mode = "fast";
     simplifier.maxIter = 30;
     simplifier.relaxErrorIterStep = 5;
     simplifier.maxErrorRelaxIter = 4;
@@ -248,6 +387,29 @@ struct ParamCageGenerator
     collapse.lengthQualityWeight = 5.0;
     collapse.lengthQualityDegradationRatio = 0.5;
     collapse.lengthQualityMinQuality = 0.1;
+    collapse.placementMode = "sampling";
+    collapse.newtonSolverMode = "damped";
+    collapse.robustnessMode = "exact_backtracking";
+    collapse.curvatureMode = "none";
+    collapse.uniformityMode = "none";
+    collapse.newtonMaxIter = 4;
+    collapse.newtonGradTol = 1e-8;
+    collapse.newtonStepTol = 1e-8;
+    collapse.newtonFiniteDiffScale = 1e-4;
+    collapse.trustRegionRadiusScale = 0.25;
+    collapse.lineSearchMaxIter = 6;
+    collapse.lineSearchCcdSamples = 4;
+    collapse.phase2NewtonQualityThreshold = 0.12;
+    collapse.phase2NewtonResidualThreshold = 0.25;
+    collapse.phase2NewtonResidualGrowth = 1.5;
+    collapse.phase2NewtonFinalRefineCollapses = 25;
+    collapse.qemWeight = 1.0;
+    collapse.selfBarrierWeight = 0.0;
+    collapse.originalBarrierWeight = 0.1;
+    collapse.curvatureWeight = 1.0;
+    collapse.triangleQualityWeight = 2.0;
+    collapse.uniformityWeight = 1.0;
+    collapse.barrierActivationDistanceFactor = 0.01;
 
     auto& relocate = paramCageSimplifier.paramRelocate;
     relocate.smoothIter = 3;

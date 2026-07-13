@@ -1,0 +1,24 @@
+{
+  "paramCageSimplifier": {
+    "phase2Mode": "newton",
+    "maxIter": 50,
+    "relaxErrorIterStep": 5,
+    "maxErrorRelaxIter": 4,
+    "initError": 0.005,
+    "errorStep": 0.005,
+    "paramCollapse": {
+      "maxValence": 8,
+      "priorityMode": "hausdorff",
+      "placementMode": "newton",
+      "newtonSolverMode": "damped",
+      "robustnessMode": "exact_backtracking",
+      "curvatureMode": "weighted_qem",
+      "uniformityMode": "source",
+      "selfBarrierWeight": 0.0,
+      "originalBarrierWeight": 0.0
+    },
+    "paramFlip": {
+      "maxValence": 8
+    }
+  }
+}

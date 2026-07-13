@@ -51,6 +51,7 @@ public:
 
   double local_Hausdorff_before_collapsing()const;
   double local_Hausdorff_after_collapsing(SMeshT* local_rm, const Vec3d& new_point, double& threshold)const;
+  bool target_point_is_valid(const Vec3d& new_point, const ExactPoint* new_ep)const;
 
   void predict_smooth_target(const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target)const;
   void predict_tangential_smooth_target(const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target)const;

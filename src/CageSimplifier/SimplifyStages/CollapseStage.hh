@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cfloat>
 #include <queue>
 
 #include "Config.hh"
@@ -35,9 +36,11 @@ public:
     double _original_diagonal_length);
 
   void do_collapse(size_t edge_num_to_collapse, size_t& total_collapsed_edge_num);
+  void do_newton_phase2(size_t target_vertices_num);
   void update(size_t _candidate_points_size, bool _allow_negtive, double _max_distance_error);
 private:
   double avg_edge_length;
+  double avg_original_edge_length;
   std::vector<size_t> update_states;
 
   struct CollapseEdgeReward
@@ -63,6 +66,26 @@ private:
   typedef std::priority_queue<CollapseEdgeReward> CollapseEdgeRewardQueue;
   CollapseEdgeRewardQueue edges_to_collapse;
 
+  struct Phase2EdgeReward
+  {
+    EdgeHandle eh;
+    size_t state;
+    double reward;
+    Vec3d initial_point;
+
+    Phase2EdgeReward() = default;
+    Phase2EdgeReward(EdgeHandle _eh, size_t _state, double _reward, const Vec3d& _initial_point) :
+      eh(_eh), state(_state), reward(_reward), initial_point(_initial_point)
+    {}
+
+    bool operator<(const Phase2EdgeReward& rhs)const
+    {
+      return reward < rhs.reward;
+    }
+  };
+  typedef std::priority_queue<Phase2EdgeReward> Phase2EdgeRewardQueue;
+  Phase2EdgeRewardQueue phase2_edges_to_collapse;
+
   enum class EdgeSide
   {
     Inside,
@@ -81,13 +104,68 @@ private:
     size_t total() const { return inside + outside + on_surface + unknown; }
   };
 
+  struct QEMPlane
+  {
+    Vec3d normal;
+    double offset = 0.0;
+    double weight = 1.0;
+  };
+
+  struct CollapseFanEdge
+  {
+    Vec3d from;
+    Vec3d to;
+  };
+
+  struct NewtonCollapseContext
+  {
+    EdgeHandle edge;
+    std::vector<HalfedgeHandle> halfedges;
+    std::vector<CollapseFanEdge> fan_edges;
+    std::vector<Vec3d> neighbor_points;
+    std::vector<QEMPlane> qem_planes;
+    std::set<int> ignored_faces;
+    Vec3d start_point;
+    Vec3d midpoint;
+    double local_scale = 1.0;
+    double edge_curvature = 0.0;
+    double global_target_length = 1.0;
+  };
+
+  struct NewtonDerivatives
+  {
+    double energy = DBL_MAX;
+    Vec3d gradient;
+    double hessian[3][3] = {};
+  };
+
+  struct Phase2PlacementDecision
+  {
+    Vec3d point;
+    double priority_energy = DBL_MAX;
+    double min_quality = 1.0;
+    double nonlinear_residual = 0.0;
+    bool attempted_newton = false;
+    bool accepted_newton = false;
+    bool newton_failed = false;
+    bool used_fallback = false;
+  };
+
   std::vector<Vec3d> generate_candidate_points_for_collapse(EdgeHandle e, EdgeCollapser& edge_collapser);
   bool find_collapse_hausdorff_deviation(
     EdgeHandle eh, double& local_hd_before, double& local_hd_after, Vec3d& new_point, double& priority_score);
+  bool find_collapse_newton_position(
+    EdgeHandle eh, EdgeCollapser& edge_collapser, Vec3d& new_point, double& energy,
+    const Vec3d* initial_point = nullptr);
   void initialize_collapse_edges_reward();
   void update_after_collapsing(VertexHandle collapsed_center);
   bool try_enqueue_collapse_candidate(
     EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after, const Vec3d& new_point, double priority_score);
+  bool is_newton_placement_mode() const;
+  bool is_trust_region_solver_mode() const;
+  bool is_exact_reject_robustness_mode() const;
+  bool is_exact_backtracking_robustness_mode() const;
+  bool is_ipc_line_search_robustness_mode() const;
   bool is_length_priority_mode() const;
   bool is_length_quality_priority_mode() const;
   bool is_length_quality_weighted_submode() const;
@@ -110,6 +188,39 @@ private:
   double calc_triangle_quality(SMeshT* mesh, FaceHandle fh) const;
   double calc_min_triangle_quality(SMeshT* mesh) const;
   double calc_min_triangle_quality(SMeshT* mesh, const std::set<FaceHandle>& faces) const;
+  NewtonCollapseContext make_newton_context(EdgeHandle eh, EdgeCollapser& edge_collapser) const;
+  NewtonDerivatives finite_difference_newton_derivatives(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  NewtonDerivatives approximate_newton_derivatives(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  NewtonDerivatives autodiff_newton_derivatives(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double evaluate_newton_energy(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double evaluate_qem_energy(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double evaluate_original_barrier_energy(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double evaluate_self_barrier_energy(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double evaluate_curvature_normal_energy(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double evaluate_triangle_quality_energy(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double evaluate_uniformity_energy(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double evaluate_phase2_quadratic_energy(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double evaluate_phase2_nonlinear_residual(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double calc_phase2_fan_min_quality(const NewtonCollapseContext& ctx, const Vec3d& x) const;
+  double source_uniformity_target_length(const NewtonCollapseContext& ctx, const Vec3d& p) const;
+  double ipc_barrier(double distance, double dhat) const;
+  double source_size_at(const Vec3d& p) const;
+  bool collapse_target_valid(EdgeCollapser& edge_collapser, const Vec3d& x) const;
+  bool sampled_path_valid(EdgeCollapser& edge_collapser, const Vec3d& from, const Vec3d& to) const;
+  bool phase2_candidate_satisfies_hard_constraints(
+    const NewtonCollapseContext& ctx, EdgeCollapser& edge_collapser, const Vec3d& x) const;
+  bool should_refine_phase2_candidate(
+    const NewtonCollapseContext& ctx, const Vec3d& x,
+    size_t remaining_vertices, size_t target_vertices_num,
+    double min_quality, double nonlinear_residual) const;
+  bool choose_phase2_collapse_position(
+    EdgeHandle eh, EdgeCollapser& edge_collapser, const Vec3d& qem_point,
+    size_t remaining_vertices, size_t target_vertices_num,
+    Phase2PlacementDecision& decision, double& newton_seconds);
+  bool find_phase2_qem_candidate(EdgeHandle eh, Vec3d& new_point, double& energy);
+  bool enqueue_phase2_candidate(EdgeHandle eh, size_t state);
+  void initialize_phase2_candidates();
+  void update_phase2_after_collapsing(VertexHandle collapsed_center);
   EdgeSide classify_edge_side(EdgeHandle eh) const;
   EdgeSideStats collect_candidate_edge_side_stats() const;
   void add_edge_side(EdgeSideStats& stats, EdgeSide side) const;

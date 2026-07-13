@@ -261,9 +261,7 @@ double EdgeCollapser::local_Hausdorff_after_collapsing(SMeshT* local_rm, const V
 {
   ASSERT(initialized, "collapser not initialized.");
 
-  if (f_check_wrinkle && collapse_would_cause_wrinkle(new_point))
-    return DBL_MAX;
-  if (collapse_would_cause_intersection(new_point, nullptr))
+  if (!target_point_is_valid(new_point, nullptr))
     return DBL_MAX;
 
   double hd = 0.0;
@@ -285,6 +283,19 @@ double EdgeCollapser::local_Hausdorff_after_collapsing(SMeshT* local_rm, const V
   hd = std::max(hd, calc_out_error(local_rm, om, og, threshold));
 #endif
   return hd;
+}
+
+bool EdgeCollapser::target_point_is_valid(const Vec3d& new_point, const ExactPoint* new_ep)const
+{
+  ASSERT(initialized, "collapser not initialized.");
+
+  if (f_check_wrinkle && collapse_would_cause_wrinkle(new_point))
+    return false;
+  if (collapse_would_cause_degenerate(new_point, new_ep))
+    return false;
+  if (collapse_would_cause_intersection(new_point, new_ep))
+    return false;
+  return true;
 }
 
 /// @brief predict new faces after collapse. new faces are represented by halfedges.

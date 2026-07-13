@@ -51,12 +51,35 @@ config.json
 | `collapse_post_face_area_hard` | collapse | `priorityMode = "post_face_area_hard"` |
 | `collapse_triangle_quality` | collapse | `priorityMode = "triangle_quality"` |
 | `collapse_triangle_quality_hard` | collapse | `priorityMode = "triangle_quality_hard"` |
+| `phase2_fast` | phase2 | `phase2Mode = "fast"` |
+| `phase2_newton` | phase2 | `phase2Mode = "newton"`, `placementMode = "newton"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"`, barrier weights `0.0` by default because exact checks are hard constraints |
 | `flip_valence` | flip | `priorityMode = "valence"` |
 | `flip_triangle_quality_hard` | flip | `priorityMode = "triangle_quality_hard"` |
 | `relocate_hausdorff` | relocate | `priorityMode = "hausdorff"` |
 | `relocate_triangle_quality_hard` | relocate | `priorityMode = "triangle_quality_hard"` |
+| `collapse_newton` | phase2/collapse | `phase2Mode = "newton"`, `placementMode = "newton"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"` |
+| `collapse_sampling` | collapse | `placementMode = "sampling"` |
+| `newton_damped` | collapse | `newtonSolverMode = "damped"` |
+| `newton_trust_region` | collapse | `newtonSolverMode = "trust_region"` |
+| `robust_exact_reject` | collapse | `robustnessMode = "exact_reject"` |
+| `robust_exact_backtracking` | collapse | `robustnessMode = "exact_backtracking"` |
+| `robust_ipc` | collapse | `robustnessMode = "ipc_line_search"` |
+| `curvature_none` | collapse | `curvatureMode = "none"` |
+| `curvature_weighted_qem` | collapse | `curvatureMode = "weighted_qem"` |
+| `curvature_normal_matching` | collapse | `curvatureMode = "normal_matching"` |
+| `uniformity_none` | collapse | `uniformityMode = "none"` |
+| `uniformity_source` | collapse | `uniformityMode = "source"` |
+| `uniformity_global` | collapse | `uniformityMode = "global"` |
 
 알 수 없는 토큰이 들어오면 `unknown parameter token` 오류와 함께 실행이 중단됩니다.
+
+Newton placement 세부 가중치는 JSON에서 조절합니다. 주요 키는
+`paramCageSimplifier.paramCollapse.qemWeight`, `selfBarrierWeight`,
+`originalBarrierWeight`, `curvatureWeight`, `triangleQualityWeight`,
+`uniformityWeight`, `barrierActivationDistanceFactor`, `newtonMaxIter`,
+`lineSearchMaxIter`, `lineSearchCcdSamples`,
+`phase2NewtonQualityThreshold`, `phase2NewtonResidualThreshold`,
+`phase2NewtonResidualGrowth`, `phase2NewtonFinalRefineCollapses`입니다.
 
 ## JSON Config
 

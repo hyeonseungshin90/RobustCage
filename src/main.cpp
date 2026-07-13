@@ -153,7 +153,34 @@ std::string collapse_mode_label(const Cage::ParamCollapseStage& param)
   std::string mode = sanitize_path_component(param.priorityMode);
   if (mode == "length_quality")
     mode += "_" + sanitize_path_component(param.lengthQualitySubMode);
+  if (param.placementMode == "newton")
+  {
+    mode += "_newton";
+    mode += "_" + sanitize_path_component(param.newtonSolverMode);
+    mode += "_" + sanitize_path_component(param.robustnessMode);
+    if (param.curvatureMode != "none")
+      mode += "_curv_" + sanitize_path_component(param.curvatureMode);
+    if (param.uniformityMode != "none")
+      mode += "_uniform_" + sanitize_path_component(param.uniformityMode);
+  }
   return "collapse_" + mode;
+}
+
+std::string phase2_mode_label(const Cage::ParamCageSimplifier& param)
+{
+  return "phase2_" + sanitize_path_component(param.phase2Mode);
+}
+
+std::string newton_phase2_detail_label(const Cage::ParamCollapseStage& param)
+{
+  std::string mode = "newton";
+  mode += "_" + sanitize_path_component(param.newtonSolverMode);
+  mode += "_" + sanitize_path_component(param.robustnessMode);
+  if (param.curvatureMode != "none")
+    mode += "_curv_" + sanitize_path_component(param.curvatureMode);
+  if (param.uniformityMode != "none")
+    mode += "_uniform_" + sanitize_path_component(param.uniformityMode);
+  return mode;
 }
 
 std::string flip_mode_label(const Cage::ParamFlipStage& param)
@@ -172,9 +199,18 @@ std::string build_run_dir_name(const Cage::ParamCageGenerator& param)
   std::ostringstream oss;
   oss
     << format_timestamp(std::time(nullptr))
-    << "__" << collapse_mode_label(simplifier.paramCollapse)
-    << "__" << flip_mode_label(simplifier.paramFlip)
-    << "__" << relocate_mode_label(simplifier.paramRelocate);
+    << "__" << phase2_mode_label(simplifier);
+  if (simplifier.phase2Mode == "newton")
+  {
+    oss << "__" << newton_phase2_detail_label(simplifier.paramCollapse);
+  }
+  else
+  {
+    oss
+      << "__" << collapse_mode_label(simplifier.paramCollapse)
+      << "__" << flip_mode_label(simplifier.paramFlip)
+      << "__" << relocate_mode_label(simplifier.paramRelocate);
+  }
   return oss.str();
 }
 
@@ -308,15 +344,46 @@ std::string normalize_parameter_token(std::string token)
   return token;
 }
 
+void enable_newton_phase2_defaults(Cage::ParamCageGenerator& param)
+{
+  auto& simplifier = param.paramCageSimplifier;
+  auto& collapse = simplifier.paramCollapse;
+  simplifier.phase2Mode = "newton";
+  collapse.placementMode = "newton";
+  collapse.curvatureMode = "weighted_qem";
+  collapse.uniformityMode = "source";
+  collapse.selfBarrierWeight = 0.0;
+  collapse.originalBarrierWeight = 0.0;
+  collapse.triangleQualityWeight = 2.0;
+  collapse.uniformityWeight = 1.0;
+  collapse.phase2NewtonQualityThreshold = 0.12;
+  collapse.phase2NewtonResidualThreshold = 0.25;
+  collapse.phase2NewtonResidualGrowth = 1.5;
+  collapse.phase2NewtonFinalRefineCollapses = 25;
+  param.paramCageSimplifier.paramFlip.priorityMode = "triangle_quality_hard";
+}
+
 bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerator& param)
 {
   const std::string token = normalize_parameter_token(raw_token);
+  auto& simplifier = param.paramCageSimplifier;
   auto& collapse = param.paramCageSimplifier.paramCollapse;
   auto& relocate = param.paramCageSimplifier.paramRelocate;
   auto& flip = param.paramCageSimplifier.paramFlip;
 
   if (token.empty() || token == "default")
     return true;
+
+  if (token == "phase2_fast" || token == "phase2_original")
+  {
+    simplifier.phase2Mode = "fast";
+    return true;
+  }
+  if (token == "phase2_newton" || token == "newton_phase2")
+  {
+    enable_newton_phase2_defaults(param);
+    return true;
+  }
 
   if (token == "collapse" || token == "collapse_default" || token == "collapse_hausdorff")
   {
@@ -381,6 +448,72 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   if (token == "collapse_triangle_quality_hard" || token == "triangle_quality_hard")
   {
     collapse.priorityMode = "triangle_quality_hard";
+    return true;
+  }
+  if (token == "collapse_sampling" || token == "sampling")
+  {
+    collapse.placementMode = "sampling";
+    return true;
+  }
+  if (token == "collapse_newton" || token == "newton" || token == "placement_newton")
+  {
+    enable_newton_phase2_defaults(param);
+    return true;
+  }
+  if (token == "newton_damped" || token == "solver_damped")
+  {
+    collapse.newtonSolverMode = "damped";
+    return true;
+  }
+  if (token == "newton_trust_region" || token == "trust_region" || token == "solver_trust_region")
+  {
+    collapse.newtonSolverMode = "trust_region";
+    return true;
+  }
+  if (token == "robust_exact_reject" || token == "exact_reject")
+  {
+    collapse.robustnessMode = "exact_reject";
+    return true;
+  }
+  if (token == "robust_exact_backtracking" || token == "exact_backtracking")
+  {
+    collapse.robustnessMode = "exact_backtracking";
+    return true;
+  }
+  if (token == "robust_ipc" || token == "robust_ipc_line_search" ||
+    token == "ipc_line_search" || token == "robust_ccd")
+  {
+    collapse.robustnessMode = "ipc_line_search";
+    return true;
+  }
+  if (token == "curvature_none" || token == "curv_none")
+  {
+    collapse.curvatureMode = "none";
+    return true;
+  }
+  if (token == "curvature_weighted_qem" || token == "curv_weighted_qem")
+  {
+    collapse.curvatureMode = "weighted_qem";
+    return true;
+  }
+  if (token == "curvature_normal_matching" || token == "curv_normal_matching")
+  {
+    collapse.curvatureMode = "normal_matching";
+    return true;
+  }
+  if (token == "uniformity_none" || token == "uniform_none")
+  {
+    collapse.uniformityMode = "none";
+    return true;
+  }
+  if (token == "uniformity_source" || token == "uniform_source")
+  {
+    collapse.uniformityMode = "source";
+    return true;
+  }
+  if (token == "uniformity_global" || token == "uniform_global")
+  {
+    collapse.uniformityMode = "global";
     return true;
   }
   if (token == "flip_valence")
@@ -460,6 +593,12 @@ int main(int argc, char* argv[])
     printf("input \"collapse_post_face_area_hard\" to require post-collapse max face area not to increase\n");
     printf("input \"collapse_triangle_quality\" to use triangle quality priority\n");
     printf("input \"collapse_triangle_quality_hard\" to require post-collapse min triangle quality not to decrease\n");
+    printf("input \"phase2_newton\" to replace Phase 2 with Newton collapses and default curvature/uniformity energies\n");
+    printf("input \"collapse_newton\" to use the Newton Phase 2 replacement with default curvature/uniformity energies\n");
+    printf("input \"newton_damped\" or \"newton_trust_region\" to choose the Newton solver\n");
+    printf("input \"robust_exact_reject\", \"robust_exact_backtracking\", or \"robust_ipc\" to choose robustness handling\n");
+    printf("input \"curvature_weighted_qem\", \"curvature_normal_matching\", or \"curvature_none\" to choose curvature energy\n");
+    printf("input \"uniformity_source\", \"uniformity_global\", or \"uniformity_none\" to choose one uniformity energy\n");
     printf("input \"flip_triangle_quality_hard\" to require post-flip min triangle quality not to decrease\n");
     printf("input \"relocate_triangle_quality_hard\" to require post-relocate min triangle quality not to decrease\n");
     printf("combine presets with '+' or ',', for example \"collapse_length+flip_triangle_quality_hard+relocate_triangle_quality_hard\".\n");

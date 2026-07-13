@@ -42,12 +42,31 @@ void CageSimplifier::simplify()
   Logger::user_logger->info("begin simplifying.");
 
   degeneration_remover->perform();
-  fast_simplifier->simplify();
-  log_min_triangle_quality("after fast simplify");
-  const std::string fast_simplify_path =
-    param->fileOutPath + param->fileName + "_debug_fast_simplify.obj";
-  OpenMesh::IO::write_mesh(*rm, fast_simplify_path, OpenMesh::IO::Options::Default, 15);
-  Logger::user_logger->info("wrote fast simplify OBJ: {}", fast_simplify_path);
+  if (param->phase2Mode == "newton")
+  {
+    run_newton_phase2();
+    log_min_triangle_quality("after phase 2 newton");
+    const std::string phase2_path =
+      param->fileOutPath + param->fileName + "_debug_phase2_newton.obj";
+    OpenMesh::IO::write_mesh(*rm, phase2_path, OpenMesh::IO::Options::Default, 15);
+    Logger::user_logger->info("wrote phase 2 newton OBJ: {}", phase2_path);
+
+    degeneration_remover = nullptr;
+    fast_simplifier = nullptr;
+    collapse_stage = nullptr;
+    vt = nullptr;
+    Logger::user_logger->info("simplification done.");
+    return;
+  }
+  else
+  {
+    fast_simplifier->simplify();
+    log_min_triangle_quality("after fast simplify");
+    const std::string fast_simplify_path =
+      param->fileOutPath + param->fileName + "_debug_fast_simplify.obj";
+    OpenMesh::IO::write_mesh(*rm, fast_simplify_path, OpenMesh::IO::Options::Default, 15);
+    Logger::user_logger->info("wrote fast simplify OBJ: {}", fast_simplify_path);
+  }
 
   #ifdef OUTPUT_MIDDLE_RESULT
     OpenMesh::IO::write_mesh(*rm, param->fileOutPath + std::to_string(param->cageLabel) + "_fast_simplify.obj",
@@ -97,6 +116,38 @@ void CageSimplifier::calc_diagonal_length()
   original_diagonal_length = (ptMax - ptMin).norm();
   degeneration_remover->original_diagonal_length = original_diagonal_length;
   fast_simplifier->original_diagonal_length = original_diagonal_length;
+}
+
+void CageSimplifier::run_newton_phase2()
+{
+  Logger::user_logger->info(
+    "running newton Phase 2 replacement to final target {} vertices.",
+    param->targetVerticesNum);
+
+  collapse_stage = std::make_unique<CollapseStage>(
+    om, rm, &param->paramCollapse,
+    ot.get(), lrt.get(), og.get(), original_diagonal_length);
+  collapse_stage->do_newton_phase2(param->targetVerticesNum);
+  collapse_stage = nullptr;
+
+  Logger::user_logger->info("running phase 2 newton final flip polish.");
+  rt = std::make_unique<FaceTree>(*rm);
+  generate_out_links(om, rm, rt.get());
+  rt = nullptr;
+  calc_face_in_error(rm, std::vector<FaceHandle>(rm->faces_begin(), rm->faces_end()));
+#ifdef USE_TREE_SEARCH
+  calc_out_error(rm, om, ot.get(), cage_infinite_fp);
+#else
+  calc_out_error(rm, om, og.get(), cage_infinite_fp);
+#endif
+
+  flip_stage = std::make_unique<FlipStage>(
+    om, rm, &param->paramFlip,
+    ot.get(), lrt.get(), og.get(), original_diagonal_length);
+  flip_stage->update(true, cage_infinite_fp);
+  flip_stage->do_flip();
+  flip_stage = nullptr;
+  init_one_ring_faces(rm);
 }
 
 void CageSimplifier::update_strategy()

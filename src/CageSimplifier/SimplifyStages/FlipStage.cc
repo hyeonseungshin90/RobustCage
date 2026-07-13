@@ -38,7 +38,7 @@ void FlipStage::initialize_flip_edges_reward()
       continue;
     if (edge_flipper.flip_will_cause_over_valence(param->maxValence))
       continue;
-    if (!edge_flipper.flip_will_decrease_valence())
+    if (!is_triangle_quality_priority_mode() && !edge_flipper.flip_will_decrease_valence())
       continue;
     double local_hd_before = edge_flipper.local_Hausdorff_before_flipping();
     double local_hd_after = edge_flipper.local_Hausdorff_after_flipping();
@@ -60,10 +60,10 @@ bool FlipStage::try_enqueue_flip_candidate(
   else if (local_hd_before - local_hd_after < 0.0)
     return false;
 
-  if (is_triangle_quality_hard_priority_mode())
+  if (is_triangle_quality_priority_mode())
   {
     const double quality_delta = calc_flip_quality_delta(eh);
-    if (quality_delta < 0.0)
+    if (quality_delta <= 1e-12)
       return false;
 
     edges_to_flip.emplace(eh, state, quality_delta);
@@ -78,6 +78,12 @@ bool FlipStage::try_enqueue_flip_candidate(
   return true;
 }
 
+bool FlipStage::is_triangle_quality_priority_mode() const
+{
+  return param->priorityMode == "triangle_quality" || param->priorityMode == "triangle-quality" ||
+    is_triangle_quality_hard_priority_mode();
+}
+
 bool FlipStage::is_triangle_quality_hard_priority_mode() const
 {
   return param->priorityMode == "triangle_quality_hard" || param->priorityMode == "triangle-quality-hard";
@@ -85,7 +91,7 @@ bool FlipStage::is_triangle_quality_hard_priority_mode() const
 
 bool FlipStage::is_flip_quality_allowed(EdgeHandle eh) const
 {
-  return calc_flip_quality_delta(eh) >= 0.0;
+  return calc_flip_quality_delta(eh) > 1e-12;
 }
 
 double FlipStage::calc_flip_quality_delta(EdgeHandle eh) const
@@ -202,7 +208,7 @@ void FlipStage::update_after_flipping(EdgeHandle flipped_edge)
       continue;
     if (edge_flipper.flip_will_cause_over_valence(param->maxValence))
       continue;
-    if (!edge_flipper.flip_will_decrease_valence())
+    if (!is_triangle_quality_priority_mode() && !edge_flipper.flip_will_decrease_valence())
       continue;
     double local_hd_before = edge_flipper.local_Hausdorff_before_flipping();
     double local_hd_after = edge_flipper.local_Hausdorff_after_flipping();
@@ -227,7 +233,7 @@ void FlipStage::do_flip()
     if (edge_reward.state < update_states[edge_reward.eh.idx()])
       continue;
 
-    if (is_triangle_quality_hard_priority_mode() && !is_flip_quality_allowed(edge_reward.eh))
+    if (is_triangle_quality_priority_mode() && !is_flip_quality_allowed(edge_reward.eh))
       continue;
 
     if (edge_flipper.try_flip_edge(edge_reward.eh))
