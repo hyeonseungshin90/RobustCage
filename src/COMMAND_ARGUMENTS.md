@@ -51,14 +51,17 @@ config.json
 | `collapse_post_face_area_hard` | collapse | `priorityMode = "post_face_area_hard"` |
 | `collapse_triangle_quality` | collapse | `priorityMode = "triangle_quality"` |
 | `collapse_triangle_quality_hard` | collapse | `priorityMode = "triangle_quality_hard"` |
-| `phase2_fast` | phase2 | `phase2Mode = "fast"` |
-| `phase2_newton` | phase2 | `phase2Mode = "newton"`, `placementMode = "newton"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"`, barrier weights `0.0` by default because exact checks are hard constraints |
+| `phase2_newton` | phase2 | `phase2Mode = "newton"`, `collapsePlacementMethod = "optimization"`, `phase2PlacementStrategy = "adaptive"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"`, `positionFidelityWeight = 1.0`, barrier weights `0.0` by default because exact checks are hard constraints |
+| `phase2_adaptive` | phase2 | QEM linear solve first, Newton only when local quality/residual/final-collapse criteria request it |
+| `phase2_linear_only` | phase2 | QEM linear solve placement only during Phase 2 collapse; no Newton refinement |
+| `phase2_final_newton` | phase2 | QEM linear solve placement during collapse, then one fixed-topology Newton relocation pass |
+| `phase2_newton_only` | phase2 | Skip QEM linear solve; use Newton placement for every popped collapse candidate |
 | `flip_valence` | flip | `priorityMode = "valence"` |
 | `flip_triangle_quality_hard` | flip | `priorityMode = "triangle_quality_hard"` |
 | `relocate_hausdorff` | relocate | `priorityMode = "hausdorff"` |
 | `relocate_triangle_quality_hard` | relocate | `priorityMode = "triangle_quality_hard"` |
-| `collapse_newton` | phase2/collapse | `phase2Mode = "newton"`, `placementMode = "newton"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"` |
-| `collapse_sampling` | collapse | `placementMode = "sampling"` |
+| `collapse_optimization` / `collapse_newton` | phase2/collapse | `phase2Mode = "newton"`, `collapsePlacementMethod = "optimization"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"` |
+| `collapse_sampling` | collapse | `collapsePlacementMethod = "sampling"` |
 | `newton_damped` | collapse | `newtonSolverMode = "damped"` |
 | `newton_trust_region` | collapse | `newtonSolverMode = "trust_region"` |
 | `robust_exact_reject` | collapse | `robustnessMode = "exact_reject"` |
@@ -74,8 +77,9 @@ config.json
 알 수 없는 토큰이 들어오면 `unknown parameter token` 오류와 함께 실행이 중단됩니다.
 
 Newton placement 세부 가중치는 JSON에서 조절합니다. 주요 키는
-`paramCageSimplifier.paramCollapse.qemWeight`, `selfBarrierWeight`,
-`originalBarrierWeight`, `curvatureWeight`, `triangleQualityWeight`,
+`paramCageSimplifier.paramCollapse.phase2PlacementStrategy`,
+`qemWeight`, `selfBarrierWeight`,
+`originalBarrierWeight`, `positionFidelityWeight`, `curvatureWeight`, `triangleQualityWeight`,
 `uniformityWeight`, `barrierActivationDistanceFactor`, `newtonMaxIter`,
 `lineSearchMaxIter`, `lineSearchCcdSamples`,
 `phase2NewtonQualityThreshold`, `phase2NewtonResidualThreshold`,

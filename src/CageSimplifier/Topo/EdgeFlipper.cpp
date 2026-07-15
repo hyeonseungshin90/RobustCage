@@ -127,6 +127,23 @@ bool EdgeFlipper::flip_will_decrease_valence()const
   return deviation_post < deviation_pre;
 }
 
+bool EdgeFlipper::flip_will_improve_regular_valence()const
+{
+  const int target_valence = 6;
+  const auto moves_toward_target = [target_valence](size_t valence, int delta)
+  {
+    const int pre = static_cast<int>(valence);
+    const int post = pre + delta;
+    return std::abs(post - target_valence) < std::abs(pre - target_valence);
+  };
+
+  return
+    moves_toward_target(rm->valence(va0), -1) &&
+    moves_toward_target(rm->valence(va1), 1) &&
+    moves_toward_target(rm->valence(vb0), -1) &&
+    moves_toward_target(rm->valence(vb1), 1);
+}
+
 bool EdgeFlipper::flip_will_cause_over_valence(size_t max_valence)const
 {
   return rm->valence(va1) + 1 > max_valence || rm->valence(vb1) + 1 > max_valence;

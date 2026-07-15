@@ -153,9 +153,12 @@ std::string collapse_mode_label(const Cage::ParamCollapseStage& param)
   std::string mode = sanitize_path_component(param.priorityMode);
   if (mode == "length_quality")
     mode += "_" + sanitize_path_component(param.lengthQualitySubMode);
-  if (param.placementMode == "newton")
+  if (param.collapsePlacementMethod == "optimization" ||
+    param.collapsePlacementMethod == "energy" ||
+    param.collapsePlacementMethod == "newton")
   {
-    mode += "_newton";
+    mode += "_optimization";
+    mode += "_" + sanitize_path_component(param.phase2PlacementStrategy);
     mode += "_" + sanitize_path_component(param.newtonSolverMode);
     mode += "_" + sanitize_path_component(param.robustnessMode);
     if (param.curvatureMode != "none")
@@ -174,6 +177,7 @@ std::string phase2_mode_label(const Cage::ParamCageSimplifier& param)
 std::string newton_phase2_detail_label(const Cage::ParamCollapseStage& param)
 {
   std::string mode = "newton";
+  mode += "_" + sanitize_path_component(param.phase2PlacementStrategy);
   mode += "_" + sanitize_path_component(param.newtonSolverMode);
   mode += "_" + sanitize_path_component(param.robustnessMode);
   if (param.curvatureMode != "none")
@@ -349,11 +353,13 @@ void enable_newton_phase2_defaults(Cage::ParamCageGenerator& param)
   auto& simplifier = param.paramCageSimplifier;
   auto& collapse = simplifier.paramCollapse;
   simplifier.phase2Mode = "newton";
-  collapse.placementMode = "newton";
+  collapse.collapsePlacementMethod = "optimization";
+  collapse.phase2PlacementStrategy = "adaptive";
   collapse.curvatureMode = "weighted_qem";
   collapse.uniformityMode = "source";
   collapse.selfBarrierWeight = 0.0;
   collapse.originalBarrierWeight = 0.0;
+  collapse.positionFidelityWeight = 1.0;
   collapse.triangleQualityWeight = 2.0;
   collapse.uniformityWeight = 1.0;
   collapse.phase2NewtonQualityThreshold = 0.12;
@@ -361,6 +367,7 @@ void enable_newton_phase2_defaults(Cage::ParamCageGenerator& param)
   collapse.phase2NewtonResidualGrowth = 1.5;
   collapse.phase2NewtonFinalRefineCollapses = 25;
   param.paramCageSimplifier.paramFlip.priorityMode = "triangle_quality_hard";
+  param.paramCageSimplifier.paramFlip.requireRegularValence = false;
 }
 
 bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerator& param)
@@ -374,11 +381,6 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   if (token.empty() || token == "default")
     return true;
 
-  if (token == "phase2_fast" || token == "phase2_original")
-  {
-    simplifier.phase2Mode = "fast";
-    return true;
-  }
   if (token == "phase2_newton" || token == "newton_phase2")
   {
     enable_newton_phase2_defaults(param);
@@ -452,12 +454,42 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   }
   if (token == "collapse_sampling" || token == "sampling")
   {
-    collapse.placementMode = "sampling";
+    collapse.collapsePlacementMethod = "sampling";
     return true;
   }
-  if (token == "collapse_newton" || token == "newton" || token == "placement_newton")
+  if (token == "collapse_optimization" || token == "optimization" ||
+    token == "collapse_energy" || token == "energy" ||
+    token == "collapse_newton" || token == "newton" || token == "placement_newton")
   {
     enable_newton_phase2_defaults(param);
+    return true;
+  }
+  if (token == "phase2_adaptive" || token == "phase2_placement_adaptive" ||
+    token == "adaptive")
+  {
+    enable_newton_phase2_defaults(param);
+    collapse.phase2PlacementStrategy = "adaptive";
+    return true;
+  }
+  if (token == "phase2_linear_only" || token == "phase2_placement_linear_only" ||
+    token == "linear_only" || token == "qem_only")
+  {
+    enable_newton_phase2_defaults(param);
+    collapse.phase2PlacementStrategy = "linear_only";
+    return true;
+  }
+  if (token == "phase2_final_newton" || token == "phase2_placement_final_newton" ||
+    token == "final_newton")
+  {
+    enable_newton_phase2_defaults(param);
+    collapse.phase2PlacementStrategy = "final_newton";
+    return true;
+  }
+  if (token == "phase2_newton_only" || token == "phase2_placement_newton_only" ||
+    token == "newton_only")
+  {
+    enable_newton_phase2_defaults(param);
+    collapse.phase2PlacementStrategy = "newton_only";
     return true;
   }
   if (token == "newton_damped" || token == "solver_damped")
@@ -593,8 +625,8 @@ int main(int argc, char* argv[])
     printf("input \"collapse_post_face_area_hard\" to require post-collapse max face area not to increase\n");
     printf("input \"collapse_triangle_quality\" to use triangle quality priority\n");
     printf("input \"collapse_triangle_quality_hard\" to require post-collapse min triangle quality not to decrease\n");
-    printf("input \"phase2_newton\" to replace Phase 2 with Newton collapses and default curvature/uniformity energies\n");
-    printf("input \"collapse_newton\" to use the Newton Phase 2 replacement with default curvature/uniformity energies\n");
+    printf("input \"phase2_newton\" to replace Phase 2 with optimization collapses and default curvature/uniformity energies\n");
+    printf("input \"collapse_optimization\" to use the optimization Phase 2 replacement with default curvature/uniformity energies\n");
     printf("input \"newton_damped\" or \"newton_trust_region\" to choose the Newton solver\n");
     printf("input \"robust_exact_reject\", \"robust_exact_backtracking\", or \"robust_ipc\" to choose robustness handling\n");
     printf("input \"curvature_weighted_qem\", \"curvature_normal_matching\", or \"curvature_none\" to choose curvature energy\n");

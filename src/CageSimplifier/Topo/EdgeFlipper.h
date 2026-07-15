@@ -44,6 +44,7 @@ public:
 
   bool try_flip_edge_decrease_valence(EdgeHandle e);
   bool flip_will_decrease_valence()const;
+  bool flip_will_improve_regular_valence()const;
   bool flip_will_cause_over_valence(size_t max_valence)const;
 
   bool flip_will_cause_small_large_angle()const;

@@ -68,10 +68,16 @@ struct ParamCollapseStage
   double lengthQualityDegradationRatio;
   double lengthQualityMinQuality;
 
-  // Placement mode:
+  // Collapse placement method:
   // "sampling" keeps the original candidate sampling strategy.
-  // "newton" optimizes the post-collapse vertex position with local energies.
-  std::string placementMode;
+  // "optimization" uses local QEM/Newton-style energies to choose the post-collapse vertex position.
+  std::string collapsePlacementMethod;
+  // Phase 2 placement strategy:
+  // "adaptive": QEM linear solve first, Newton only for selected hard cases.
+  // "linear_only": QEM linear solve only during collapse.
+  // "final_newton": QEM linear solve during collapse, then one fixed-topology Newton polish.
+  // "newton_only": skip QEM linear solve and use Newton placement for every popped edge.
+  std::string phase2PlacementStrategy;
   // Newton solver mode: "damped" or "trust_region".
   std::string newtonSolverMode;
   // Robustness mode:
@@ -99,6 +105,7 @@ struct ParamCollapseStage
   double qemWeight;
   double selfBarrierWeight;
   double originalBarrierWeight;
+  double positionFidelityWeight;
   double curvatureWeight;
   double triangleQualityWeight;
   double uniformityWeight;
@@ -113,7 +120,8 @@ struct ParamCollapseStage
     jo["lengthQualityWeight"] = lengthQualityWeight;
     jo["lengthQualityDegradationRatio"] = lengthQualityDegradationRatio;
     jo["lengthQualityMinQuality"] = lengthQualityMinQuality;
-    jo["placementMode"] = placementMode;
+    jo["collapsePlacementMethod"] = collapsePlacementMethod;
+    jo["phase2PlacementStrategy"] = phase2PlacementStrategy;
     jo["newtonSolverMode"] = newtonSolverMode;
     jo["robustnessMode"] = robustnessMode;
     jo["curvatureMode"] = curvatureMode;
@@ -132,6 +140,7 @@ struct ParamCollapseStage
     jo["qemWeight"] = qemWeight;
     jo["selfBarrierWeight"] = selfBarrierWeight;
     jo["originalBarrierWeight"] = originalBarrierWeight;
+    jo["positionFidelityWeight"] = positionFidelityWeight;
     jo["curvatureWeight"] = curvatureWeight;
     jo["triangleQualityWeight"] = triangleQualityWeight;
     jo["uniformityWeight"] = uniformityWeight;
@@ -162,8 +171,19 @@ struct ParamCollapseStage
     auto lq_min_quality_it = jo.find("lengthQualityMinQuality");
     lengthQualityMinQuality = lq_min_quality_it != jo.end() ? lq_min_quality_it->value().as_double() : 0.05;
 
-    auto placement_mode_it = jo.find("placementMode");
-    placementMode = placement_mode_it != jo.end() ? std::string(placement_mode_it->value().as_string().c_str()) : "sampling";
+    auto collapse_placement_method_it = jo.find("collapsePlacementMethod");
+    if (collapse_placement_method_it == jo.end())
+      collapse_placement_method_it = jo.find("placementMode");
+    collapsePlacementMethod =
+      collapse_placement_method_it != jo.end() ? std::string(collapse_placement_method_it->value().as_string().c_str()) : "sampling";
+    if (collapsePlacementMethod == "newton" || collapsePlacementMethod == "energy")
+      collapsePlacementMethod = "optimization";
+
+    auto phase2_placement_strategy_it = jo.find("phase2PlacementStrategy");
+    if (phase2_placement_strategy_it == jo.end())
+      phase2_placement_strategy_it = jo.find("phase2PlacementMode");
+    phase2PlacementStrategy =
+      phase2_placement_strategy_it != jo.end() ? std::string(phase2_placement_strategy_it->value().as_string().c_str()) : "adaptive";
 
     auto solver_mode_it = jo.find("newtonSolverMode");
     newtonSolverMode = solver_mode_it != jo.end() ? std::string(solver_mode_it->value().as_string().c_str()) : "damped";
@@ -223,6 +243,10 @@ struct ParamCollapseStage
     auto original_barrier_weight_it = jo.find("originalBarrierWeight");
     originalBarrierWeight = original_barrier_weight_it != jo.end() ? original_barrier_weight_it->value().as_double() : 0.1;
 
+    auto position_fidelity_weight_it = jo.find("positionFidelityWeight");
+    positionFidelityWeight =
+      position_fidelity_weight_it != jo.end() ? position_fidelity_weight_it->value().as_double() : 1.0;
+
     auto curvature_weight_it = jo.find("curvatureWeight");
     curvatureWeight = curvature_weight_it != jo.end() ? curvature_weight_it->value().as_double() : 1.0;
 
@@ -271,12 +295,16 @@ struct ParamFlipStage
   size_t maxValence;
   // Supported modes: "valence", "triangle_quality_hard".
   std::string priorityMode;
+  // When true, quality-priority flips must also move all four incident
+  // vertices toward regular valence 6. Used by the Newton Phase 2 polish.
+  bool requireRegularValence;
 
   boost::json::object serialize()const
   {
     boost::json::object jo;
     jo["maxValence"] = maxValence;
     jo["priorityMode"] = priorityMode;
+    jo["requireRegularValence"] = requireRegularValence;
     return jo;
   }
   void deserialize(const boost::json::object& jo)
@@ -287,6 +315,10 @@ struct ParamFlipStage
       priorityMode = std::string(priority_mode_it->value().as_string().c_str());
     else
       priorityMode = "valence";
+
+    auto require_regular_valence_it = jo.find("requireRegularValence");
+    requireRegularValence =
+      require_regular_valence_it != jo.end() ? require_regular_valence_it->value().as_bool() : false;
   }
 };
 
@@ -295,7 +327,7 @@ struct ParamCageSimplifier
   // target
   size_t targetVerticesNum;
   // Phase 2 simplification mode: "fast" keeps the original FastSimplifier,
-  // "newton" replaces Phase 2 with energy-driven edge collapses.
+  // "newton" replaces Phase 2 with optimization-driven edge collapses.
   std::string phase2Mode;
   // iterations
   size_t maxIter;
@@ -387,7 +419,8 @@ struct ParamCageGenerator
     collapse.lengthQualityWeight = 5.0;
     collapse.lengthQualityDegradationRatio = 0.5;
     collapse.lengthQualityMinQuality = 0.1;
-    collapse.placementMode = "sampling";
+    collapse.collapsePlacementMethod = "sampling";
+    collapse.phase2PlacementStrategy = "adaptive";
     collapse.newtonSolverMode = "damped";
     collapse.robustnessMode = "exact_backtracking";
     collapse.curvatureMode = "none";
@@ -406,6 +439,7 @@ struct ParamCageGenerator
     collapse.qemWeight = 1.0;
     collapse.selfBarrierWeight = 0.0;
     collapse.originalBarrierWeight = 0.1;
+    collapse.positionFidelityWeight = 1.0;
     collapse.curvatureWeight = 1.0;
     collapse.triangleQualityWeight = 2.0;
     collapse.uniformityWeight = 1.0;
@@ -418,6 +452,7 @@ struct ParamCageGenerator
     auto& flip = paramCageSimplifier.paramFlip;
     flip.maxValence = 8;
     flip.priorityMode = "valence";
+    flip.requireRegularValence = false;
   }
 
   void setOutputPath(const std::string& outDir, const std::string& outFile)

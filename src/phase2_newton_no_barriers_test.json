@@ -9,13 +9,15 @@
     "paramCollapse": {
       "maxValence": 8,
       "priorityMode": "hausdorff",
-      "placementMode": "newton",
+      "collapsePlacementMethod": "optimization",
+      "phase2PlacementStrategy": "adaptive",
       "newtonSolverMode": "damped",
       "robustnessMode": "exact_backtracking",
       "curvatureMode": "weighted_qem",
       "uniformityMode": "source",
       "selfBarrierWeight": 0.0,
-      "originalBarrierWeight": 0.0
+      "originalBarrierWeight": 0.0,
+      "positionFidelityWeight": 1.0
     },
     "paramFlip": {
       "maxValence": 8

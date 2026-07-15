@@ -44,12 +44,12 @@ void CageSimplifier::simplify()
   degeneration_remover->perform();
   if (param->phase2Mode == "newton")
   {
-    run_newton_phase2();
-    log_min_triangle_quality("after phase 2 newton");
+    run_phase2_optimization_simplification();
+    log_min_triangle_quality("after phase 2 optimization");
     const std::string phase2_path =
       param->fileOutPath + param->fileName + "_debug_phase2_newton.obj";
     OpenMesh::IO::write_mesh(*rm, phase2_path, OpenMesh::IO::Options::Default, 15);
-    Logger::user_logger->info("wrote phase 2 newton OBJ: {}", phase2_path);
+    Logger::user_logger->info("wrote phase 2 optimization OBJ: {}", phase2_path);
 
     degeneration_remover = nullptr;
     fast_simplifier = nullptr;
@@ -118,19 +118,19 @@ void CageSimplifier::calc_diagonal_length()
   fast_simplifier->original_diagonal_length = original_diagonal_length;
 }
 
-void CageSimplifier::run_newton_phase2()
+void CageSimplifier::run_phase2_optimization_simplification()
 {
   Logger::user_logger->info(
-    "running newton Phase 2 replacement to final target {} vertices.",
+    "running optimization-based Phase 2 replacement to final target {} vertices.",
     param->targetVerticesNum);
 
   collapse_stage = std::make_unique<CollapseStage>(
     om, rm, &param->paramCollapse,
     ot.get(), lrt.get(), og.get(), original_diagonal_length);
-  collapse_stage->do_newton_phase2(param->targetVerticesNum);
+  collapse_stage->do_phase2_optimization_simplification(param->targetVerticesNum);
   collapse_stage = nullptr;
 
-  Logger::user_logger->info("running phase 2 newton final flip polish.");
+  Logger::user_logger->info("running phase 2 optimization final flip polish.");
   rt = std::make_unique<FaceTree>(*rm);
   generate_out_links(om, rm, rt.get());
   rt = nullptr;
