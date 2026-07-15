@@ -54,6 +54,7 @@ config.json
 | `phase2_newton` | phase2 | `phase2Mode = "newton"`, `collapsePlacementMethod = "optimization"`, `phase2PlacementStrategy = "adaptive"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"`, `positionFidelityWeight = 1.0`, barrier weights `0.0` by default because exact checks are hard constraints |
 | `phase2_adaptive` | phase2 | QEM linear solve first, Newton only when local quality/residual/final-collapse criteria request it |
 | `phase2_linear_only` | phase2 | QEM linear solve placement only during Phase 2 collapse; no Newton refinement |
+| `phase2_qem_only` | phase2 | Use only the QEM placement for each Phase 2 collapse; no fallback candidates and no Newton refinement, while keeping hard intersection/validity constraints |
 | `phase2_final_newton` | phase2 | QEM linear solve placement during collapse, then one fixed-topology Newton relocation pass |
 | `phase2_newton_only` | phase2 | Skip QEM linear solve; use Newton placement for every popped collapse candidate |
 | `phase2_quadratic_surrogate` | phase2 | Separate experimental strategy: keep QEM queue ranking, then add the 4x4 quadratic surrogate as an extra placement candidate with QEM/fallback safeguards; no Newton refinement |

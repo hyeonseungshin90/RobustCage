@@ -502,8 +502,12 @@ bool CollapseStage::is_phase2_adaptive_strategy() const
 
 bool CollapseStage::is_phase2_linear_only_strategy() const
 {
-  return param->phase2PlacementStrategy == "linear_only" || param->phase2PlacementStrategy == "linear-only" ||
-    param->phase2PlacementStrategy == "qem_only" || param->phase2PlacementStrategy == "qem-only";
+  return param->phase2PlacementStrategy == "linear_only" || param->phase2PlacementStrategy == "linear-only";
+}
+
+bool CollapseStage::is_phase2_qem_only_strategy() const
+{
+  return param->phase2PlacementStrategy == "qem_only" || param->phase2PlacementStrategy == "qem-only";
 }
 
 bool CollapseStage::is_phase2_final_newton_strategy() const
@@ -1373,7 +1377,8 @@ bool CollapseStage::should_refine_phase2_placement_with_newton(
 {
   if (is_phase2_newton_only_strategy())
     return finite_vec(x);
-  if (is_phase2_linear_only_strategy() || is_phase2_final_newton_strategy() ||
+  if (is_phase2_linear_only_strategy() || is_phase2_qem_only_strategy() ||
+    is_phase2_final_newton_strategy() ||
     is_phase2_quadratic_surrogate_strategy())
     return false;
 
@@ -1402,7 +1407,7 @@ bool CollapseStage::should_refine_phase2_placement_with_newton(
 
 // Select the new vertex position for one edge collapse before the topology
 // change is committed. The policy is controlled by phase2PlacementStrategy:
-// adaptive, linear_only, final_newton, newton_only, or quadratic_surrogate.
+// adaptive, linear_only, qem_only, final_newton, newton_only, or quadratic_surrogate.
 bool CollapseStage::choose_phase2_collapse_placement(
   EdgeHandle eh, EdgeCollapser& edge_collapser, const Vec3d& queued_point,
   size_t remaining_vertices, size_t target_vertices_num,
@@ -1431,12 +1436,13 @@ bool CollapseStage::choose_phase2_collapse_placement(
     candidate_kind.push_back(kind);
   };
 
+  const bool use_qem_only = is_phase2_qem_only_strategy();
   const bool use_quadratic_surrogate = is_phase2_quadratic_surrogate_strategy();
   append_candidate(queued_point, false, use_quadratic_surrogate ? 1 : 0);
 
   double qem_position_fidelity = DBL_MAX;
 
-  if (use_quadratic_surrogate)
+  if (!use_qem_only && use_quadratic_surrogate)
   {
     Vec3d surrogate_point;
     double surrogate_energy = DBL_MAX;
@@ -1452,11 +1458,14 @@ bool CollapseStage::choose_phase2_collapse_placement(
     }
   }
 
-  append_candidate(ctx.start_point, true, 2);
-  append_candidate(ctx.midpoint, true, 2);
-  const HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
-  append_candidate(rm->point(rm->to_vertex_handle(heh)), true, 2);
-  append_candidate(rm->point(rm->from_vertex_handle(heh)), true, 2);
+  if (!use_qem_only)
+  {
+    append_candidate(ctx.start_point, true, 2);
+    append_candidate(ctx.midpoint, true, 2);
+    const HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
+    append_candidate(rm->point(rm->to_vertex_handle(heh)), true, 2);
+    append_candidate(rm->point(rm->from_vertex_handle(heh)), true, 2);
+  }
 
   bool found_valid_candidate = false;
   for (size_t i = 0; i < candidates.size(); i++)

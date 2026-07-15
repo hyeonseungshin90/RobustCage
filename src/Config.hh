@@ -75,6 +75,7 @@ struct ParamCollapseStage
   // Phase 2 placement strategy:
   // "adaptive": QEM linear solve first, Newton only for selected hard cases.
   // "linear_only": QEM linear solve only during collapse.
+  // "qem_only": use only the QEM placement for each collapse; no fallback candidates or Newton.
   // "final_newton": QEM linear solve during collapse, then one fixed-topology Newton polish.
   // "newton_only": skip QEM linear solve and use Newton placement for every popped edge.
   // "quadratic_surrogate": use the 4x4 quadratic surrogate solve as a separate experimental path.

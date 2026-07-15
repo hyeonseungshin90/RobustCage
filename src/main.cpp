@@ -472,10 +472,17 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
     return true;
   }
   if (token == "phase2_linear_only" || token == "phase2_placement_linear_only" ||
-    token == "linear_only" || token == "qem_only")
+    token == "linear_only")
   {
     enable_newton_phase2_defaults(param);
     collapse.phase2PlacementStrategy = "linear_only";
+    return true;
+  }
+  if (token == "phase2_qem_only" || token == "phase2_placement_qem_only" ||
+    token == "qem_only")
+  {
+    enable_newton_phase2_defaults(param);
+    collapse.phase2PlacementStrategy = "qem_only";
     return true;
   }
   if (token == "phase2_final_newton" || token == "phase2_placement_final_newton" ||
@@ -633,6 +640,7 @@ int main(int argc, char* argv[])
     printf("input \"collapse_triangle_quality\" to use triangle quality priority\n");
     printf("input \"collapse_triangle_quality_hard\" to require post-collapse min triangle quality not to decrease\n");
     printf("input \"phase2_newton\" to replace Phase 2 with optimization collapses and default curvature/uniformity energies\n");
+    printf("input \"phase2_qem_only\" to use only QEM placement in Phase 2, with hard intersection constraints\n");
     printf("input \"phase2_quadratic_surrogate\" to use the separate 4x4 quadratic surrogate Phase 2 strategy\n");
     printf("input \"collapse_optimization\" to use the optimization Phase 2 replacement with default curvature/uniformity energies\n");
     printf("input \"newton_damped\" or \"newton_trust_region\" to choose the Newton solver\n");

@@ -172,6 +172,7 @@ private:
   bool is_optimization_collapse_placement_method() const;
   bool is_phase2_adaptive_strategy() const;
   bool is_phase2_linear_only_strategy() const;
+  bool is_phase2_qem_only_strategy() const;
   bool is_phase2_final_newton_strategy() const;
   bool is_phase2_newton_only_strategy() const;
   bool is_phase2_quadratic_surrogate_strategy() const;
