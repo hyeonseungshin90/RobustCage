@@ -119,6 +119,7 @@ private:
   {
     Vec3d from;
     Vec3d to;
+    Vec3d apex;
   };
 
   // Local geometric data for evaluating one edge-collapse placement x.
@@ -173,6 +174,7 @@ private:
   bool is_phase2_linear_only_strategy() const;
   bool is_phase2_final_newton_strategy() const;
   bool is_phase2_newton_only_strategy() const;
+  bool is_phase2_quadratic_surrogate_strategy() const;
   bool is_trust_region_solver_mode() const;
   bool is_exact_reject_robustness_mode() const;
   bool is_exact_backtracking_robustness_mode() const;
@@ -228,9 +230,13 @@ private:
     size_t remaining_vertices, size_t target_vertices_num,
     double min_quality, double nonlinear_residual) const;
   bool choose_phase2_collapse_placement(
-    EdgeHandle eh, EdgeCollapser& edge_collapser, const Vec3d& qem_point,
+    EdgeHandle eh, EdgeCollapser& edge_collapser, const Vec3d& queued_point,
     size_t remaining_vertices, size_t target_vertices_num,
     Phase2PlacementDecision& decision, double& newton_seconds);
+  bool solve_phase2_qem_placement(
+    const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const;
+  bool solve_phase2_quadratic_surrogate(
+    const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const;
   bool compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3d& new_point, double& energy);
   bool enqueue_phase2_candidate(EdgeHandle eh, size_t state);
   void initialize_phase2_candidates();

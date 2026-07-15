@@ -77,6 +77,7 @@ struct ParamCollapseStage
   // "linear_only": QEM linear solve only during collapse.
   // "final_newton": QEM linear solve during collapse, then one fixed-topology Newton polish.
   // "newton_only": skip QEM linear solve and use Newton placement for every popped edge.
+  // "quadratic_surrogate": use the 4x4 quadratic surrogate solve as a separate experimental path.
   std::string phase2PlacementStrategy;
   // Newton solver mode: "damped" or "trust_region".
   std::string newtonSolverMode;

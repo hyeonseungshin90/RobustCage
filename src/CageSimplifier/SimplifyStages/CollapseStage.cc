@@ -362,6 +362,62 @@ struct DiffPositionFidelityTerm
   Vec3d bias;
   Vec3d target;
 };
+
+struct Phase2HomogeneousQuadric
+{
+  Eigen::Matrix4d Q = Eigen::Matrix4d::Zero();
+
+  void add_plane(double weight, const Vec3d& normal, double offset)
+  {
+    if (weight <= 0.0 || !std::isfinite(weight) || !finite_vec(normal) || !std::isfinite(offset))
+      return;
+    Eigen::Vector4d plane;
+    plane << to_eigen(normal), offset;
+    Q += weight * (plane * plane.transpose());
+  }
+
+  void add_metric_target(double weight, const Eigen::Matrix3d& metric, const Vec3d& target)
+  {
+    if (weight <= 0.0 || !std::isfinite(weight) || !finite_vec(target))
+      return;
+
+    const Eigen::Vector3d t = to_eigen(target);
+    const Eigen::Matrix3d weighted_metric = weight * metric;
+    Q.topLeftCorner<3, 3>() += weighted_metric;
+    Q.topRightCorner<3, 1>() -= weighted_metric * t;
+    Q.bottomLeftCorner<1, 3>() = Q.topRightCorner<3, 1>().transpose();
+    Q(3, 3) += t.dot(weighted_metric * t);
+  }
+
+  void add_point_target(double weight, const Vec3d& target)
+  {
+    add_metric_target(weight, Eigen::Matrix3d::Identity(), target);
+  }
+
+  bool solve(const Vec3d& regularization_target, double regularization, Vec3d& x) const
+  {
+    Eigen::Matrix3d A = Q.topLeftCorner<3, 3>();
+    Eigen::Vector3d rhs = -Q.topRightCorner<3, 1>();
+    A = 0.5 * (A + A.transpose());
+
+    const double reg = std::max(regularization, 1e-12);
+    A += reg * Eigen::Matrix3d::Identity();
+    rhs += reg * to_eigen(regularization_target);
+
+    const Eigen::Vector3d solved = A.ldlt().solve(rhs);
+    if (!std::isfinite(solved.x()) || !std::isfinite(solved.y()) || !std::isfinite(solved.z()))
+      return false;
+
+    x = from_eigen(solved);
+    return finite_vec(x);
+  }
+
+  double trace3() const
+  {
+    return Q(0, 0) + Q(1, 1) + Q(2, 2);
+  }
+};
+
 }
 
 CollapseStage::CollapseStage(
@@ -460,6 +516,13 @@ bool CollapseStage::is_phase2_newton_only_strategy() const
   return param->phase2PlacementStrategy == "newton_only" || param->phase2PlacementStrategy == "newton-only";
 }
 
+bool CollapseStage::is_phase2_quadratic_surrogate_strategy() const
+{
+  return param->phase2PlacementStrategy == "quadratic_surrogate" ||
+    param->phase2PlacementStrategy == "quadratic-surrogate" ||
+    param->phase2PlacementStrategy == "surrogate";
+}
+
 bool CollapseStage::is_trust_region_solver_mode() const
 {
   return param->newtonSolverMode == "trust_region" || param->newtonSolverMode == "trust-region";
@@ -507,7 +570,9 @@ CollapseStage::Phase2PlacementContext CollapseStage::make_phase2_placement_conte
     const VertexHandle to_v = rm->to_vertex_handle(h);
     const Vec3d& from = rm->point(from_v);
     const Vec3d& to = rm->point(to_v);
-    ctx.fan_edges.push_back({ from, to });
+    const VertexHandle apex_v = rm->opposite_vh(h);
+    const Vec3d apex = apex_v.is_valid() ? rm->point(apex_v) : ctx.midpoint;
+    ctx.fan_edges.push_back({ from, to, apex });
     neighbor_vertices.insert(from_v);
     neighbor_vertices.insert(to_v);
     local_scale += (from - to).length();
@@ -588,7 +653,7 @@ CollapseStage::Phase2PlacementContext CollapseStage::make_phase2_vertex_relocati
     const VertexHandle to_v = rm->to_vertex_handle(h);
     const Vec3d& from = rm->point(from_v);
     const Vec3d& to = rm->point(to_v);
-    ctx.fan_edges.push_back({ from, to });
+    ctx.fan_edges.push_back({ from, to, ctx.midpoint });
     ctx.ignored_faces.insert(fh.idx());
 
     Vec3d pts[3];
@@ -1308,7 +1373,8 @@ bool CollapseStage::should_refine_phase2_placement_with_newton(
 {
   if (is_phase2_newton_only_strategy())
     return finite_vec(x);
-  if (is_phase2_linear_only_strategy() || is_phase2_final_newton_strategy())
+  if (is_phase2_linear_only_strategy() || is_phase2_final_newton_strategy() ||
+    is_phase2_quadratic_surrogate_strategy())
     return false;
 
   const bool quality_bad =
@@ -1336,9 +1402,9 @@ bool CollapseStage::should_refine_phase2_placement_with_newton(
 
 // Select the new vertex position for one edge collapse before the topology
 // change is committed. The policy is controlled by phase2PlacementStrategy:
-// adaptive, linear_only, final_newton, or newton_only.
+// adaptive, linear_only, final_newton, newton_only, or quadratic_surrogate.
 bool CollapseStage::choose_phase2_collapse_placement(
-  EdgeHandle eh, EdgeCollapser& edge_collapser, const Vec3d& qem_point,
+  EdgeHandle eh, EdgeCollapser& edge_collapser, const Vec3d& queued_point,
   size_t remaining_vertices, size_t target_vertices_num,
   Phase2PlacementDecision& decision, double& newton_seconds)
 {
@@ -1349,8 +1415,9 @@ bool CollapseStage::choose_phase2_collapse_placement(
 
   std::vector<Vec3d> candidates;
   std::vector<bool> is_fallback;
+  std::vector<int> candidate_kind; // 0: queue/QEM, 1: quadratic surrogate, 2: heuristic fallback
   const double duplicate_tol = std::max(ctx.local_scale * 1e-8, original_diagonal_length * 1e-12);
-  const auto append_candidate = [&](const Vec3d& p, bool fallback)
+  const auto append_candidate = [&](const Vec3d& p, bool fallback, int kind)
   {
     if (!finite_vec(p))
       return;
@@ -1361,20 +1428,50 @@ bool CollapseStage::choose_phase2_collapse_placement(
     }
     candidates.push_back(p);
     is_fallback.push_back(fallback);
+    candidate_kind.push_back(kind);
   };
 
-  append_candidate(qem_point, false);
-  append_candidate(ctx.start_point, true);
-  append_candidate(ctx.midpoint, true);
+  const bool use_quadratic_surrogate = is_phase2_quadratic_surrogate_strategy();
+  append_candidate(queued_point, false, use_quadratic_surrogate ? 1 : 0);
+
+  double qem_position_fidelity = DBL_MAX;
+
+  if (use_quadratic_surrogate)
+  {
+    Vec3d surrogate_point;
+    double surrogate_energy = DBL_MAX;
+    if (solve_phase2_quadratic_surrogate(ctx, surrogate_point, surrogate_energy))
+      append_candidate(surrogate_point, false, 1);
+
+    Vec3d qem_point;
+    double qem_energy = DBL_MAX;
+    if (solve_phase2_qem_placement(ctx, qem_point, qem_energy))
+    {
+      append_candidate(qem_point, false, 0);
+      qem_position_fidelity = evaluate_position_fidelity_energy(ctx, qem_point);
+    }
+  }
+
+  append_candidate(ctx.start_point, true, 2);
+  append_candidate(ctx.midpoint, true, 2);
   const HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
-  append_candidate(rm->point(rm->to_vertex_handle(heh)), true);
-  append_candidate(rm->point(rm->from_vertex_handle(heh)), true);
+  append_candidate(rm->point(rm->to_vertex_handle(heh)), true, 2);
+  append_candidate(rm->point(rm->from_vertex_handle(heh)), true, 2);
 
   bool found_valid_candidate = false;
   for (size_t i = 0; i < candidates.size(); i++)
   {
     if (!phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, candidates[i]))
       continue;
+
+    if (candidate_kind[i] == 1 && std::isfinite(qem_position_fidelity))
+    {
+      const double candidate_position_fidelity = evaluate_position_fidelity_energy(ctx, candidates[i]);
+      const double allowed_position_fidelity =
+        1.25 * qem_position_fidelity + 1e-4;
+      if (candidate_position_fidelity > allowed_position_fidelity)
+        continue;
+    }
 
     const double candidate_energy = evaluate_phase2_proxy_energy(ctx, candidates[i]);
     if (!std::isfinite(candidate_energy))
@@ -1581,9 +1678,139 @@ bool CollapseStage::refine_collapse_placement_with_newton(
   return std::isfinite(energy);
 }
 
-// Compute the fast placement used to rank this edge in the Phase 2 queue.
-// Most modes use the QEM 3x3 linear solve. newton_only deliberately skips that
-// solve and queues a valid starting point for the later nonlinear placement.
+bool CollapseStage::solve_phase2_qem_placement(
+  const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const
+{
+  if (ctx.qem_planes.empty())
+    return false;
+
+  double curvature_multiplier = 1.0;
+  if (param->curvatureMode == "weighted_qem" || param->curvatureMode == "weighted-qem")
+  {
+    const double scaled_curvature = ctx.edge_curvature * ctx.local_scale;
+    curvature_multiplier += param->curvatureWeight * sqr(scaled_curvature);
+  }
+
+  Phase2HomogeneousQuadric quadric;
+  const double inv_scale_sqr = 1.0 / std::max(sqr(ctx.local_scale), 1e-24);
+  for (const QEMPlane& plane : ctx.qem_planes)
+  {
+    const double w = param->qemWeight * curvature_multiplier * plane.weight * inv_scale_sqr;
+    quadric.add_plane(w, plane.normal, plane.offset);
+  }
+
+  const double regularization =
+    std::max(1e-12, 1e-8 * std::max(1.0, std::abs(quadric.trace3())));
+  if (!quadric.solve(ctx.midpoint, regularization, new_point))
+  {
+    if (finite_vec(ctx.start_point))
+      new_point = ctx.start_point;
+    else
+      new_point = ctx.midpoint;
+  }
+
+  const double max_offset = std::max(2.0 * ctx.local_scale, original_diagonal_length * 1e-8);
+  Vec3d offset = new_point - ctx.midpoint;
+  if (offset.length() > max_offset)
+    new_point = ctx.midpoint + offset / offset.length() * max_offset;
+
+  energy = evaluate_phase2_proxy_energy(ctx, new_point);
+  return finite_vec(new_point) && std::isfinite(energy);
+}
+
+bool CollapseStage::solve_phase2_quadratic_surrogate(
+  const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const
+{
+  if (ctx.qem_planes.empty())
+    return false;
+
+  Phase2HomogeneousQuadric quadric;
+  const double inv_scale_sqr = 1.0 / std::max(sqr(ctx.local_scale), 1e-24);
+
+  double curvature_multiplier = 1.0;
+  if (param->curvatureMode == "weighted_qem" || param->curvatureMode == "weighted-qem")
+  {
+    const double scaled_curvature = ctx.edge_curvature * ctx.local_scale;
+    curvature_multiplier += param->curvatureWeight * sqr(scaled_curvature);
+  }
+
+  for (const QEMPlane& plane : ctx.qem_planes)
+  {
+    const double w = param->qemWeight * curvature_multiplier * plane.weight * inv_scale_sqr;
+    quadric.add_plane(w, plane.normal, plane.offset);
+  }
+
+  if (param->triangleQualityWeight > 0.0 && !ctx.fan_edges.empty())
+  {
+    const double quality_surrogate_scale = 0.05;
+    const double fan_count = static_cast<double>(ctx.fan_edges.size());
+    const double w = quality_surrogate_scale * param->triangleQualityWeight * inv_scale_sqr / fan_count;
+    const Eigen::Matrix3d identity = Eigen::Matrix3d::Identity();
+    for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
+    {
+      const Vec3d base = fan_edge.to - fan_edge.from;
+      const double base_length = base.length();
+      if (base_length <= ctx.local_scale * 1e-8 || !std::isfinite(base_length))
+        continue;
+
+      const Vec3d normal = triangle_normal(fan_edge.from, fan_edge.to, fan_edge.apex);
+      const Vec3d edge_dir = base / base_length;
+      Vec3d tangent_dir = normal.cross(edge_dir);
+      tangent_dir = normalized_or_fallback(tangent_dir, normalized_or_fallback(ctx.midpoint - (fan_edge.from + fan_edge.to) * 0.5, Vec3d(1.0, 0.0, 0.0)));
+      const Vec3d mid = (fan_edge.from + fan_edge.to) * 0.5;
+      const double height = 0.5 * std::sqrt(3.0) * base_length;
+      const Vec3d g_pos = mid + tangent_dir * height;
+      const Vec3d g_neg = mid - tangent_dir * height;
+      const Vec3d target = (g_pos - fan_edge.apex).squaredNorm() <= (g_neg - fan_edge.apex).squaredNorm() ? g_pos : g_neg;
+
+      const Eigen::Vector3d n = to_eigen(normal);
+      Eigen::Matrix3d projector = identity - n * n.transpose();
+      quadric.add_metric_target(w, projector, target);
+    }
+  }
+
+  if (param->uniformityWeight > 0.0 && param->uniformityMode != "none" && !ctx.neighbor_points.empty())
+  {
+    const double uniformity_surrogate_scale = 0.10;
+    const double neighbor_count = static_cast<double>(ctx.neighbor_points.size());
+    for (const Vec3d& neighbor : ctx.neighbor_points)
+    {
+      double target_length = source_uniformity_target_length(ctx, (ctx.midpoint + neighbor) * 0.5);
+      target_length = std::max(target_length, ctx.local_scale * 1e-3);
+      Vec3d direction = normalized_or_fallback(ctx.midpoint - neighbor, ctx.start_point - neighbor);
+      direction = normalized_or_fallback(direction, Vec3d(1.0, 0.0, 0.0));
+      const Vec3d target = neighbor + direction * target_length;
+      const double w = uniformity_surrogate_scale * param->uniformityWeight /
+        neighbor_count / std::max(sqr(target_length), 1e-24);
+      quadric.add_point_target(w, target);
+    }
+  }
+
+  const double regularization =
+    std::max(1e-12, 1e-8 * std::max(1.0, std::abs(quadric.trace3())));
+  Vec3d x;
+  if (!quadric.solve(ctx.midpoint, regularization, x))
+  {
+    if (finite_vec(ctx.start_point))
+      x = ctx.start_point;
+    else
+      x = ctx.midpoint;
+  }
+
+  const double max_offset = std::max(2.0 * ctx.local_scale, original_diagonal_length * 1e-8);
+  Vec3d offset = x - ctx.midpoint;
+  if (offset.length() > max_offset)
+    x = ctx.midpoint + offset / offset.length() * max_offset;
+
+  new_point = x;
+  energy = evaluate_phase2_proxy_energy(ctx, new_point);
+  return std::isfinite(energy);
+}
+
+// Compute the cheap placement used only to rank this edge in the Phase 2 queue.
+// Keep queue ordering on the stable QEM placement for every strategy. The
+// quadratic_surrogate strategy only adds its richer 4x4 solve as an actual
+// placement candidate after an edge has been popped.
 bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3d& new_point, double& energy)
 {
   auto edge_collapser = new_edge_collapser();
@@ -1629,44 +1856,7 @@ bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3
     return found_valid_candidate;
   }
 
-  Eigen::Matrix3d A = Eigen::Matrix3d::Zero();
-  Eigen::Vector3d b = Eigen::Vector3d::Zero();
-
-  double curvature_multiplier = 1.0;
-  if (param->curvatureMode == "weighted_qem" || param->curvatureMode == "weighted-qem")
-  {
-    const double scaled_curvature = ctx.edge_curvature * ctx.local_scale;
-    curvature_multiplier += param->curvatureWeight * sqr(scaled_curvature);
-  }
-
-  const double inv_scale_sqr = 1.0 / std::max(sqr(ctx.local_scale), 1e-24);
-  for (const QEMPlane& plane : ctx.qem_planes)
-  {
-    const Eigen::Vector3d n = to_eigen(plane.normal);
-    const double w = param->qemWeight * curvature_multiplier * plane.weight * inv_scale_sqr;
-    A += w * (n * n.transpose());
-    b += w * plane.offset * n;
-  }
-
-  const double regularization =
-    std::max(1e-12, 1e-8 * std::max(1.0, std::abs(A.trace())));
-  const Eigen::Matrix3d A_reg = A + regularization * Eigen::Matrix3d::Identity();
-  const Eigen::Vector3d rhs = regularization * to_eigen(ctx.midpoint) - b;
-  Eigen::Vector3d x = A_reg.ldlt().solve(rhs);
-
-  if (!std::isfinite(x.x()) || !std::isfinite(x.y()) || !std::isfinite(x.z()))
-    x = to_eigen(ctx.start_point);
-  if (!std::isfinite(x.x()) || !std::isfinite(x.y()) || !std::isfinite(x.z()))
-    x = to_eigen(ctx.midpoint);
-
-  const double max_offset = std::max(2.0 * ctx.local_scale, original_diagonal_length * 1e-8);
-  Eigen::Vector3d offset = x - to_eigen(ctx.midpoint);
-  if (offset.norm() > max_offset)
-    x = to_eigen(ctx.midpoint) + offset.normalized() * max_offset;
-
-  new_point = from_eigen(x);
-  energy = evaluate_phase2_proxy_energy(ctx, new_point);
-  return std::isfinite(energy);
+  return solve_phase2_qem_placement(ctx, new_point, energy);
 }
 
 bool CollapseStage::enqueue_phase2_candidate(EdgeHandle eh, size_t state)
