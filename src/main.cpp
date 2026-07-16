@@ -424,7 +424,7 @@ void enable_qem_phase2_defaults(Cage::ParamCageGenerator& param, bool skip_origi
     collapse.curvatureMode = "normal_matching";
     collapse.uniformityMode = "source";
     collapse.curvatureWeight = 1.0;
-    collapse.triangleQualityWeight = 2.0;
+    collapse.triangleQualityWeight = 1.0;
     collapse.uniformityWeight = 1.0;
   }
 }
@@ -710,7 +710,7 @@ int main(int argc, char* argv[])
     printf("input \"collapse_triangle_quality\" to use triangle quality priority\n");
     printf("input \"collapse_triangle_quality_hard\" to require post-collapse min triangle quality not to decrease\n");
     printf("input \"phase2_newton\" to replace Phase 2 with optimization collapses and default curvature/uniformity energies\n");
-    printf("input \"phase2_qem\" to run QEM + quality/uniformity/curvature Phase 2 collapses with hard intersection constraints\n");
+    printf("input \"phase2_qem\" to run QEM + quality/uniformity/curvature/dihedral Phase 2 collapses with QEM-first backtracking and hard intersection constraints\n");
     printf("input \"phase2_qem_no_collision\" to run pure Garland-Heckbert QEM without collision rejection\n");
     printf("input \"phase2_quadratic_surrogate\" to use the separate 4x4 quadratic surrogate Phase 2 strategy\n");
     printf("input \"collapse_optimization\" to use the optimization Phase 2 replacement with default curvature/uniformity energies\n");

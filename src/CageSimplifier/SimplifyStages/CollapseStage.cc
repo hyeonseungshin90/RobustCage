@@ -637,9 +637,10 @@ CollapseStage::Phase2PlacementContext CollapseStage::make_phase2_placement_conte
   ctx.endpoint1 = rm->point(to_v);
   ctx.midpoint = rm->calc_edge_midpoint(heh);
   Vec3d smooth_normal;
-  edge_collapser.predict_tangential_weighted_smooth_target(ctx.midpoint, smooth_normal, ctx.start_point);
-  if (!finite_vec(ctx.start_point))
-    ctx.start_point = ctx.midpoint;
+  edge_collapser.predict_tangential_weighted_smooth_target(
+    ctx.midpoint, smooth_normal, ctx.tangential_smoothing_point);
+  if (!finite_vec(ctx.tangential_smoothing_point))
+    ctx.tangential_smoothing_point = ctx.midpoint;
 
   if (is_phase2_qem_no_collision_strategy() && phase2_qem_quadric_prop_added)
   {
@@ -713,9 +714,9 @@ CollapseStage::Phase2PlacementContext CollapseStage::make_phase2_vertex_relocati
   ctx.halfedges = vertex_relocater.get_halfedges();
   ctx.global_target_length = avg_edge_length > 0.0 ? avg_edge_length : original_diagonal_length * 0.01;
   ctx.midpoint = rm->point(vh);
-  ctx.start_point = vertex_relocater.find_weighted_tangential_smooth_target();
-  if (!finite_vec(ctx.start_point))
-    ctx.start_point = ctx.midpoint;
+  ctx.tangential_smoothing_point = vertex_relocater.find_weighted_tangential_smooth_target();
+  if (!finite_vec(ctx.tangential_smoothing_point))
+    ctx.tangential_smoothing_point = ctx.midpoint;
 
   double local_scale = 0.0;
   size_t local_scale_count = 0;
@@ -997,6 +998,52 @@ double CollapseStage::evaluate_curvature_normal_energy(const Phase2PlacementCont
     energy += sqr(1.0 - alignment);
   }
   return energy;
+}
+
+double CollapseStage::evaluate_dihedral_preservation_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
+{
+  if (!finite_vec(x) || ctx.fan_edges.size() < 2)
+    return 0.0;
+
+  const double shared_tol = std::max(ctx.local_scale * 1e-8, original_diagonal_length * 1e-12);
+  const auto same_point = [&](const Vec3d& a, const Vec3d& b)
+  {
+    return (a - b).length() <= shared_tol;
+  };
+
+  double energy = 0.0;
+  size_t count = 0;
+  for (size_t i = 0; i < ctx.fan_edges.size(); i++)
+  {
+    const CollapseFanEdge& a = ctx.fan_edges[i];
+    for (size_t j = i + 1; j < ctx.fan_edges.size(); j++)
+    {
+      const CollapseFanEdge& b = ctx.fan_edges[j];
+      int shared_vertices = 0;
+      if (same_point(a.from, b.from))
+        shared_vertices++;
+      if (same_point(a.from, b.to))
+        shared_vertices++;
+      if (same_point(a.to, b.from))
+        shared_vertices++;
+      if (same_point(a.to, b.to))
+        shared_vertices++;
+      if (shared_vertices != 1)
+        continue;
+
+      const Vec3d normal_a = triangle_normal(a.from, a.to, x);
+      const Vec3d normal_b = triangle_normal(b.from, b.to, x);
+      const Vec3d reference_a = triangle_normal(a.from, a.to, a.apex);
+      const Vec3d reference_b = triangle_normal(b.from, b.to, b.apex);
+
+      const double current_dot = clamp_value(normal_a | normal_b, -1.0, 1.0);
+      const double reference_dot = clamp_value(reference_a | reference_b, -1.0, 1.0);
+      energy += sqr(current_dot - reference_dot);
+      count++;
+    }
+  }
+
+  return count == 0 ? 0.0 : energy / static_cast<double>(count);
 }
 
 double CollapseStage::evaluate_triangle_quality_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
@@ -1436,6 +1483,16 @@ double CollapseStage::evaluate_phase2_proxy_energy(const Phase2PlacementContext&
     energy += param->uniformityWeight * evaluate_uniformity_energy(ctx, x) / neighbor_count;
   }
 
+  const bool use_normal_matching_curvature =
+    param->curvatureMode == "normal_matching" || param->curvatureMode == "normal-matching";
+  if (param->curvatureWeight > 0.0 && use_normal_matching_curvature)
+  {
+    const double fan_count = static_cast<double>(std::max<size_t>(ctx.fan_edges.size(), 1));
+    energy += param->curvatureWeight * evaluate_curvature_normal_energy(ctx, x) / fan_count;
+    if (is_phase2_qem_strategy() && !is_phase2_qem_no_collision_strategy())
+      energy += param->curvatureWeight * evaluate_dihedral_preservation_energy(ctx, x);
+  }
+
   return std::isfinite(energy) ? energy : DBL_MAX;
 }
 
@@ -1445,12 +1502,15 @@ double CollapseStage::evaluate_phase2_refinement_residual(const Phase2PlacementC
     return DBL_MAX;
 
   double residual = 0.0;
-  if (param->curvatureWeight > 0.0 &&
-    (param->curvatureMode == "normal_matching" || param->curvatureMode == "normal-matching"))
+  const bool use_normal_matching_curvature =
+    param->curvatureMode == "normal_matching" || param->curvatureMode == "normal-matching";
+  if (param->curvatureWeight > 0.0 && use_normal_matching_curvature)
   {
     const double denom = std::max<size_t>(ctx.fan_edges.size(), 1);
     residual += param->curvatureWeight * evaluate_curvature_normal_energy(ctx, x) /
       static_cast<double>(denom);
+    if (is_phase2_qem_strategy() && !is_phase2_qem_no_collision_strategy())
+      residual += param->curvatureWeight * evaluate_dihedral_preservation_energy(ctx, x);
   }
 
   if (param->uniformityWeight > 0.0 && param->uniformityMode != "none")
@@ -1535,7 +1595,8 @@ bool CollapseStage::should_refine_phase2_placement_with_newton(
   if (param->phase2NewtonResidualThreshold > 0.0 && std::isfinite(nonlinear_residual) &&
     nonlinear_residual > param->phase2NewtonResidualThreshold)
   {
-    double reference_residual = evaluate_phase2_refinement_residual(ctx, ctx.start_point);
+    double reference_residual =
+      evaluate_phase2_refinement_residual(ctx, ctx.tangential_smoothing_point);
     if (!std::isfinite(reference_residual))
       reference_residual = 0.0;
     const double growth = std::max(1.0, param->phase2NewtonResidualGrowth);
@@ -1554,6 +1615,9 @@ bool CollapseStage::select_phase2_feasibility_fallback(
   EdgeHandle eh, const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
   Vec3d& new_point, double& energy) const
 {
+  if (is_phase2_qem_strategy() && !is_phase2_qem_no_collision_strategy())
+    return false;
+
   std::vector<Vec3d> candidates;
   const double duplicate_tol = std::max(ctx.local_scale * 1e-8, original_diagonal_length * 1e-12);
   const auto append_candidate = [&](const Vec3d& p)
@@ -1576,8 +1640,9 @@ bool CollapseStage::select_phase2_feasibility_fallback(
   }
   else
   {
-    append_candidate(ctx.start_point);
-    append_candidate(ctx.midpoint);
+    append_candidate(ctx.tangential_smoothing_point);
+    if (!is_phase2_qem_strategy())
+      append_candidate(ctx.midpoint);
 
     if (eh.is_valid())
     {
@@ -1610,6 +1675,49 @@ bool CollapseStage::select_phase2_feasibility_fallback(
   }
 
   return found_valid_candidate;
+}
+
+bool CollapseStage::select_phase2_qem_line_search_candidate(
+  const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
+  const Vec3d& qem_point, Vec3d& selected_point, double& selected_energy) const
+{
+  if (!finite_vec(qem_point))
+    return false;
+
+  const auto accept_candidate = [&](const Vec3d& candidate)
+  {
+    if (!phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, candidate))
+      return false;
+
+    const double candidate_energy = evaluate_phase2_proxy_energy(ctx, candidate);
+    if (!std::isfinite(candidate_energy))
+      return false;
+
+    selected_point = candidate;
+    selected_energy = candidate_energy;
+    return true;
+  };
+
+  if (accept_candidate(qem_point))
+    return true;
+
+  const auto backtrack_from_base = [&](const Vec3d& base)
+  {
+    if (!finite_vec(base))
+      return false;
+
+    static const double alphas[] = { 0.75, 0.5, 0.25, 0.125, 0.0625, 0.0 };
+    for (double alpha : alphas)
+    {
+      if (accept_candidate(base + alpha * (qem_point - base)))
+        return true;
+    }
+    return false;
+  };
+
+  if (backtrack_from_base(ctx.tangential_smoothing_point))
+    return true;
+  return false;
 }
 
 // Select the new vertex position for one edge collapse before the topology
@@ -1649,6 +1757,27 @@ bool CollapseStage::choose_phase2_collapse_placement(
 
   double qem_position_fidelity = DBL_MAX;
 
+  if (use_qem)
+  {
+    Vec3d qem_point;
+    double qem_energy = DBL_MAX;
+    if (solve_phase2_qem_placement(ctx, qem_point, qem_energy))
+    {
+      if (is_phase2_qem_no_collision_strategy())
+      {
+        append_candidate(qem_point, false, 0);
+      }
+      else
+      {
+        Vec3d line_search_point;
+        double line_search_energy = DBL_MAX;
+        if (select_phase2_qem_line_search_candidate(
+          ctx, edge_collapser, qem_point, line_search_point, line_search_energy))
+          append_candidate(line_search_point, false, 0);
+      }
+    }
+  }
+
   if (!use_qem && use_quadratic_surrogate)
   {
     Vec3d surrogate_point;
@@ -1667,7 +1796,7 @@ bool CollapseStage::choose_phase2_collapse_placement(
 
   if (!use_qem)
   {
-    append_candidate(ctx.start_point, true, 2);
+    append_candidate(ctx.tangential_smoothing_point, true, 2);
     append_candidate(ctx.midpoint, true, 2);
     const HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
     append_candidate(rm->point(rm->to_vertex_handle(heh)), true, 2);
@@ -1702,7 +1831,7 @@ bool CollapseStage::choose_phase2_collapse_placement(
     }
   }
 
-  if (!found_valid_candidate && use_qem)
+  if (!found_valid_candidate && is_phase2_qem_no_collision_strategy())
   {
     Vec3d fallback_point;
     double fallback_energy = DBL_MAX;
@@ -1769,14 +1898,15 @@ bool CollapseStage::refine_collapse_placement_with_newton(
   const Vec3d* initial_point)
 {
   const Phase2PlacementContext ctx = make_phase2_placement_context(eh, edge_collapser);
-  Vec3d x = initial_point && finite_vec(*initial_point) ? *initial_point : ctx.start_point;
+  Vec3d x = initial_point && finite_vec(*initial_point) ?
+    *initial_point : ctx.tangential_smoothing_point;
   if (!finite_vec(x))
     x = ctx.midpoint;
 
   if (!is_exact_reject_robustness_mode() && !collapse_target_valid(edge_collapser, x))
   {
-    if (collapse_target_valid(edge_collapser, ctx.start_point))
-      x = ctx.start_point;
+    if (collapse_target_valid(edge_collapser, ctx.tangential_smoothing_point))
+      x = ctx.tangential_smoothing_point;
     else if (collapse_target_valid(edge_collapser, ctx.midpoint))
       x = ctx.midpoint;
   }
@@ -1979,7 +2109,8 @@ bool CollapseStage::solve_phase2_qem_placement(
       double target_length = source_uniformity_target_length(ctx, (ctx.midpoint + neighbor) * 0.5);
       target_length = std::max(target_length, ctx.local_scale * 1e-3);
 
-      Vec3d direction = normalized_or_fallback(ctx.midpoint - neighbor, ctx.start_point - neighbor);
+      Vec3d direction =
+        normalized_or_fallback(ctx.midpoint - neighbor, ctx.tangential_smoothing_point - neighbor);
       direction = normalized_or_fallback(direction, Vec3d(1.0, 0.0, 0.0));
 
       const double w = param->uniformityWeight /
@@ -2052,24 +2183,30 @@ bool CollapseStage::solve_phase2_qem_placement(
     }
     else
     {
-      const Vec3d candidates[3] = {
-        pure_qem ? ctx.endpoint0 : ctx.start_point,
-        pure_qem ? ctx.endpoint1 : ctx.midpoint,
-        ctx.midpoint
-      };
-      double best_energy = DBL_MAX;
-      for (const Vec3d& candidate : candidates)
+      if (!pure_qem && is_phase2_qem_strategy())
       {
-        const double candidate_energy = pure_qem ? quadric.evaluate(candidate) :
-          evaluate_phase2_proxy_energy(ctx, candidate);
-        if (finite_vec(candidate) && std::isfinite(candidate_energy) && candidate_energy < best_energy)
-        {
-          best_energy = candidate_energy;
-          new_point = candidate;
-        }
+        return false;
       }
-      if (!finite_vec(new_point))
-        new_point = ctx.midpoint;
+      else if (!pure_qem)
+      {
+        new_point = ctx.tangential_smoothing_point;
+      }
+      else
+      {
+        const Vec3d candidates[3] = { ctx.endpoint0, ctx.endpoint1, ctx.midpoint };
+        double best_energy = DBL_MAX;
+        for (const Vec3d& candidate : candidates)
+        {
+          const double candidate_energy = quadric.evaluate(candidate);
+          if (finite_vec(candidate) && std::isfinite(candidate_energy) && candidate_energy < best_energy)
+          {
+            best_energy = candidate_energy;
+            new_point = candidate;
+          }
+        }
+        if (!finite_vec(new_point))
+          new_point = ctx.midpoint;
+      }
     }
   }
 
@@ -2145,7 +2282,8 @@ bool CollapseStage::solve_phase2_quadratic_surrogate(
     {
       double target_length = source_uniformity_target_length(ctx, (ctx.midpoint + neighbor) * 0.5);
       target_length = std::max(target_length, ctx.local_scale * 1e-3);
-      Vec3d direction = normalized_or_fallback(ctx.midpoint - neighbor, ctx.start_point - neighbor);
+      Vec3d direction =
+        normalized_or_fallback(ctx.midpoint - neighbor, ctx.tangential_smoothing_point - neighbor);
       direction = normalized_or_fallback(direction, Vec3d(1.0, 0.0, 0.0));
       const Vec3d target = neighbor + direction * target_length;
       const double w = uniformity_surrogate_scale * param->uniformityWeight /
@@ -2159,8 +2297,8 @@ bool CollapseStage::solve_phase2_quadratic_surrogate(
   Vec3d x;
   if (!quadric.solve(ctx.midpoint, regularization, x))
   {
-    if (finite_vec(ctx.start_point))
-      x = ctx.start_point;
+    if (finite_vec(ctx.tangential_smoothing_point))
+      x = ctx.tangential_smoothing_point;
     else
       x = ctx.midpoint;
   }
@@ -2202,14 +2340,32 @@ bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3
 
   if (!solve_phase2_qem_placement(ctx, new_point, energy))
   {
-    if (is_phase2_qem_strategy())
+    if (is_phase2_qem_no_collision_strategy())
       return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy);
+    return false;
+  }
+
+  if (is_phase2_qem_strategy() && !is_phase2_qem_no_collision_strategy())
+  {
+    Vec3d line_search_point;
+    double line_search_energy = DBL_MAX;
+    if (select_phase2_qem_line_search_candidate(
+      ctx, edge_collapser, new_point, line_search_point, line_search_energy))
+    {
+      new_point = line_search_point;
+      energy = line_search_energy;
+      return true;
+    }
     return false;
   }
 
   if (is_phase2_qem_strategy() &&
     !phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, new_point))
-    return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy);
+  {
+    if (is_phase2_qem_no_collision_strategy())
+      return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy);
+    return false;
+  }
 
   return true;
 }
@@ -2292,7 +2448,8 @@ bool CollapseStage::refine_vertex_relocation_with_newton(
   if (ctx.fan_edges.empty())
     return false;
 
-  Vec3d x = finite_vec(ctx.start_point) ? ctx.start_point : ctx.midpoint;
+  Vec3d x = finite_vec(ctx.tangential_smoothing_point) ?
+    ctx.tangential_smoothing_point : ctx.midpoint;
   if (!finite_vec(x))
     return false;
 

@@ -54,7 +54,7 @@ config.json
 | `phase2_newton` | phase2 | `phase2Mode = "newton"`, `collapsePlacementMethod = "optimization"`, `phase2PlacementStrategy = "adaptive"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"`, `positionFidelityWeight = 1.0`, barrier weights `0.0` by default because exact checks are hard constraints |
 | `phase2_adaptive` | phase2 | QEM linear solve first, Newton only when local quality/residual/final-collapse criteria request it |
 | `phase2_linear_only` | phase2 | `phase2Mode = "linear_only"`; QEM linear solve placement during Phase 2 collapse with no Newton refinement |
-| `phase2_qem` | phase2 | `phase2Mode = "qem"`; solve QEM plus triangle-quality, source-uniformity, and curvature quadratic surrogates in one linear system, and reject candidates that violate hard intersection/validity constraints |
+| `phase2_qem` | phase2 | `phase2Mode = "qem"`; solve QEM plus triangle-quality, source-uniformity, curvature/normal-matching surrogates, and dihedral-preservation scoring; accept valid QEM points directly, otherwise backtrack from tangential smoothing; skip the collapse candidate if no backtracking point satisfies hard intersection/validity checks |
 | `phase2_qem_no_collision` | phase2 | `phase2Mode = "qem_no_collision"`; pure Garland-Heckbert QEM edge-collapse cost/placement only, with non-QEM energies and collision rejection disabled |
 | `phase2_final_newton` | phase2 | QEM linear solve placement during collapse, then one fixed-topology Newton relocation pass |
 | `phase2_newton_only` | phase2 | Skip QEM linear solve; use Newton placement for every popped collapse candidate |

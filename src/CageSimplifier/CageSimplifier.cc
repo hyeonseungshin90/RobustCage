@@ -63,12 +63,9 @@ void enforce_qem_phase2(ParamCollapseStage& collapse, bool skip_original_collisi
     collapse.curvatureMode = "normal_matching";
   if (collapse.uniformityMode.empty() || collapse.uniformityMode == "none")
     collapse.uniformityMode = "source";
-  if (collapse.triangleQualityWeight <= 0.0)
-    collapse.triangleQualityWeight = 2.0;
-  if (collapse.curvatureWeight <= 0.0)
-    collapse.curvatureWeight = 1.0;
-  if (collapse.uniformityWeight <= 0.0)
-    collapse.uniformityWeight = 1.0;
+  collapse.curvatureWeight = 1.0;
+  collapse.triangleQualityWeight = 1.0;
+  collapse.uniformityWeight = 1.0;
 }
 }
 

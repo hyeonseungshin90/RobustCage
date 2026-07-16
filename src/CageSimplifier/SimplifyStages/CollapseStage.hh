@@ -141,7 +141,7 @@ private:
     bool use_qem_matrix = false;
     Vec3d endpoint0;
     Vec3d endpoint1;
-    Vec3d start_point;
+    Vec3d tangential_smoothing_point;
     Vec3d midpoint;
     double local_scale = 1.0;
     double edge_curvature = 0.0;
@@ -222,6 +222,7 @@ private:
   double evaluate_self_barrier_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_position_fidelity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_curvature_normal_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
+  double evaluate_dihedral_preservation_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_triangle_quality_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_uniformity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_phase2_proxy_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
@@ -246,6 +247,9 @@ private:
     Phase2PlacementDecision& decision, double& newton_seconds);
   bool solve_phase2_qem_placement(
     const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const;
+  bool select_phase2_qem_line_search_candidate(
+    const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
+    const Vec3d& qem_point, Vec3d& selected_point, double& selected_energy) const;
   bool solve_phase2_quadratic_surrogate(
     const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const;
   void initialize_phase2_qem_quadrics();
