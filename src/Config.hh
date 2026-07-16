@@ -75,7 +75,8 @@ struct ParamCollapseStage
   // Phase 2 placement strategy:
   // "adaptive": QEM linear solve first, Newton only for selected hard cases.
   // "linear_only": QEM linear solve only during collapse.
-  // "qem_only": use only the QEM placement for each collapse; no fallback candidates or Newton.
+  // "qem": use QEM plus quality/uniformity/curvature quadratic surrogates; no Newton.
+  // "qem_no_collision": pure Garland-Heckbert QEM only; non-QEM energies and collision rejection are disabled.
   // "final_newton": QEM linear solve during collapse, then one fixed-topology Newton polish.
   // "newton_only": skip QEM linear solve and use Newton placement for every popped edge.
   // "quadratic_surrogate": use the 4x4 quadratic surrogate solve as a separate experimental path.
@@ -329,7 +330,10 @@ struct ParamCageSimplifier
   // target
   size_t targetVerticesNum;
   // Phase 2 simplification mode: "fast" keeps the original FastSimplifier,
-  // "newton" replaces Phase 2 with optimization-driven edge collapses.
+  // "newton" uses adaptive QEM/Newton energy collapses, "linear_only"
+  // uses the linear Phase 2 solve without Newton refinement, and "qem"
+  // uses QEM plus quality/uniformity/curvature quadratic surrogates with hard validity rejection.
+  // "qem_no_collision" uses pure Garland-Heckbert QEM cost/placement only.
   std::string phase2Mode;
   // iterations
   size_t maxIter;

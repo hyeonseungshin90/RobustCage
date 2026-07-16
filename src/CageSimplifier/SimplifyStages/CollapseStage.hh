@@ -2,6 +2,7 @@
 
 #include <cfloat>
 #include <queue>
+#include "Dense"
 
 #include "Config.hh"
 #include "CageSimplifier/Topo/TopoOperations.h"
@@ -35,12 +36,13 @@ public:
     DFaceTree* original_tree, LightDFaceTree* remeshing_tree,
     FaceGrid* original_grid,
     double _original_diagonal_length);
+  ~CollapseStage();
 
   void do_collapse(size_t edge_num_to_collapse, size_t& total_collapsed_edge_num);
   // Replaces legacy Phase 2 by repeatedly collapsing edges until the target
   // vertex count is reached. Each collapse chooses its new vertex position
   // before the topology change is committed.
-  void do_phase2_optimization_simplification(size_t target_vertices_num);
+  void do_phase2_energy_simplification(size_t target_vertices_num);
   void update(size_t _candidate_points_size, bool _allow_negtive, double _max_distance_error);
 private:
   double avg_edge_length;
@@ -89,6 +91,8 @@ private:
   };
   typedef std::priority_queue<Phase2EdgeReward> Phase2EdgeRewardQueue;
   Phase2EdgeRewardQueue phase2_edges_to_collapse;
+  OpenMesh::VPropHandleT<Eigen::Matrix4d> phase2_qem_quadric_prop;
+  bool phase2_qem_quadric_prop_added = false;
 
   enum class EdgeSide
   {
@@ -133,6 +137,10 @@ private:
     std::vector<Vec3d> neighbor_points;
     std::vector<QEMPlane> qem_planes;
     std::set<int> ignored_faces;
+    Eigen::Matrix4d qem_matrix = Eigen::Matrix4d::Zero();
+    bool use_qem_matrix = false;
+    Vec3d endpoint0;
+    Vec3d endpoint1;
     Vec3d start_point;
     Vec3d midpoint;
     double local_scale = 1.0;
@@ -172,7 +180,8 @@ private:
   bool is_optimization_collapse_placement_method() const;
   bool is_phase2_adaptive_strategy() const;
   bool is_phase2_linear_only_strategy() const;
-  bool is_phase2_qem_only_strategy() const;
+  bool is_phase2_qem_strategy() const;
+  bool is_phase2_qem_no_collision_strategy() const;
   bool is_phase2_final_newton_strategy() const;
   bool is_phase2_newton_only_strategy() const;
   bool is_phase2_quadratic_surrogate_strategy() const;
@@ -226,6 +235,7 @@ private:
   bool sampled_path_valid(EdgeCollapser& edge_collapser, const Vec3d& from, const Vec3d& to) const;
   bool phase2_placement_satisfies_hard_constraints(
     const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser, const Vec3d& x) const;
+  void set_phase2_edge_collapser_flags(EdgeCollapser& edge_collapser) const;
   bool should_refine_phase2_placement_with_newton(
     const Phase2PlacementContext& ctx, const Vec3d& x,
     size_t remaining_vertices, size_t target_vertices_num,
@@ -238,6 +248,12 @@ private:
     const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const;
   bool solve_phase2_quadratic_surrogate(
     const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const;
+  void initialize_phase2_qem_quadrics();
+  void update_phase2_qem_quadric_after_collapse(VertexHandle center_vh, const Eigen::Matrix4d& quadric);
+  Eigen::Matrix4d phase2_qem_quadric(VertexHandle vh) const;
+  bool select_phase2_feasibility_fallback(
+    EdgeHandle eh, const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
+    Vec3d& new_point, double& energy) const;
   bool compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3d& new_point, double& energy);
   bool enqueue_phase2_candidate(EdgeHandle eh, size_t state);
   void initialize_phase2_candidates();

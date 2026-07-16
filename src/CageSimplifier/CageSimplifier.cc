@@ -6,6 +6,72 @@ namespace Cage
 {
 namespace CageSimp
 {
+namespace
+{
+bool is_phase2_energy_mode(const std::string& mode)
+{
+  return mode == "newton" || mode == "linear_only" || mode == "qem" ||
+    mode == "qem_no_collision";
+}
+
+bool is_qem_phase2_mode(const std::string& mode)
+{
+  return mode == "qem" || mode == "qem_no_collision";
+}
+
+void normalize_phase2_mode_alias(std::string& mode)
+{
+  if (mode == "qem_only")
+    mode = "qem";
+  if (mode == "qem-no-collision" ||
+    mode == "qem_no_collision_reject" ||
+    mode == "qem-no-collision-reject" ||
+    mode == "qem_no_intersection" ||
+    mode == "qem-no-intersection" ||
+    mode == "qem_no_intersection_reject" ||
+    mode == "qem-no-intersection-reject")
+    mode = "qem_no_collision";
+}
+
+void enforce_qem_phase2(ParamCollapseStage& collapse, bool skip_original_collision_check)
+{
+  collapse.collapsePlacementMethod = "optimization";
+  collapse.phase2PlacementStrategy =
+    skip_original_collision_check ? "qem_no_collision" : "qem";
+  collapse.robustnessMode = "exact_reject";
+  if (collapse.qemWeight <= 0.0)
+    collapse.qemWeight = 1.0;
+  collapse.selfBarrierWeight = 0.0;
+  collapse.originalBarrierWeight = 0.0;
+  collapse.positionFidelityWeight = 0.0;
+
+  if (skip_original_collision_check)
+  {
+    collapse.qemWeight = 1.0;
+    collapse.curvatureMode = "none";
+    collapse.uniformityMode = "none";
+    collapse.curvatureWeight = 0.0;
+    collapse.triangleQualityWeight = 0.0;
+    collapse.uniformityWeight = 0.0;
+    collapse.phase2NewtonQualityThreshold = 0.0;
+    collapse.phase2NewtonResidualThreshold = 0.0;
+    collapse.phase2NewtonFinalRefineCollapses = 0;
+    return;
+  }
+
+  if (collapse.curvatureMode.empty() || collapse.curvatureMode == "none")
+    collapse.curvatureMode = "normal_matching";
+  if (collapse.uniformityMode.empty() || collapse.uniformityMode == "none")
+    collapse.uniformityMode = "source";
+  if (collapse.triangleQualityWeight <= 0.0)
+    collapse.triangleQualityWeight = 2.0;
+  if (collapse.curvatureWeight <= 0.0)
+    collapse.curvatureWeight = 1.0;
+  if (collapse.uniformityWeight <= 0.0)
+    collapse.uniformityWeight = 1.0;
+}
+}
+
 CageSimplifier::CageSimplifier(SMeshT* original, SMeshT* cage, ParamCageSimplifier* p)
   :om(original), rm(cage), param(p)
 {}
@@ -31,6 +97,13 @@ void CageSimplifier::simplify()
     rm->request_vertex_normals();
   rm->update_normals();
 
+  normalize_phase2_mode_alias(param->phase2Mode);
+
+  if (is_qem_phase2_mode(param->phase2Mode))
+    enforce_qem_phase2(
+      param->paramCollapse,
+      param->phase2Mode == "qem_no_collision");
+
   degeneration_remover = std::make_unique<DegenerationRemover>(
     om, rm, vt.get(), ot.get(), lrt.get(), og.get());
   fast_simplifier = std::make_unique<FastSimplifier>(
@@ -42,14 +115,15 @@ void CageSimplifier::simplify()
   Logger::user_logger->info("begin simplifying.");
 
   degeneration_remover->perform();
-  if (param->phase2Mode == "newton")
+  if (is_phase2_energy_mode(param->phase2Mode))
   {
-    run_phase2_optimization_simplification();
-    log_min_triangle_quality("after phase 2 optimization");
+    run_phase2_energy_simplification();
+    const std::string quality_label = "after phase 2 " + param->phase2Mode;
+    log_min_triangle_quality(quality_label.c_str());
     const std::string phase2_path =
-      param->fileOutPath + param->fileName + "_debug_phase2_newton.obj";
+      param->fileOutPath + param->fileName + "_debug_phase2_" + param->phase2Mode + ".obj";
     OpenMesh::IO::write_mesh(*rm, phase2_path, OpenMesh::IO::Options::Default, 15);
-    Logger::user_logger->info("wrote phase 2 optimization OBJ: {}", phase2_path);
+    Logger::user_logger->info("wrote phase 2 {} OBJ: {}", param->phase2Mode, phase2_path);
 
     degeneration_remover = nullptr;
     fast_simplifier = nullptr;
@@ -118,19 +192,25 @@ void CageSimplifier::calc_diagonal_length()
   fast_simplifier->original_diagonal_length = original_diagonal_length;
 }
 
-void CageSimplifier::run_phase2_optimization_simplification()
+void CageSimplifier::run_phase2_energy_simplification()
 {
   Logger::user_logger->info(
-    "running optimization-based Phase 2 replacement to final target {} vertices.",
-    param->targetVerticesNum);
+    "running Phase 2 energy mode [{}] to final target {} vertices.",
+    param->phase2Mode, param->targetVerticesNum);
 
   collapse_stage = std::make_unique<CollapseStage>(
     om, rm, &param->paramCollapse,
     ot.get(), lrt.get(), og.get(), original_diagonal_length);
-  collapse_stage->do_phase2_optimization_simplification(param->targetVerticesNum);
+  collapse_stage->do_phase2_energy_simplification(param->targetVerticesNum);
   collapse_stage = nullptr;
 
-  Logger::user_logger->info("running phase 2 optimization final flip polish.");
+  if (is_qem_phase2_mode(param->phase2Mode))
+  {
+    init_one_ring_faces(rm);
+    return;
+  }
+
+  Logger::user_logger->info("running phase 2 energy final flip polish.");
   rt = std::make_unique<FaceTree>(*rm);
   generate_out_links(om, rm, rt.get());
   rt = nullptr;

@@ -376,6 +376,11 @@ struct Phase2HomogeneousQuadric
     Q += weight * (plane * plane.transpose());
   }
 
+  void add_linear_residual(double weight, const Vec3d& a, double b)
+  {
+    add_plane(weight, a, -b);
+  }
+
   void add_metric_target(double weight, const Eigen::Matrix3d& metric, const Vec3d& target)
   {
     if (weight <= 0.0 || !std::isfinite(weight) || !finite_vec(target))
@@ -412,9 +417,54 @@ struct Phase2HomogeneousQuadric
     return finite_vec(x);
   }
 
+  bool solve_unregularized(Vec3d& x) const
+  {
+    Eigen::Matrix3d A = Q.topLeftCorner<3, 3>();
+    Eigen::Vector3d rhs = -Q.topRightCorner<3, 1>();
+    A = 0.5 * (A + A.transpose());
+
+    Eigen::FullPivLU<Eigen::Matrix3d> lu(A);
+    lu.setThreshold(1e-10 * std::max(1.0, A.cwiseAbs().maxCoeff()));
+    if (!lu.isInvertible())
+      return false;
+
+    const Eigen::Vector3d solved = lu.solve(rhs);
+    if (!std::isfinite(solved.x()) || !std::isfinite(solved.y()) || !std::isfinite(solved.z()))
+      return false;
+
+    x = from_eigen(solved);
+    return finite_vec(x);
+  }
+
   double trace3() const
   {
     return Q(0, 0) + Q(1, 1) + Q(2, 2);
+  }
+
+  double evaluate(const Vec3d& x) const
+  {
+    Eigen::Vector4d h;
+    h << to_eigen(x), 1.0;
+    return h.dot(Q * h);
+  }
+
+  bool solve_segment(const Vec3d& a, const Vec3d& b, Vec3d& x) const
+  {
+    if (!finite_vec(a) || !finite_vec(b))
+      return false;
+
+    const Eigen::Matrix3d A = 0.5 * (Q.topLeftCorner<3, 3>() + Q.topLeftCorner<3, 3>().transpose());
+    const Eigen::Vector3d q = Q.topRightCorner<3, 1>();
+    const Eigen::Vector3d p0 = to_eigen(a);
+    const Eigen::Vector3d d = to_eigen(b - a);
+    const double denom = d.dot(A * d);
+    if (denom <= 1e-14 * std::max(1.0, A.cwiseAbs().maxCoeff()))
+      return false;
+
+    double t = -d.dot(A * p0 + q) / denom;
+    t = clamp_value(t, 0.0, 1.0);
+    x = a + (b - a) * t;
+    return finite_vec(x);
   }
 };
 
@@ -431,6 +481,12 @@ CollapseStage::CollapseStage(
   avg_edge_length(0.0),
   avg_original_edge_length(0.0)
 {}
+
+CollapseStage::~CollapseStage()
+{
+  if (phase2_qem_quadric_prop_added && rm)
+    rm->remove_property(phase2_qem_quadric_prop);
+}
 
 void CollapseStage::update(size_t _candidate_points_size, bool _allow_negtive, double _max_distance_error)
 {
@@ -505,9 +561,24 @@ bool CollapseStage::is_phase2_linear_only_strategy() const
   return param->phase2PlacementStrategy == "linear_only" || param->phase2PlacementStrategy == "linear-only";
 }
 
-bool CollapseStage::is_phase2_qem_only_strategy() const
+bool CollapseStage::is_phase2_qem_strategy() const
 {
-  return param->phase2PlacementStrategy == "qem_only" || param->phase2PlacementStrategy == "qem-only";
+  return param->phase2PlacementStrategy == "qem" ||
+    param->phase2PlacementStrategy == "qem_only" ||
+    param->phase2PlacementStrategy == "qem-only" ||
+    is_phase2_qem_no_collision_strategy();
+}
+
+bool CollapseStage::is_phase2_qem_no_collision_strategy() const
+{
+  return param->phase2PlacementStrategy == "qem_no_collision" ||
+    param->phase2PlacementStrategy == "qem-no-collision" ||
+    param->phase2PlacementStrategy == "qem_no_collision_reject" ||
+    param->phase2PlacementStrategy == "qem-no-collision-reject" ||
+    param->phase2PlacementStrategy == "qem_no_intersection" ||
+    param->phase2PlacementStrategy == "qem-no-intersection" ||
+    param->phase2PlacementStrategy == "qem_no_intersection_reject" ||
+    param->phase2PlacementStrategy == "qem-no-intersection-reject";
 }
 
 bool CollapseStage::is_phase2_final_newton_strategy() const
@@ -560,11 +631,21 @@ CollapseStage::Phase2PlacementContext CollapseStage::make_phase2_placement_conte
   ctx.global_target_length = avg_edge_length > 0.0 ? avg_edge_length : original_diagonal_length * 0.01;
 
   HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
+  const VertexHandle from_v = rm->from_vertex_handle(heh);
+  const VertexHandle to_v = rm->to_vertex_handle(heh);
+  ctx.endpoint0 = rm->point(from_v);
+  ctx.endpoint1 = rm->point(to_v);
   ctx.midpoint = rm->calc_edge_midpoint(heh);
   Vec3d smooth_normal;
   edge_collapser.predict_tangential_weighted_smooth_target(ctx.midpoint, smooth_normal, ctx.start_point);
   if (!finite_vec(ctx.start_point))
     ctx.start_point = ctx.midpoint;
+
+  if (is_phase2_qem_no_collision_strategy() && phase2_qem_quadric_prop_added)
+  {
+    ctx.qem_matrix = phase2_qem_quadric(from_v) + phase2_qem_quadric(to_v);
+    ctx.use_qem_matrix = true;
+  }
 
   double local_scale = rm->data(eh).edge_length;
   std::set<VertexHandle> neighbor_vertices;
@@ -687,6 +768,14 @@ double CollapseStage::ipc_barrier(double distance, double dhat) const
 
 double CollapseStage::evaluate_qem_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
 {
+  if (ctx.use_qem_matrix)
+  {
+    Eigen::Vector4d h;
+    h << to_eigen(x), 1.0;
+    const double energy = h.dot(ctx.qem_matrix * h);
+    return std::isfinite(energy) ? energy : DBL_MAX;
+  }
+
   double energy = 0.0;
   for (const QEMPlane& plane : ctx.qem_planes)
   {
@@ -701,6 +790,53 @@ double CollapseStage::evaluate_qem_energy(const Phase2PlacementContext& ctx, con
   }
 
   return energy;
+}
+
+void CollapseStage::initialize_phase2_qem_quadrics()
+{
+  if (!phase2_qem_quadric_prop_added)
+  {
+    rm->add_property(phase2_qem_quadric_prop, "phase2_qem_quadric");
+    phase2_qem_quadric_prop_added = true;
+  }
+
+  for (VertexHandle vh : rm->vertices())
+    rm->property(phase2_qem_quadric_prop, vh) = Eigen::Matrix4d::Zero();
+
+  for (FaceHandle fh : rm->faces())
+  {
+    Vec3d pts[3];
+    collect_face_points(rm, fh, pts);
+    const double area = triangle_area_from_points(pts[0], pts[1], pts[2]);
+    if (area <= 1e-16 || !std::isfinite(area))
+      continue;
+
+    const Vec3d normal = triangle_normal(pts[0], pts[1], pts[2]);
+    if (!finite_vec(normal))
+      continue;
+
+    Eigen::Vector4d plane;
+    plane << to_eigen(normal), -(normal | pts[0]);
+    const Eigen::Matrix4d fundamental_quadric = plane * plane.transpose();
+
+    for (VertexHandle vh : rm->fv_range(fh))
+      rm->property(phase2_qem_quadric_prop, vh) += fundamental_quadric;
+  }
+}
+
+Eigen::Matrix4d CollapseStage::phase2_qem_quadric(VertexHandle vh) const
+{
+  if (!phase2_qem_quadric_prop_added || !vh.is_valid() || rm->status(vh).deleted())
+    return Eigen::Matrix4d::Zero();
+  return rm->property(phase2_qem_quadric_prop, vh);
+}
+
+void CollapseStage::update_phase2_qem_quadric_after_collapse(
+  VertexHandle center_vh, const Eigen::Matrix4d& quadric)
+{
+  if (!phase2_qem_quadric_prop_added || !center_vh.is_valid() || rm->status(center_vh).deleted())
+    return;
+  rm->property(phase2_qem_quadric_prop, center_vh) = quadric;
 }
 
 double CollapseStage::evaluate_original_barrier_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
@@ -1356,8 +1492,8 @@ double CollapseStage::source_uniformity_target_length(const Phase2PlacementConte
   return std::max(target_length, ctx.local_scale * 1e-3);
 }
 
-// Hard validity test for a proposed new vertex position. This is the exact
-// rejection layer used before collapse, independent of soft energy values.
+// Hard validity test for a proposed new vertex position. Collision checks are
+// disabled by the qem_no_collision strategy; topology/degeneracy guards remain.
 bool CollapseStage::phase2_placement_satisfies_hard_constraints(
   const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser, const Vec3d& x) const
 {
@@ -1366,6 +1502,15 @@ bool CollapseStage::phase2_placement_satisfies_hard_constraints(
   if (is_ipc_line_search_robustness_mode())
     return sampled_path_valid(edge_collapser, ctx.midpoint, x);
   return true;
+}
+
+void CollapseStage::set_phase2_edge_collapser_flags(EdgeCollapser& edge_collapser) const
+{
+  const bool check_collision = !is_phase2_qem_no_collision_strategy();
+  edge_collapser.set_flags(
+    /*update_links*/false, /*update_target_length*/false, /*update_normals*/true,
+    /*check_wrinkle*/false, /*check_selfinter*/check_collision,
+    /*check_inter*/check_collision);
 }
 
 // Decide whether the cheap QEM/proxy placement is enough, or whether this edge
@@ -1377,7 +1522,7 @@ bool CollapseStage::should_refine_phase2_placement_with_newton(
 {
   if (is_phase2_newton_only_strategy())
     return finite_vec(x);
-  if (is_phase2_linear_only_strategy() || is_phase2_qem_only_strategy() ||
+  if (is_phase2_linear_only_strategy() || is_phase2_qem_strategy() ||
     is_phase2_final_newton_strategy() ||
     is_phase2_quadratic_surrogate_strategy())
     return false;
@@ -1405,9 +1550,71 @@ bool CollapseStage::should_refine_phase2_placement_with_newton(
   return finite_vec(x) && (quality_bad || residual_bad || final_refine);
 }
 
+bool CollapseStage::select_phase2_feasibility_fallback(
+  EdgeHandle eh, const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
+  Vec3d& new_point, double& energy) const
+{
+  std::vector<Vec3d> candidates;
+  const double duplicate_tol = std::max(ctx.local_scale * 1e-8, original_diagonal_length * 1e-12);
+  const auto append_candidate = [&](const Vec3d& p)
+  {
+    if (!finite_vec(p))
+      return;
+    for (const Vec3d& existing : candidates)
+    {
+      if ((existing - p).length() <= duplicate_tol)
+        return;
+    }
+    candidates.push_back(p);
+  };
+
+  if (is_phase2_qem_no_collision_strategy())
+  {
+    append_candidate(ctx.endpoint0);
+    append_candidate(ctx.endpoint1);
+    append_candidate(ctx.midpoint);
+  }
+  else
+  {
+    append_candidate(ctx.start_point);
+    append_candidate(ctx.midpoint);
+
+    if (eh.is_valid())
+    {
+      const HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
+      if (heh.is_valid())
+      {
+        append_candidate(rm->point(rm->to_vertex_handle(heh)));
+        append_candidate(rm->point(rm->from_vertex_handle(heh)));
+      }
+    }
+  }
+
+  bool found_valid_candidate = false;
+  energy = DBL_MAX;
+  for (const Vec3d& candidate : candidates)
+  {
+    if (!phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, candidate))
+      continue;
+
+    const double candidate_energy = evaluate_phase2_proxy_energy(ctx, candidate);
+    if (!std::isfinite(candidate_energy))
+      continue;
+
+    if (!found_valid_candidate || candidate_energy < energy)
+    {
+      new_point = candidate;
+      energy = candidate_energy;
+      found_valid_candidate = true;
+    }
+  }
+
+  return found_valid_candidate;
+}
+
 // Select the new vertex position for one edge collapse before the topology
 // change is committed. The policy is controlled by phase2PlacementStrategy:
-// adaptive, linear_only, qem_only, final_newton, newton_only, or quadratic_surrogate.
+// adaptive, linear_only, qem, final_newton, newton_only, or quadratic_surrogate.
 bool CollapseStage::choose_phase2_collapse_placement(
   EdgeHandle eh, EdgeCollapser& edge_collapser, const Vec3d& queued_point,
   size_t remaining_vertices, size_t target_vertices_num,
@@ -1415,7 +1622,7 @@ bool CollapseStage::choose_phase2_collapse_placement(
 {
   decision = Phase2PlacementDecision();
   const Phase2PlacementContext ctx = make_phase2_placement_context(eh, edge_collapser);
-  if (ctx.qem_planes.empty())
+  if (!ctx.use_qem_matrix && ctx.qem_planes.empty())
     return false;
 
   std::vector<Vec3d> candidates;
@@ -1436,13 +1643,13 @@ bool CollapseStage::choose_phase2_collapse_placement(
     candidate_kind.push_back(kind);
   };
 
-  const bool use_qem_only = is_phase2_qem_only_strategy();
+  const bool use_qem = is_phase2_qem_strategy();
   const bool use_quadratic_surrogate = is_phase2_quadratic_surrogate_strategy();
   append_candidate(queued_point, false, use_quadratic_surrogate ? 1 : 0);
 
   double qem_position_fidelity = DBL_MAX;
 
-  if (!use_qem_only && use_quadratic_surrogate)
+  if (!use_qem && use_quadratic_surrogate)
   {
     Vec3d surrogate_point;
     double surrogate_energy = DBL_MAX;
@@ -1458,7 +1665,7 @@ bool CollapseStage::choose_phase2_collapse_placement(
     }
   }
 
-  if (!use_qem_only)
+  if (!use_qem)
   {
     append_candidate(ctx.start_point, true, 2);
     append_candidate(ctx.midpoint, true, 2);
@@ -1495,8 +1702,24 @@ bool CollapseStage::choose_phase2_collapse_placement(
     }
   }
 
+  if (!found_valid_candidate && use_qem)
+  {
+    Vec3d fallback_point;
+    double fallback_energy = DBL_MAX;
+    if (select_phase2_feasibility_fallback(eh, ctx, edge_collapser, fallback_point, fallback_energy))
+    {
+      decision.point = fallback_point;
+      decision.priority_energy = fallback_energy;
+      decision.used_fallback = true;
+      found_valid_candidate = true;
+    }
+  }
+
   if (!found_valid_candidate)
     return false;
+
+  if (is_phase2_qem_no_collision_strategy())
+    return true;
 
   decision.min_quality = calc_phase2_fan_min_quality(ctx, decision.point);
   decision.nonlinear_residual = evaluate_phase2_refinement_residual(ctx, decision.point);
@@ -1540,7 +1763,7 @@ bool CollapseStage::choose_phase2_collapse_placement(
 }
 
 // Optimize only the placement x for the current edge collapse. The edge has
-// not been collapsed yet; topology changes happen later in do_phase2_optimization_simplification().
+// not been collapsed yet; topology changes happen later in do_phase2_energy_simplification().
 bool CollapseStage::refine_collapse_placement_with_newton(
   EdgeHandle eh, EdgeCollapser& edge_collapser, Vec3d& new_point, double& energy,
   const Vec3d* initial_point)
@@ -1690,7 +1913,7 @@ bool CollapseStage::refine_collapse_placement_with_newton(
 bool CollapseStage::solve_phase2_qem_placement(
   const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const
 {
-  if (ctx.qem_planes.empty())
+  if (!ctx.use_qem_matrix && ctx.qem_planes.empty())
     return false;
 
   double curvature_multiplier = 1.0;
@@ -1702,28 +1925,164 @@ bool CollapseStage::solve_phase2_qem_placement(
 
   Phase2HomogeneousQuadric quadric;
   const double inv_scale_sqr = 1.0 / std::max(sqr(ctx.local_scale), 1e-24);
-  for (const QEMPlane& plane : ctx.qem_planes)
+  if (ctx.use_qem_matrix)
+  {
+    quadric.Q = ctx.qem_matrix;
+  }
+  else for (const QEMPlane& plane : ctx.qem_planes)
   {
     const double w = param->qemWeight * curvature_multiplier * plane.weight * inv_scale_sqr;
     quadric.add_plane(w, plane.normal, plane.offset);
   }
 
-  const double regularization =
-    std::max(1e-12, 1e-8 * std::max(1.0, std::abs(quadric.trace3())));
-  if (!quadric.solve(ctx.midpoint, regularization, new_point))
+  const bool pure_qem = is_phase2_qem_no_collision_strategy();
+
+  if (!pure_qem && param->triangleQualityWeight > 0.0 && !ctx.fan_edges.empty())
   {
-    if (finite_vec(ctx.start_point))
-      new_point = ctx.start_point;
-    else
-      new_point = ctx.midpoint;
+    const double fan_count = static_cast<double>(ctx.fan_edges.size());
+    const double alpha_midpoint = 1.0;
+    const double alpha_height = 1.0;
+    const double alpha_plane = 0.25;
+
+    for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
+    {
+      const Vec3d base = fan_edge.to - fan_edge.from;
+      const double base_length = base.length();
+      if (base_length <= ctx.local_scale * 1e-8 || !std::isfinite(base_length))
+        continue;
+
+      const Vec3d t = base / base_length;
+      const Vec3d mid = (fan_edge.from + fan_edge.to) * 0.5;
+      Vec3d s = fan_edge.apex - mid;
+      s -= (s | t) * t;
+      s = normalized_or_fallback(s, triangle_normal(fan_edge.from, fan_edge.to, fan_edge.apex).cross(t));
+      s = normalized_or_fallback(s, Vec3d(0.0, 1.0, 0.0));
+      Vec3d n = t.cross(s);
+      n = normalized_or_fallback(n, triangle_normal(fan_edge.from, fan_edge.to, fan_edge.apex));
+
+      const double target_height = 0.5 * std::sqrt(3.0) * base_length;
+      const double face_weight =
+        std::max(base_length / std::max(ctx.local_scale, original_diagonal_length * 1e-12), 1e-6);
+      const double w = param->triangleQualityWeight * face_weight * inv_scale_sqr / fan_count;
+
+      quadric.add_linear_residual(w * alpha_midpoint, t, t | mid);
+      quadric.add_linear_residual(w * alpha_height, s, (s | mid) + target_height);
+      quadric.add_linear_residual(w * alpha_plane, n, n | mid);
+    }
   }
 
-  const double max_offset = std::max(2.0 * ctx.local_scale, original_diagonal_length * 1e-8);
-  Vec3d offset = new_point - ctx.midpoint;
-  if (offset.length() > max_offset)
-    new_point = ctx.midpoint + offset / offset.length() * max_offset;
+  if (!pure_qem && param->uniformityWeight > 0.0 && param->uniformityMode != "none" && !ctx.neighbor_points.empty())
+  {
+    const double neighbor_count = static_cast<double>(ctx.neighbor_points.size());
+    for (const Vec3d& neighbor : ctx.neighbor_points)
+    {
+      double target_length = source_uniformity_target_length(ctx, (ctx.midpoint + neighbor) * 0.5);
+      target_length = std::max(target_length, ctx.local_scale * 1e-3);
 
-  energy = evaluate_phase2_proxy_energy(ctx, new_point);
+      Vec3d direction = normalized_or_fallback(ctx.midpoint - neighbor, ctx.start_point - neighbor);
+      direction = normalized_or_fallback(direction, Vec3d(1.0, 0.0, 0.0));
+
+      const double w = param->uniformityWeight /
+        neighbor_count / std::max(sqr(target_length), 1e-24);
+      quadric.add_linear_residual(w, direction, (direction | neighbor) + target_length);
+    }
+  }
+
+  if (!pure_qem && param->curvatureWeight > 0.0 &&
+    (param->curvatureMode == "normal_matching" || param->curvatureMode == "normal-matching") &&
+    !ctx.fan_edges.empty())
+  {
+    const double fan_count = static_cast<double>(ctx.fan_edges.size());
+    for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
+    {
+      const Vec3d base = fan_edge.to - fan_edge.from;
+      const double base_length = base.length();
+      if (base_length <= ctx.local_scale * 1e-8 || !std::isfinite(base_length))
+        continue;
+
+      const Vec3d centroid = (fan_edge.from + fan_edge.to + ctx.midpoint) / 3.0;
+      FaceHandle closest_face;
+#ifdef USE_TREE_SEARCH
+      if (!ot)
+        continue;
+      closest_face = FaceHandle(ot->closest_point(centroid).second);
+#else
+      if (!og)
+        continue;
+      closest_face = FaceHandle(og->closest_point(centroid).second);
+#endif
+      if (!closest_face.is_valid() || closest_face.idx() < 0 ||
+        closest_face.idx() >= static_cast<int>(om->n_faces()))
+        continue;
+
+      Vec3d pts[3];
+      collect_face_points(om, closest_face, pts);
+      const Vec3d source_normal =
+        normalized_or_fallback(triangle_normal(pts[0], pts[1], pts[2]), Vec3d(0.0, 0.0, 1.0));
+      Vec3d tangent0 = base - (base | source_normal) * source_normal;
+      if (tangent0.length() <= 1e-12)
+      {
+        const Vec3d axis = std::abs(source_normal.x()) < 0.9 ?
+          Vec3d(1.0, 0.0, 0.0) : Vec3d(0.0, 1.0, 0.0);
+        tangent0 = axis - (axis | source_normal) * source_normal;
+      }
+      tangent0 = normalized_or_fallback(tangent0, Vec3d(1.0, 0.0, 0.0));
+      Vec3d tangent1 = normalized_or_fallback(source_normal.cross(tangent0), Vec3d(0.0, 0.0, 1.0));
+
+      const Vec3d edge_dir = base / base_length;
+      const Vec3d row0 = tangent0.cross(edge_dir);
+      const Vec3d row1 = tangent1.cross(edge_dir);
+      const double w = param->curvatureWeight * inv_scale_sqr / fan_count;
+
+      quadric.add_linear_residual(w, row0, row0 | fan_edge.from);
+      quadric.add_linear_residual(w, row1, row1 | fan_edge.from);
+    }
+  }
+
+  const double regularization =
+    std::max(1e-12, 1e-8 * std::max(1.0, std::abs(quadric.trace3())));
+  const bool solved = pure_qem ?
+    quadric.solve_unregularized(new_point) :
+    quadric.solve(ctx.midpoint, regularization, new_point);
+  if (!solved)
+  {
+    if (pure_qem && quadric.solve_segment(ctx.endpoint0, ctx.endpoint1, new_point))
+    {
+      // Garland-Heckbert fallback: optimal point constrained to the collapsed segment.
+    }
+    else
+    {
+      const Vec3d candidates[3] = {
+        pure_qem ? ctx.endpoint0 : ctx.start_point,
+        pure_qem ? ctx.endpoint1 : ctx.midpoint,
+        ctx.midpoint
+      };
+      double best_energy = DBL_MAX;
+      for (const Vec3d& candidate : candidates)
+      {
+        const double candidate_energy = pure_qem ? quadric.evaluate(candidate) :
+          evaluate_phase2_proxy_energy(ctx, candidate);
+        if (finite_vec(candidate) && std::isfinite(candidate_energy) && candidate_energy < best_energy)
+        {
+          best_energy = candidate_energy;
+          new_point = candidate;
+        }
+      }
+      if (!finite_vec(new_point))
+        new_point = ctx.midpoint;
+    }
+  }
+
+  if (!pure_qem)
+  {
+    const double max_offset = std::max(2.0 * ctx.local_scale, original_diagonal_length * 1e-8);
+    Vec3d offset = new_point - ctx.midpoint;
+    if (offset.length() > max_offset)
+      new_point = ctx.midpoint + offset / offset.length() * max_offset;
+  }
+
+  energy = pure_qem ? param->qemWeight * evaluate_qem_energy(ctx, new_point) :
+    evaluate_phase2_proxy_energy(ctx, new_point);
   return finite_vec(new_point) && std::isfinite(energy);
 }
 
@@ -1817,55 +2176,42 @@ bool CollapseStage::solve_phase2_quadratic_surrogate(
 }
 
 // Compute the cheap placement used only to rank this edge in the Phase 2 queue.
-// Keep queue ordering on the stable QEM placement for every strategy. The
-// quadratic_surrogate strategy only adds its richer 4x4 solve as an actual
-// placement candidate after an edge has been popped.
+// Keep queue ordering on the stable QEM placement when possible. Pure QEM uses
+// only Garland-Heckbert fallback points if the quadric solve is singular or
+// unusable for the mesh collapse.
 bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3d& new_point, double& energy)
 {
   auto edge_collapser = new_edge_collapser();
+  set_phase2_edge_collapser_flags(edge_collapser);
   if (!edge_collapser.init(eh))
     return false;
 
   HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
   size_t valence_after_collapsing =
     (rm->valence(rm->to_vertex_handle(heh)) + rm->valence(rm->from_vertex_handle(heh))) - 3;
-  if (valence_after_collapsing > param->maxValence)
+  if (!is_phase2_qem_no_collision_strategy() &&
+    valence_after_collapsing > param->maxValence)
     return false;
 
   const Phase2PlacementContext ctx = make_phase2_placement_context(eh, edge_collapser);
-  if (ctx.qem_planes.empty())
+  if (!ctx.use_qem_matrix && ctx.qem_planes.empty())
     return false;
 
   if (is_phase2_newton_only_strategy())
+    return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy);
+
+  if (!solve_phase2_qem_placement(ctx, new_point, energy))
   {
-    std::vector<Vec3d> candidates;
-    candidates.push_back(ctx.start_point);
-    candidates.push_back(ctx.midpoint);
-    candidates.push_back(rm->point(rm->to_vertex_handle(heh)));
-    candidates.push_back(rm->point(rm->from_vertex_handle(heh)));
-
-    bool found_valid_candidate = false;
-    energy = DBL_MAX;
-    for (const Vec3d& candidate : candidates)
-    {
-      if (!phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, candidate))
-        continue;
-
-      const double candidate_energy = evaluate_phase2_proxy_energy(ctx, candidate);
-      if (!std::isfinite(candidate_energy))
-        continue;
-
-      if (!found_valid_candidate || candidate_energy < energy)
-      {
-        new_point = candidate;
-        energy = candidate_energy;
-        found_valid_candidate = true;
-      }
-    }
-    return found_valid_candidate;
+    if (is_phase2_qem_strategy())
+      return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy);
+    return false;
   }
 
-  return solve_phase2_qem_placement(ctx, new_point, energy);
+  if (is_phase2_qem_strategy() &&
+    !phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, new_point))
+    return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy);
+
+  return true;
 }
 
 bool CollapseStage::enqueue_phase2_candidate(EdgeHandle eh, size_t state)
@@ -1901,7 +2247,7 @@ void CollapseStage::initialize_phase2_candidates()
   avg_original_edge_length = om->n_edges() == 0 ? 0.0 : avg_original_edge_length / om->n_edges();
 
   Logger::user_logger->info(
-    "phase 2 optimization [{}]: initializing {} edge candidates.",
+    "phase 2 energy [{}]: initializing {} edge candidates.",
     param->phase2PlacementStrategy, rm->n_edges());
 
   size_t evaluated_edges = 0;
@@ -1915,13 +2261,13 @@ void CollapseStage::initialize_phase2_candidates()
     if (evaluated_edges % 10000 == 0)
     {
       Logger::user_logger->info(
-        "phase 2 optimization candidates: {}/{} edges, {} enqueued.",
+        "phase 2 energy candidates: {}/{} edges, {} enqueued.",
         evaluated_edges, rm->n_edges(), enqueued_edges);
     }
   }
 
   Logger::user_logger->info(
-    "phase 2 optimization candidates: {}/{} edges, {} enqueued.",
+    "phase 2 energy candidates: {}/{} edges, {} enqueued.",
     evaluated_edges, rm->n_edges(), enqueued_edges);
 }
 
@@ -2131,14 +2477,26 @@ void CollapseStage::do_phase2_final_newton_relocation()
 // 3. Commit the collapse with exact validity checks.
 // 4. Requeue only the affected one-ring edges.
 // 5. In final_newton mode, polish fixed-topology vertex positions once.
-void CollapseStage::do_phase2_optimization_simplification(size_t target_vertices_num)
+void CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
 {
   if (target_vertices_num == 0 || rm->n_vertices() <= target_vertices_num)
     return;
 
   Logger::user_logger->info(
-    "phase 2 optimization simplification [{}]: {} -> {} vertices.",
+    "phase 2 energy simplification [{}]: {} -> {} vertices.",
     param->phase2PlacementStrategy, rm->n_vertices(), target_vertices_num);
+  Logger::user_logger->info(
+    "phase 2 energy terms: qemWeight {}, triangleQualityWeight {}, curvatureMode [{}], curvatureWeight {}, uniformityMode [{}], uniformityWeight {}, robustnessMode [{}].",
+    param->qemWeight, param->triangleQualityWeight,
+    param->curvatureMode, param->curvatureWeight,
+    param->uniformityMode, param->uniformityWeight,
+    param->robustnessMode);
+  if (is_phase2_qem_no_collision_strategy())
+    Logger::user_logger->info(
+      "phase 2 QEM: pure Garland-Heckbert QEM is enabled; collision checks and non-QEM energies are disabled.");
+
+  if (is_phase2_qem_no_collision_strategy())
+    initialize_phase2_qem_quadrics();
 
   size_t total_collapsed_edges = 0;
   size_t total_attempted_edges = 0;
@@ -2148,13 +2506,11 @@ void CollapseStage::do_phase2_optimization_simplification(size_t target_vertices
 
   for (size_t pass = 1; remaining_vertices > target_vertices_num && pass <= max_phase2_passes; pass++)
   {
-    Logger::user_logger->info("phase 2 optimization pass {}.", pass);
+    Logger::user_logger->info("phase 2 energy pass {}.", pass);
     initialize_phase2_candidates();
 
     auto edge_collapser = new_edge_collapser();
-    edge_collapser.set_flags(
-      /*update_links*/false, /*update_target_length*/false, /*update_normals*/true,
-      /*check_wrinkle*/false, /*check_selfinter*/true, /*check_inter*/true);
+    set_phase2_edge_collapser_flags(edge_collapser);
 
     size_t pass_collapsed_edges = 0;
     size_t pass_attempted_edges = 0;
@@ -2180,6 +2536,17 @@ void CollapseStage::do_phase2_optimization_simplification(size_t target_vertices
       if (!edge_collapser.init(edge_reward.eh))
         continue;
 
+      Eigen::Matrix4d merged_qem_quadric = Eigen::Matrix4d::Zero();
+      bool has_merged_qem_quadric = false;
+      if (is_phase2_qem_no_collision_strategy())
+      {
+        const HalfedgeHandle collapse_heh = rm->halfedge_handle(edge_reward.eh, 0);
+        const VertexHandle from_vh = rm->from_vertex_handle(collapse_heh);
+        const VertexHandle to_vh = rm->to_vertex_handle(collapse_heh);
+        merged_qem_quadric = phase2_qem_quadric(from_vh) + phase2_qem_quadric(to_vh);
+        has_merged_qem_quadric = true;
+      }
+
       pass_attempted_edges++;
       total_attempted_edges++;
       Phase2PlacementDecision placement;
@@ -2194,7 +2561,7 @@ void CollapseStage::do_phase2_optimization_simplification(size_t target_vertices
           std::chrono::duration<double>(now - last_progress_log_time).count() >= 10.0)
         {
           Logger::user_logger->info(
-            "phase 2 optimization pass {} progress: attempted {}, collapsed {}, newton_attempted {}, newton_refined {}, newton_failed {}, fallback {}, placement_failed {}, collapse_failed {}, queue {}, remain {}, newton_time {:.3f}s, exact_collapse_time {:.3f}s.",
+            "phase 2 energy pass {} progress: attempted {}, collapsed {}, newton_attempted {}, newton_refined {}, newton_failed {}, fallback {}, placement_failed {}, collapse_failed {}, queue {}, remain {}, newton_time {:.3f}s, exact_collapse_time {:.3f}s.",
             pass, pass_attempted_edges, pass_collapsed_edges,
             pass_newton_attempted_edges, pass_newton_refined_edges,
             pass_newton_failed_edges, pass_fallback_edges,
@@ -2222,6 +2589,8 @@ void CollapseStage::do_phase2_optimization_simplification(size_t target_vertices
         pass_exact_collapse_seconds += std::chrono::duration<double>(
           std::chrono::steady_clock::now() - collapse_start_time).count();
         VertexHandle center_v = edge_collapser.get_collapsed_center();
+        if (has_merged_qem_quadric)
+          update_phase2_qem_quadric_after_collapse(center_v, merged_qem_quadric);
         update_phase2_after_collapsing(center_v);
         pass_collapsed_edges++;
         total_collapsed_edges++;
@@ -2230,7 +2599,7 @@ void CollapseStage::do_phase2_optimization_simplification(size_t target_vertices
         if (total_collapsed_edges % 1000 == 0)
         {
           Logger::user_logger->info(
-            "phase 2 optimization collapsed {} edges; {} vertices remain.",
+            "phase 2 energy collapsed {} edges; {} vertices remain.",
             total_collapsed_edges, remaining_vertices);
         }
       }
@@ -2246,7 +2615,7 @@ void CollapseStage::do_phase2_optimization_simplification(size_t target_vertices
         std::chrono::duration<double>(now - last_progress_log_time).count() >= 10.0)
       {
         Logger::user_logger->info(
-          "phase 2 optimization pass {} progress: attempted {}, collapsed {}, newton_attempted {}, newton_refined {}, newton_failed {}, fallback {}, placement_failed {}, collapse_failed {}, queue {}, remain {}, newton_time {:.3f}s, exact_collapse_time {:.3f}s.",
+          "phase 2 energy pass {} progress: attempted {}, collapsed {}, newton_attempted {}, newton_refined {}, newton_failed {}, fallback {}, placement_failed {}, collapse_failed {}, queue {}, remain {}, newton_time {:.3f}s, exact_collapse_time {:.3f}s.",
           pass, pass_attempted_edges, pass_collapsed_edges,
           pass_newton_attempted_edges, pass_newton_refined_edges,
           pass_newton_failed_edges, pass_fallback_edges,
@@ -2258,7 +2627,7 @@ void CollapseStage::do_phase2_optimization_simplification(size_t target_vertices
     }
 
     Logger::user_logger->info(
-      "phase 2 optimization pass {} collapsed {} edges after attempting {} candidates (newton_attempted {}, newton_refined {}, newton_failed {}, fallback {}, placement_failed {}, collapse_failed {}, newton_time {:.3f}s, exact_collapse_time {:.3f}s).",
+      "phase 2 energy pass {} collapsed {} edges after attempting {} candidates (newton_attempted {}, newton_refined {}, newton_failed {}, fallback {}, placement_failed {}, collapse_failed {}, newton_time {:.3f}s, exact_collapse_time {:.3f}s).",
       pass, pass_collapsed_edges, pass_attempted_edges,
       pass_newton_attempted_edges, pass_newton_refined_edges,
       pass_newton_failed_edges, pass_fallback_edges,
@@ -2282,7 +2651,7 @@ void CollapseStage::do_phase2_optimization_simplification(size_t target_vertices
   }
 
   Logger::user_logger->info(
-    "phase 2 optimization collapsed {} edges after attempting {} candidates.",
+    "phase 2 energy collapsed {} edges after attempting {} candidates.",
     total_collapsed_edges, total_attempted_edges);
 
   if (is_phase2_final_newton_strategy())
