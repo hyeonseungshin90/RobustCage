@@ -793,6 +793,21 @@ double CollapseStage::evaluate_qem_energy(const Phase2PlacementContext& ctx, con
   return energy;
 }
 
+// Experimental: score by QEM alone (ignores quality/uniformity/curvature/
+// position-fidelity/gap), used only to test ordering the queue purely by
+// QEM cost while leaving the actual placement to Newton's full objective.
+// Kept as a separate function so this is a one-line toggle to revert --
+// see the is_phase2_newton_only_strategy() branch in
+// compute_phase2_queue_placement_candidate that passes qem_only_score=true
+// into select_phase2_feasibility_fallback.
+double CollapseStage::evaluate_qem_only_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
+{
+  if (!finite_vec(x))
+    return DBL_MAX;
+  const double energy = param->qemWeight * evaluate_qem_energy(ctx, x);
+  return std::isfinite(energy) ? energy : DBL_MAX;
+}
+
 void CollapseStage::initialize_phase2_qem_quadrics()
 {
   if (!phase2_qem_quadric_prop_added)
@@ -936,6 +951,32 @@ bool CollapseStage::closest_original_point(const Vec3d& p, Vec3d& closest) const
   return finite_vec(closest);
 }
 
+// Tangent plane of the original-mesh face closest to p, in the same
+// (normal, offset) convention as Phase2HomogeneousQuadric::add_plane:
+// a point y lies on the plane when (normal . y + offset) == 0.
+bool CollapseStage::closest_original_plane(const Vec3d& p, Vec3d& normal, double& offset) const
+{
+  FaceHandle closest_face;
+#ifdef USE_TREE_SEARCH
+  if (!ot)
+    return false;
+  closest_face = FaceHandle(ot->closest_point(p).second);
+#else
+  if (!og)
+    return false;
+  closest_face = FaceHandle(og->closest_point(p).second);
+#endif
+  if (!closest_face.is_valid() || closest_face.idx() < 0 ||
+    closest_face.idx() >= static_cast<int>(om->n_faces()))
+    return false;
+
+  Vec3d pts[3];
+  collect_face_points(om, closest_face, pts);
+  normal = normalized_or_fallback(triangle_normal(pts[0], pts[1], pts[2]), Vec3d(0.0, 0.0, 1.0));
+  offset = -(normal | pts[0]);
+  return finite_vec(normal) && std::isfinite(offset);
+}
+
 double CollapseStage::evaluate_position_fidelity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
 {
   if (param->positionFidelityWeight <= 0.0 || !finite_vec(x))
@@ -1060,6 +1101,26 @@ double CollapseStage::evaluate_triangle_quality_energy(const Phase2PlacementCont
   return energy;
 }
 
+// Extra penalty when the WORST triangle in the fan falls below
+// phase2NewtonQualityThreshold, on top of the smooth average-quality term
+// above. min() over the fan is differentiable everywhere except at exact
+// ties between two worst triangles (measure zero, same caveat as clamp/ReLU
+// elsewhere in this codebase) -- see the matching branch-and-differentiate
+// treatment in autodiff_newton_derivatives.
+double CollapseStage::evaluate_triangle_quality_gap_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
+{
+  if (param->triangleQualityWeight <= 0.0 || param->phase2NewtonQualityThreshold <= 0.0 || !finite_vec(x))
+    return 0.0;
+
+  const double min_quality = calc_phase2_fan_min_quality(ctx, x);
+  if (min_quality >= param->phase2NewtonQualityThreshold)
+    return 0.0;
+
+  const double gap = (param->phase2NewtonQualityThreshold - min_quality) /
+    std::max(param->phase2NewtonQualityThreshold, 1e-8);
+  return 10.0 * sqr(gap);
+}
+
 double CollapseStage::source_size_at(const Vec3d& p) const
 {
   FaceHandle closest_face;
@@ -1101,14 +1162,22 @@ double CollapseStage::evaluate_newton_energy(const Phase2PlacementContext& ctx, 
   if (!finite_vec(x))
     return DBL_MAX;
 
+  // Normalize quality/uniformity/curvature by fan/neighbor count, matching
+  // evaluate_phase2_proxy_energy's convention, so a given weight means the
+  // same relative strength (O(1) per vertex, not growing with valence)
+  // regardless of which placement strategy (qem vs newton) is in use.
+  const double fan_count = static_cast<double>(std::max<size_t>(ctx.fan_edges.size(), 1));
+  const double neighbor_count = static_cast<double>(std::max<size_t>(ctx.neighbor_points.size(), 1));
+
   double energy = 0.0;
   energy += param->qemWeight * evaluate_qem_energy(ctx, x);
   energy += param->originalBarrierWeight * evaluate_original_barrier_energy(ctx, x);
   energy += param->selfBarrierWeight * evaluate_self_barrier_energy(ctx, x);
   energy += param->positionFidelityWeight * evaluate_position_fidelity_energy(ctx, x);
-  energy += param->curvatureWeight * evaluate_curvature_normal_energy(ctx, x);
-  energy += param->triangleQualityWeight * evaluate_triangle_quality_energy(ctx, x);
-  energy += param->uniformityWeight * evaluate_uniformity_energy(ctx, x);
+  energy += param->curvatureWeight * evaluate_curvature_normal_energy(ctx, x) / fan_count;
+  energy += param->triangleQualityWeight * evaluate_triangle_quality_energy(ctx, x) / fan_count;
+  energy += param->triangleQualityWeight * evaluate_triangle_quality_gap_energy(ctx, x);
+  energy += param->uniformityWeight * evaluate_uniformity_energy(ctx, x) / neighbor_count;
   return std::isfinite(energy) ? energy : DBL_MAX;
 }
 
@@ -1325,6 +1394,12 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
   ADScalar ad_energy = 0.0;
 
   const double inv_scale_sqr = 1.0 / std::max(sqr(ctx.local_scale), 1e-24);
+  // Match evaluate_newton_energy's normalization, so the gradient/Hessian
+  // used for the actual Newton step is consistent with the energy value
+  // (deriv.energy, set above from evaluate_newton_energy) used for
+  // acceptance/line-search comparisons.
+  const double fan_count = static_cast<double>(std::max<size_t>(ctx.fan_edges.size(), 1));
+  const double neighbor_count = static_cast<double>(std::max<size_t>(ctx.neighbor_points.size(), 1));
   double curvature_multiplier = 1.0;
   if (param->curvatureMode == "weighted_qem" || param->curvatureMode == "weighted-qem")
   {
@@ -1390,7 +1465,7 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
     alignment = diff_clamp(alignment, -1.0, 1.0);
     using std::abs;
     const ADScalar abs_alignment = abs(alignment);
-    ad_energy += param->curvatureWeight * diff_sqr(ADScalar(1.0) - abs_alignment);
+    ad_energy += param->curvatureWeight * diff_sqr(ADScalar(1.0) - abs_alignment) / fan_count;
   }
 
   for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
@@ -1399,7 +1474,33 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
       diff_vec<ADScalar>(fan_edge.from),
       diff_vec<ADScalar>(fan_edge.to),
       ad_point), 0.0, 1.0);
-    ad_energy += param->triangleQualityWeight * diff_sqr(ADScalar(1.0) - quality);
+    ad_energy += param->triangleQualityWeight * diff_sqr(ADScalar(1.0) - quality) / fan_count;
+  }
+
+  // Match evaluate_triangle_quality_gap_energy: extra penalty for triangles
+  // currently below phase2NewtonQualityThreshold. Membership (which
+  // triangles are "below threshold") is decided from the real quality at
+  // the current x -- same frozen-at-current-iterate treatment used
+  // elsewhere in this function (e.g. closest-face lookups) for decisions
+  // that aren't themselves smooth -- while the penalty term itself stays
+  // differentiable so Newton's gradient reflects it.
+  if (param->triangleQualityWeight > 0.0 && param->phase2NewtonQualityThreshold > 0.0)
+  {
+    for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
+    {
+      const double real_quality = clamp_value(
+        triangle_quality_from_points(fan_edge.from, fan_edge.to, x), 0.0, 1.0);
+      if (real_quality < param->phase2NewtonQualityThreshold)
+      {
+        const ADScalar quality = diff_clamp(diff_triangle_quality(
+          diff_vec<ADScalar>(fan_edge.from),
+          diff_vec<ADScalar>(fan_edge.to),
+          ad_point), 0.0, 1.0);
+        const ADScalar gap = (ADScalar(param->phase2NewtonQualityThreshold) - quality) /
+          std::max(param->phase2NewtonQualityThreshold, 1e-8);
+        ad_energy += param->triangleQualityWeight * 10.0 * diff_sqr(gap) / fan_count;
+      }
+    }
   }
 
   for (const DiffUniformityTerm& term : uniformity_terms)
@@ -1407,7 +1508,7 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
     const double target_length = std::max(term.target_length, ctx.local_scale * 1e-3);
     const ADScalar length = diff_norm(ad_point - diff_vec<ADScalar>(term.neighbor));
     ad_energy += param->uniformityWeight *
-      diff_sqr((length - target_length) / target_length);
+      diff_sqr((length - target_length) / target_length) / neighbor_count;
   }
 
   Eigen::Vector3d gradient = Eigen::Vector3d::Zero();
@@ -1448,52 +1549,15 @@ bool CollapseStage::sampled_path_valid(EdgeCollapser& edge_collapser, const Vec3
   return true;
 }
 
-// Cheap score for queue initialization and fallback candidate selection.
-// It includes QEM plus inexpensive quality/uniformity/position-fit terms, but
-// skips the full Newton solve unless the placement policy below decides
-// refinement is needed.
+// Score used for queue priority and candidate comparison. Deliberately just
+// forwards to evaluate_newton_energy so that "which edge looks cheapest" and
+// "which candidate is best" are judged by the exact same energy across every
+// placement strategy (qem, newton_only, adaptive, ...), instead of two
+// formulas (with different normalization/terms) that can silently diverge.
+// This does not run Newton itself -- it's a plain evaluation at a single x.
 double CollapseStage::evaluate_phase2_proxy_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
 {
-  if (!finite_vec(x))
-    return DBL_MAX;
-  double energy = param->qemWeight * evaluate_qem_energy(ctx, x);
-
-  if (param->positionFidelityWeight > 0.0)
-    energy += param->positionFidelityWeight * evaluate_position_fidelity_energy(ctx, x);
-
-  if (param->triangleQualityWeight > 0.0)
-  {
-    const double fan_count = static_cast<double>(std::max<size_t>(ctx.fan_edges.size(), 1));
-    energy += param->triangleQualityWeight * evaluate_triangle_quality_energy(ctx, x) / fan_count;
-
-    const double min_quality = calc_phase2_fan_min_quality(ctx, x);
-    if (param->phase2NewtonQualityThreshold > 0.0 &&
-      min_quality < param->phase2NewtonQualityThreshold)
-    {
-      const double normalized_gap =
-        (param->phase2NewtonQualityThreshold - min_quality) /
-        std::max(param->phase2NewtonQualityThreshold, 1e-8);
-      energy += 10.0 * param->triangleQualityWeight * sqr(normalized_gap);
-    }
-  }
-
-  if (param->uniformityWeight > 0.0 && param->uniformityMode != "none")
-  {
-    const double neighbor_count = static_cast<double>(std::max<size_t>(ctx.neighbor_points.size(), 1));
-    energy += param->uniformityWeight * evaluate_uniformity_energy(ctx, x) / neighbor_count;
-  }
-
-  const bool use_normal_matching_curvature =
-    param->curvatureMode == "normal_matching" || param->curvatureMode == "normal-matching";
-  if (param->curvatureWeight > 0.0 && use_normal_matching_curvature)
-  {
-    const double fan_count = static_cast<double>(std::max<size_t>(ctx.fan_edges.size(), 1));
-    energy += param->curvatureWeight * evaluate_curvature_normal_energy(ctx, x) / fan_count;
-    if (is_phase2_qem_strategy() && !is_phase2_qem_no_collision_strategy())
-      energy += param->curvatureWeight * evaluate_dihedral_preservation_energy(ctx, x);
-  }
-
-  return std::isfinite(energy) ? energy : DBL_MAX;
+  return evaluate_newton_energy(ctx, x);
 }
 
 double CollapseStage::evaluate_phase2_refinement_residual(const Phase2PlacementContext& ctx, const Vec3d& x) const
@@ -1545,11 +1609,18 @@ double CollapseStage::source_uniformity_target_length(const Phase2PlacementConte
   if (param->uniformityMode == "source")
   {
     const double source_length = source_size_at(p);
-    const double source_average = avg_original_edge_length > 0.0 ? avg_original_edge_length : source_length;
-    if (source_average > 0.0 && std::isfinite(source_length))
-      target_length *= source_length / source_average;
+    if (avg_original_edge_length > 0.0 && std::isfinite(source_length))
+    {
+      const double ratio = clamp_value(source_length / avg_original_edge_length, 0.5, 2.0);
+      target_length *= ratio;
+    }
   }
-  return std::max(target_length, ctx.local_scale * 1e-3);
+
+  const double global_floor = ctx.global_target_length > 0.0 ?
+    0.25 * ctx.global_target_length : 0.0;
+  return std::max(
+    target_length,
+    std::max(global_floor, ctx.local_scale * 1e-3));
 }
 
 // Hard validity test for a proposed new vertex position. Collision checks are
@@ -1569,7 +1640,7 @@ void CollapseStage::set_phase2_edge_collapser_flags(EdgeCollapser& edge_collapse
   const bool check_collision = !is_phase2_qem_no_collision_strategy();
   edge_collapser.set_flags(
     /*update_links*/false, /*update_target_length*/false, /*update_normals*/true,
-    /*check_wrinkle*/false, /*check_selfinter*/check_collision,
+    /*check_wrinkle*/check_collision, /*check_selfinter*/check_collision,
     /*check_inter*/check_collision);
 }
 
@@ -1613,11 +1684,8 @@ bool CollapseStage::should_refine_phase2_placement_with_newton(
 
 bool CollapseStage::select_phase2_feasibility_fallback(
   EdgeHandle eh, const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
-  Vec3d& new_point, double& energy) const
+  Vec3d& new_point, double& energy, bool qem_only_score) const
 {
-  if (is_phase2_qem_strategy() && !is_phase2_qem_no_collision_strategy())
-    return false;
-
   std::vector<Vec3d> candidates;
   const double duplicate_tol = std::max(ctx.local_scale * 1e-8, original_diagonal_length * 1e-12);
   const auto append_candidate = [&](const Vec3d& p)
@@ -1641,8 +1709,7 @@ bool CollapseStage::select_phase2_feasibility_fallback(
   else
   {
     append_candidate(ctx.tangential_smoothing_point);
-    if (!is_phase2_qem_strategy())
-      append_candidate(ctx.midpoint);
+    append_candidate(ctx.midpoint);
 
     if (eh.is_valid())
     {
@@ -1662,7 +1729,8 @@ bool CollapseStage::select_phase2_feasibility_fallback(
     if (!phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, candidate))
       continue;
 
-    const double candidate_energy = evaluate_phase2_proxy_energy(ctx, candidate);
+    const double candidate_energy = qem_only_score ?
+      evaluate_qem_only_energy(ctx, candidate) : evaluate_phase2_proxy_energy(ctx, candidate);
     if (!std::isfinite(candidate_energy))
       continue;
 
@@ -1684,39 +1752,65 @@ bool CollapseStage::select_phase2_qem_line_search_candidate(
   if (!finite_vec(qem_point))
     return false;
 
-  const auto accept_candidate = [&](const Vec3d& candidate)
-  {
-    if (!phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, candidate))
-      return false;
-
-    const double candidate_energy = evaluate_phase2_proxy_energy(ctx, candidate);
-    if (!std::isfinite(candidate_energy))
-      return false;
-
-    selected_point = candidate;
-    selected_energy = candidate_energy;
-    return true;
-  };
-
-  if (accept_candidate(qem_point))
-    return true;
-
-  const auto backtrack_from_base = [&](const Vec3d& base)
-  {
-    if (!finite_vec(base))
-      return false;
-
-    static const double alphas[] = { 0.75, 0.5, 0.25, 0.125, 0.0625, 0.0 };
-    for (double alpha : alphas)
-    {
-      if (accept_candidate(base + alpha * (qem_point - base)))
-        return true;
-    }
+  // Armijo line search, same structure as refine_collapse_placement_with_newton's
+  // damped-mode loop: start at full step (alpha=1, i.e. qem_point), require
+  // the energy decrease to be at least a fraction of the decrease predicted
+  // at the base point, and halve alpha until that holds (or give up after
+  // lineSearchMaxIter tries). This replaces the old fixed-list backtracking
+  // (which only checked hard constraints, never energy) with the same
+  // sufficient-decrease acceptance test Newton uses.
+  //
+  // QEM-only scoring: this value only feeds the phase2 PRIORITY QUEUE via
+  // compute_phase2_queue_placement_candidate; choose_phase2_collapse_placement
+  // discards it and re-scores the chosen point independently, so this stays
+  // consistent with solve_phase2_qem_placement's queue-time energy.
+  const Vec3d& base = ctx.tangential_smoothing_point;
+  if (!finite_vec(base))
     return false;
-  };
 
-  if (backtrack_from_base(ctx.tangential_smoothing_point))
+  const Vec3d direction = qem_point - base;
+  const double direction_length = direction.length();
+  const double base_energy = evaluate_qem_only_energy(ctx, base);
+  if (!std::isfinite(base_energy))
+    return false;
+
+  if (direction_length <= 1e-14)
+  {
+    if (!phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, base))
+      return false;
+    selected_point = base;
+    selected_energy = base_energy;
     return true;
+  }
+
+  // Newton has an analytic gradient to compute "descent" (predicted energy
+  // decrease for the full step) from; this is a closed-form solve with no
+  // gradient handy, so approximate the directional derivative at base along
+  // (qem_point - base) with a small finite-difference probe instead (same
+  // idea as finite_difference_newton_derivatives elsewhere in this file).
+  const double h = std::max(direction_length * 1e-4, ctx.local_scale * 1e-6);
+  const Vec3d probe = base + (h / direction_length) * direction;
+  const double probe_energy = evaluate_qem_only_energy(ctx, probe);
+  const double descent = std::isfinite(probe_energy) ?
+    std::max(1e-16, (base_energy - probe_energy) / h * direction_length) : 1e-16;
+
+  double alpha = 1.0;
+  const size_t max_iter = std::max<size_t>(param->lineSearchMaxIter, 1);
+  for (size_t ls = 0; ls < max_iter; ls++)
+  {
+    const Vec3d trial = base + alpha * direction;
+    const double trial_energy = evaluate_qem_only_energy(ctx, trial);
+    if (std::isfinite(trial_energy) &&
+      trial_energy <= base_energy - 1e-4 * alpha * descent &&
+      phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, trial))
+    {
+      selected_point = trial;
+      selected_energy = trial_energy;
+      return true;
+    }
+    alpha *= 0.5;
+  }
+
   return false;
 }
 
@@ -1831,7 +1925,7 @@ bool CollapseStage::choose_phase2_collapse_placement(
     }
   }
 
-  if (!found_valid_candidate && is_phase2_qem_no_collision_strategy())
+  if (!found_valid_candidate && use_qem)
   {
     Vec3d fallback_point;
     double fallback_energy = DBL_MAX;
@@ -2170,6 +2264,44 @@ bool CollapseStage::solve_phase2_qem_placement(
     }
   }
 
+  if (!pure_qem && param->positionFidelityWeight > 0.0)
+  {
+    // Linearize the (nonlinear) closest-point lookup at the tangential smoothing
+    // point, the same fixed reference used by the other local energies above.
+    // Pull each sample toward the ORIGINAL MESH'S TANGENT PLANE at that point
+    // (point-to-plane), not toward the point itself (point-to-point): a plane
+    // constrains only the normal direction and leaves the two tangential
+    // directions free, so independent samples near curved/creased regions
+    // don't fight each other into an off-surface compromise the way competing
+    // point targets can. This mirrors how the QEM term itself uses add_plane.
+    const Vec3d& ref = ctx.tangential_smoothing_point;
+    // Normalize by the sample count, same as the triangle-quality/uniformity/
+    // curvature blocks above (.../ fan_count), so this term's strength stays
+    // O(1) per vertex instead of growing with valence.
+    const double sample_count = 1.0 + 3.0 * static_cast<double>(ctx.fan_edges.size());
+    const double w_pf = param->positionFidelityWeight * inv_scale_sqr / sample_count;
+
+    const auto add_fidelity_sample = [&](double w, const Vec3d& bias)
+    {
+      const Vec3d sample_ref = bias + w * ref;
+      Vec3d normal;
+      double offset;
+      if (!closest_original_plane(sample_ref, normal, offset))
+        return;
+      // weight*(normal.(bias + w*x) + offset)^2
+      //   == (weight*w^2)*(normal.x + (normal.bias + offset)/w)^2
+      quadric.add_plane(w_pf * w * w, normal, ((normal | bias) + offset) / w);
+    };
+
+    add_fidelity_sample(1.0, Vec3d(0.0, 0.0, 0.0));
+    for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
+    {
+      add_fidelity_sample(1.0 / 3.0, (fan_edge.from + fan_edge.to) / 3.0);
+      add_fidelity_sample(0.5, fan_edge.from * 0.5);
+      add_fidelity_sample(0.5, fan_edge.to * 0.5);
+    }
+  }
+
   const double regularization =
     std::max(1e-12, 1e-8 * std::max(1.0, std::abs(quadric.trace3())));
   const bool solved = pure_qem ?
@@ -2218,8 +2350,14 @@ bool CollapseStage::solve_phase2_qem_placement(
       new_point = ctx.midpoint + offset / offset.length() * max_offset;
   }
 
-  energy = pure_qem ? param->qemWeight * evaluate_qem_energy(ctx, new_point) :
-    evaluate_phase2_proxy_energy(ctx, new_point);
+  // QEM-only, on purpose: the value returned here only ever reaches the
+  // phase2 PRIORITY QUEUE (compute_phase2_queue_placement_candidate) -- the
+  // choose_phase2_collapse_placement callers of this function discard this
+  // energy and independently re-score whatever candidate point comes out of
+  // it via evaluate_phase2_proxy_energy. So this only changes collapse
+  // ORDER, not which position gets picked for a given edge. Revert by
+  // restoring the `pure_qem ? ... : evaluate_phase2_proxy_energy(...)` form.
+  energy = evaluate_qem_only_energy(ctx, new_point);
   return finite_vec(new_point) && std::isfinite(energy);
 }
 
@@ -2336,13 +2474,13 @@ bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3
     return false;
 
   if (is_phase2_newton_only_strategy())
-    return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy);
+    return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy, /*qem_only_score*/true);
 
   if (!solve_phase2_qem_placement(ctx, new_point, energy))
   {
     if (is_phase2_qem_no_collision_strategy())
       return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy);
-    return false;
+    return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy);
   }
 
   if (is_phase2_qem_strategy() && !is_phase2_qem_no_collision_strategy())
@@ -2356,7 +2494,7 @@ bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3
       energy = line_search_energy;
       return true;
     }
-    return false;
+    return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy);
   }
 
   if (is_phase2_qem_strategy() &&
@@ -2370,6 +2508,22 @@ bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3
   return true;
 }
 
+void CollapseStage::refresh_phase2_average_lengths(bool refresh_original)
+{
+  avg_edge_length = 0.0;
+  for (EdgeHandle eh : rm->edges())
+    avg_edge_length += rm->data(eh).edge_length;
+  avg_edge_length = rm->n_edges() == 0 ? 0.0 : avg_edge_length / rm->n_edges();
+
+  if (!refresh_original && avg_original_edge_length > 0.0)
+    return;
+
+  avg_original_edge_length = 0.0;
+  for (EdgeHandle eh : om->edges())
+    avg_original_edge_length += om->data(eh).edge_length;
+  avg_original_edge_length = om->n_edges() == 0 ? 0.0 : avg_original_edge_length / om->n_edges();
+}
+
 bool CollapseStage::enqueue_phase2_candidate(EdgeHandle eh, size_t state)
 {
   if (!eh.is_valid() || rm->status(eh).deleted())
@@ -2380,7 +2534,29 @@ bool CollapseStage::enqueue_phase2_candidate(EdgeHandle eh, size_t state)
   if (!compute_phase2_queue_placement_candidate(eh, new_point, energy))
     return false;
 
-  phase2_edges_to_collapse.emplace(eh, state, -energy, new_point);
+  // Priority-only fairness bonus: the greedy global queue otherwise has no
+  // notion of "this region hasn't collapsed as far as it should have yet."
+  // If this fan is still smaller than the source-density-following
+  // target (ctx.local_scale < target_here), discount its priority energy so
+  // it doesn't keep losing the race to regions that are already at or past
+  // their own target -- without touching the placement/solve energy used to
+  // pick a position for this edge (that stays purely QEM/quality/uniformity/
+  // curvature, computed above).
+  double priority_energy = energy;
+  if (param->uniformityWeight > 0.0 && param->uniformityMode != "none")
+  {
+    auto fairness_collapser = new_edge_collapser();
+    set_phase2_edge_collapser_flags(fairness_collapser);
+    if (fairness_collapser.init(eh))
+    {
+      const Phase2PlacementContext ctx = make_phase2_placement_context(eh, fairness_collapser);
+      const double target_here = source_uniformity_target_length(ctx, ctx.midpoint);
+      const double deficit = std::max(0.0, 1.0 - ctx.local_scale / std::max(target_here, 1e-12));
+      priority_energy -= param->uniformityWeight * deficit;
+    }
+  }
+
+  phase2_edges_to_collapse.emplace(eh, state, -priority_energy, new_point);
   return true;
 }
 
@@ -2392,15 +2568,7 @@ void CollapseStage::initialize_phase2_candidates()
   update_states.resize(rm->n_edges(), 0);
   phase2_edges_to_collapse = Phase2EdgeRewardQueue();
 
-  avg_edge_length = 0.0;
-  for (EdgeHandle eh : rm->edges())
-    avg_edge_length += rm->data(eh).edge_length;
-  avg_edge_length = rm->n_edges() == 0 ? 0.0 : avg_edge_length / rm->n_edges();
-
-  avg_original_edge_length = 0.0;
-  for (EdgeHandle eh : om->edges())
-    avg_original_edge_length += om->data(eh).edge_length;
-  avg_original_edge_length = om->n_edges() == 0 ? 0.0 : avg_original_edge_length / om->n_edges();
+  refresh_phase2_average_lengths(true);
 
   Logger::user_logger->info(
     "phase 2 energy [{}]: initializing {} edge candidates.",
@@ -2562,15 +2730,7 @@ bool CollapseStage::refine_vertex_relocation_with_newton(
 
 void CollapseStage::do_phase2_final_newton_relocation()
 {
-  avg_edge_length = 0.0;
-  for (EdgeHandle eh : rm->edges())
-    avg_edge_length += rm->data(eh).edge_length;
-  avg_edge_length = rm->n_edges() == 0 ? 0.0 : avg_edge_length / rm->n_edges();
-
-  avg_original_edge_length = 0.0;
-  for (EdgeHandle eh : om->edges())
-    avg_original_edge_length += om->data(eh).edge_length;
-  avg_original_edge_length = om->n_edges() == 0 ? 0.0 : avg_original_edge_length / om->n_edges();
+  refresh_phase2_average_lengths(true);
 
   std::vector<VertexHandle> vertices;
   vertices.reserve(rm->n_vertices());
@@ -2748,10 +2908,13 @@ void CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
         VertexHandle center_v = edge_collapser.get_collapsed_center();
         if (has_merged_qem_quadric)
           update_phase2_qem_quadric_after_collapse(center_v, merged_qem_quadric);
-        update_phase2_after_collapsing(center_v);
         pass_collapsed_edges++;
         total_collapsed_edges++;
         remaining_vertices--;
+
+        if (total_collapsed_edges % 1000 == 0)
+          refresh_phase2_average_lengths(false);
+        update_phase2_after_collapsing(center_v);
 
         if (total_collapsed_edges % 1000 == 0)
         {

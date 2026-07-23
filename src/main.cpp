@@ -426,6 +426,7 @@ void enable_qem_phase2_defaults(Cage::ParamCageGenerator& param, bool skip_origi
     collapse.curvatureWeight = 1.0;
     collapse.triangleQualityWeight = 1.0;
     collapse.uniformityWeight = 1.0;
+    collapse.positionFidelityWeight = 0.0;
   }
 }
 

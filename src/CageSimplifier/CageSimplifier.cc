@@ -43,7 +43,6 @@ void enforce_qem_phase2(ParamCollapseStage& collapse, bool skip_original_collisi
     collapse.qemWeight = 1.0;
   collapse.selfBarrierWeight = 0.0;
   collapse.originalBarrierWeight = 0.0;
-  collapse.positionFidelityWeight = 0.0;
 
   if (skip_original_collision_check)
   {
@@ -53,6 +52,7 @@ void enforce_qem_phase2(ParamCollapseStage& collapse, bool skip_original_collisi
     collapse.curvatureWeight = 0.0;
     collapse.triangleQualityWeight = 0.0;
     collapse.uniformityWeight = 0.0;
+    collapse.positionFidelityWeight = 0.0;
     collapse.phase2NewtonQualityThreshold = 0.0;
     collapse.phase2NewtonResidualThreshold = 0.0;
     collapse.phase2NewtonFinalRefineCollapses = 0;
@@ -63,9 +63,10 @@ void enforce_qem_phase2(ParamCollapseStage& collapse, bool skip_original_collisi
     collapse.curvatureMode = "normal_matching";
   if (collapse.uniformityMode.empty() || collapse.uniformityMode == "none")
     collapse.uniformityMode = "source";
-  collapse.curvatureWeight = 1.0;
+  collapse.curvatureWeight = 0.0;
   collapse.triangleQualityWeight = 1.0;
-  collapse.uniformityWeight = 1.0;
+  collapse.uniformityWeight = 0.0;
+  collapse.positionFidelityWeight = 0.0;
 }
 }
 

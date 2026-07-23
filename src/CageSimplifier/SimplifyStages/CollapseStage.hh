@@ -218,12 +218,14 @@ private:
   NewtonDerivatives autodiff_newton_derivatives(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_newton_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_qem_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
+  double evaluate_qem_only_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_original_barrier_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_self_barrier_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_position_fidelity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_curvature_normal_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_dihedral_preservation_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_triangle_quality_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
+  double evaluate_triangle_quality_gap_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_uniformity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_phase2_proxy_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_phase2_refinement_residual(const Phase2PlacementContext& ctx, const Vec3d& x) const;
@@ -232,6 +234,7 @@ private:
   double ipc_barrier(double distance, double dhat) const;
   double source_size_at(const Vec3d& p) const;
   bool closest_original_point(const Vec3d& p, Vec3d& closest) const;
+  bool closest_original_plane(const Vec3d& p, Vec3d& normal, double& offset) const;
   bool collapse_target_valid(EdgeCollapser& edge_collapser, const Vec3d& x) const;
   bool sampled_path_valid(EdgeCollapser& edge_collapser, const Vec3d& from, const Vec3d& to) const;
   bool phase2_placement_satisfies_hard_constraints(
@@ -257,9 +260,10 @@ private:
   Eigen::Matrix4d phase2_qem_quadric(VertexHandle vh) const;
   bool select_phase2_feasibility_fallback(
     EdgeHandle eh, const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
-    Vec3d& new_point, double& energy) const;
+    Vec3d& new_point, double& energy, bool qem_only_score = false) const;
   bool compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3d& new_point, double& energy);
   bool enqueue_phase2_candidate(EdgeHandle eh, size_t state);
+  void refresh_phase2_average_lengths(bool refresh_original);
   void initialize_phase2_candidates();
   void update_phase2_after_collapsing(VertexHandle collapsed_center);
   bool refine_vertex_relocation_with_newton(
