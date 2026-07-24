@@ -46,7 +46,8 @@ public:
   void update(size_t _candidate_points_size, bool _allow_negtive, double _max_distance_error);
 private:
   double avg_edge_length;
-  double avg_original_edge_length;
+  double avg_source_edge_length;
+  bool avg_source_edge_length_initialized;
   std::vector<size_t> update_states;
 
   struct CollapseEdgeReward
@@ -145,7 +146,7 @@ private:
     Vec3d midpoint;
     double local_scale = 1.0;
     double edge_curvature = 0.0;
-    double global_target_length = 1.0;
+    double avg_cage_edge_length = 1.0;
   };
 
   struct NewtonDerivatives
@@ -166,6 +167,19 @@ private:
     bool newton_failed = false;
     bool used_fallback = false;
   };
+
+  struct Phase2QueueComponents
+  {
+    double qem = 0.0;
+    double original_barrier = 0.0;
+    double self_barrier = 0.0;
+    double position_fidelity = 0.0;
+    double curvature = 0.0;
+    double triangle_quality = 0.0;
+    double uniformity = 0.0;
+  };
+
+  Phase2QueueComponents phase2_queue_component_maxima;
 
   std::vector<Vec3d> generate_candidate_points_for_collapse(EdgeHandle e, EdgeCollapser& edge_collapser);
   bool find_collapse_hausdorff_deviation(
@@ -225,14 +239,17 @@ private:
   double evaluate_curvature_normal_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_dihedral_preservation_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_triangle_quality_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
-  double evaluate_triangle_quality_gap_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
+  double evaluate_pre_collapse_triangle_quality_penalty(const Phase2PlacementContext& ctx) const;
   double evaluate_uniformity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_phase2_proxy_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
+  Phase2QueueComponents evaluate_phase2_queue_components(
+    const Phase2PlacementContext& ctx, const Vec3d& x) const;
+  double evaluate_phase2_queue_score(const Phase2QueueComponents& components) const;
   double evaluate_phase2_refinement_residual(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double calc_phase2_fan_min_quality(const Phase2PlacementContext& ctx, const Vec3d& x) const;
-  double source_uniformity_target_length(const Phase2PlacementContext& ctx, const Vec3d& p) const;
+  double source_uniformity_target_length(const Phase2PlacementContext& ctx, const Vec3d& sample_point) const;
   double ipc_barrier(double distance, double dhat) const;
-  double source_size_at(const Vec3d& p) const;
+  double source_edge_length_at(const Vec3d& sample_point) const;
   bool closest_original_point(const Vec3d& p, Vec3d& closest) const;
   bool closest_original_plane(const Vec3d& p, Vec3d& normal, double& offset) const;
   bool collapse_target_valid(EdgeCollapser& edge_collapser, const Vec3d& x) const;
@@ -262,8 +279,10 @@ private:
     EdgeHandle eh, const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
     Vec3d& new_point, double& energy, bool qem_only_score = false) const;
   bool compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3d& new_point, double& energy);
+  bool compute_phase2_queue_candidate_data(
+    EdgeHandle eh, Vec3d& new_point, Phase2QueueComponents& components);
   bool enqueue_phase2_candidate(EdgeHandle eh, size_t state);
-  void refresh_phase2_average_lengths(bool refresh_original);
+  void refresh_phase2_average_lengths();
   void initialize_phase2_candidates();
   void update_phase2_after_collapsing(VertexHandle collapsed_center);
   bool refine_vertex_relocation_with_newton(

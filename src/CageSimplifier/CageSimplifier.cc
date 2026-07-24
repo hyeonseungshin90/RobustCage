@@ -33,40 +33,13 @@ void normalize_phase2_mode_alias(std::string& mode)
     mode = "qem_no_collision";
 }
 
-void enforce_qem_phase2(ParamCollapseStage& collapse, bool skip_original_collision_check)
+void configure_qem_phase2_strategy(
+  ParamCollapseStage& collapse, bool skip_original_collision_check)
 {
   collapse.collapsePlacementMethod = "optimization";
   collapse.phase2PlacementStrategy =
     skip_original_collision_check ? "qem_no_collision" : "qem";
   collapse.robustnessMode = "exact_reject";
-  if (collapse.qemWeight <= 0.0)
-    collapse.qemWeight = 1.0;
-  collapse.selfBarrierWeight = 0.0;
-  collapse.originalBarrierWeight = 0.0;
-
-  if (skip_original_collision_check)
-  {
-    collapse.qemWeight = 1.0;
-    collapse.curvatureMode = "none";
-    collapse.uniformityMode = "none";
-    collapse.curvatureWeight = 0.0;
-    collapse.triangleQualityWeight = 0.0;
-    collapse.uniformityWeight = 0.0;
-    collapse.positionFidelityWeight = 0.0;
-    collapse.phase2NewtonQualityThreshold = 0.0;
-    collapse.phase2NewtonResidualThreshold = 0.0;
-    collapse.phase2NewtonFinalRefineCollapses = 0;
-    return;
-  }
-
-  if (collapse.curvatureMode.empty() || collapse.curvatureMode == "none")
-    collapse.curvatureMode = "normal_matching";
-  if (collapse.uniformityMode.empty() || collapse.uniformityMode == "none")
-    collapse.uniformityMode = "source";
-  collapse.curvatureWeight = 0.0;
-  collapse.triangleQualityWeight = 1.0;
-  collapse.uniformityWeight = 0.0;
-  collapse.positionFidelityWeight = 0.0;
 }
 }
 
@@ -98,7 +71,7 @@ void CageSimplifier::simplify()
   normalize_phase2_mode_alias(param->phase2Mode);
 
   if (is_qem_phase2_mode(param->phase2Mode))
-    enforce_qem_phase2(
+    configure_qem_phase2_strategy(
       param->paramCollapse,
       param->phase2Mode == "qem_no_collision");
 

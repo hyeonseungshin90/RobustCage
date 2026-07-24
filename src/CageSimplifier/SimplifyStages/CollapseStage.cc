@@ -19,6 +19,10 @@ namespace CageSimp
 {
 namespace
 {
+// Queue-only uniformity experiment. Set this to true to restore uniformity in
+// placement objectives while keeping the queue formula unchanged.
+constexpr bool kEnableUniformityInPhase2Solve = false;
+
 double sqr(double v)
 {
   return v * v;
@@ -479,7 +483,8 @@ CollapseStage::CollapseStage(
   ot(original_tree), lrt(remeshing_tree), og(original_grid),
   original_diagonal_length(_original_diagonal_length),
   avg_edge_length(0.0),
-  avg_original_edge_length(0.0)
+  avg_source_edge_length(0.0),
+  avg_source_edge_length_initialized(false)
 {}
 
 CollapseStage::~CollapseStage()
@@ -628,7 +633,7 @@ CollapseStage::Phase2PlacementContext CollapseStage::make_phase2_placement_conte
   Phase2PlacementContext ctx;
   ctx.edge = eh;
   ctx.halfedges = edge_collapser.get_halfedges();
-  ctx.global_target_length = avg_edge_length > 0.0 ? avg_edge_length : original_diagonal_length * 0.01;
+  ctx.avg_cage_edge_length = avg_edge_length > 0.0 ? avg_edge_length : original_diagonal_length * 0.01;
 
   HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
   const VertexHandle from_v = rm->from_vertex_handle(heh);
@@ -712,7 +717,7 @@ CollapseStage::Phase2PlacementContext CollapseStage::make_phase2_vertex_relocati
 {
   Phase2PlacementContext ctx;
   ctx.halfedges = vertex_relocater.get_halfedges();
-  ctx.global_target_length = avg_edge_length > 0.0 ? avg_edge_length : original_diagonal_length * 0.01;
+  ctx.avg_cage_edge_length = avg_edge_length > 0.0 ? avg_edge_length : original_diagonal_length * 0.01;
   ctx.midpoint = rm->point(vh);
   ctx.tangential_smoothing_point = vertex_relocater.find_weighted_tangential_smooth_target();
   if (!finite_vec(ctx.tangential_smoothing_point))
@@ -794,12 +799,12 @@ double CollapseStage::evaluate_qem_energy(const Phase2PlacementContext& ctx, con
 }
 
 // Experimental: score by QEM alone (ignores quality/uniformity/curvature/
-// position-fidelity/gap), used only to test ordering the queue purely by
-// QEM cost while leaving the actual placement to Newton's full objective.
-// Kept as a separate function so this is a one-line toggle to revert --
-// see the is_phase2_newton_only_strategy() branch in
-// compute_phase2_queue_placement_candidate that passes qem_only_score=true
-// into select_phase2_feasibility_fallback.
+// position fidelity), for testing ordering the queue purely by QEM
+// cost while leaving the actual placement to Newton's full objective.
+// Not currently wired to anything (the qem_only_score parameter on
+// select_phase2_feasibility_fallback defaults to false everywhere, including
+// the is_phase2_newton_only_strategy() branch in
+// compute_phase2_queue_placement_candidate) -- pass true there to re-enable.
 double CollapseStage::evaluate_qem_only_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
 {
   if (!finite_vec(x))
@@ -1101,45 +1106,48 @@ double CollapseStage::evaluate_triangle_quality_energy(const Phase2PlacementCont
   return energy;
 }
 
-// Extra penalty when the WORST triangle in the fan falls below
-// phase2NewtonQualityThreshold, on top of the smooth average-quality term
-// above. min() over the fan is differentiable everywhere except at exact
-// ties between two worst triangles (measure zero, same caveat as clamp/ReLU
-// elsewhere in this codebase) -- see the matching branch-and-differentiate
-// treatment in autodiff_newton_derivatives.
-double CollapseStage::evaluate_triangle_quality_gap_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
+double CollapseStage::evaluate_pre_collapse_triangle_quality_penalty(
+  const Phase2PlacementContext& ctx) const
 {
-  if (param->triangleQualityWeight <= 0.0 || param->phase2NewtonQualityThreshold <= 0.0 || !finite_vec(x))
+  if (!ctx.edge.is_valid() || rm->status(ctx.edge).deleted())
     return 0.0;
 
-  const double min_quality = calc_phase2_fan_min_quality(ctx, x);
-  if (min_quality >= param->phase2NewtonQualityThreshold)
+  std::set<FaceHandle> faces;
+  one_ring_faces_around_edge(rm, rm->halfedge_handle(ctx.edge, 0), faces);
+  if (faces.empty())
     return 0.0;
 
-  const double gap = (param->phase2NewtonQualityThreshold - min_quality) /
-    std::max(param->phase2NewtonQualityThreshold, 1e-8);
-  return 10.0 * sqr(gap);
+  double smooth_quality_score = 0.0;
+  for (FaceHandle fh : faces)
+  {
+    const double quality = clamp_value(calc_triangle_quality(rm, fh), 0.0, 1.0);
+    smooth_quality_score += sqr(1.0 - quality);
+  }
+  return clamp_value(
+    smooth_quality_score / static_cast<double>(faces.size()), 0.0, 1.0);
 }
 
-double CollapseStage::source_size_at(const Vec3d& p) const
+double CollapseStage::source_edge_length_at(const Vec3d& sample_point) const
 {
+  const double fallback_length =
+    avg_source_edge_length > 0.0 ? avg_source_edge_length : avg_edge_length;
   FaceHandle closest_face;
 #ifdef USE_TREE_SEARCH
   if (!ot)
-    return avg_edge_length;
-  closest_face = FaceHandle(ot->closest_point(p).second);
+    return fallback_length;
+  closest_face = FaceHandle(ot->closest_point(sample_point).second);
 #else
   if (!og)
-    return avg_edge_length;
-  closest_face = FaceHandle(og->closest_point(p).second);
+    return fallback_length;
+  closest_face = FaceHandle(og->closest_point(sample_point).second);
 #endif
 
   if (!closest_face.is_valid() || closest_face.idx() < 0 ||
     closest_face.idx() >= static_cast<int>(om->n_faces()))
-    return avg_edge_length;
+    return fallback_length;
 
-  const double source_size = face_average_edge_length(om, closest_face);
-  return source_size > 0.0 ? source_size : avg_edge_length;
+  const double source_edge_length = face_average_edge_length(om, closest_face);
+  return source_edge_length > 0.0 ? source_edge_length : fallback_length;
 }
 
 double CollapseStage::evaluate_uniformity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
@@ -1150,9 +1158,10 @@ double CollapseStage::evaluate_uniformity_energy(const Phase2PlacementContext& c
   double energy = 0.0;
   for (const Vec3d& neighbor : ctx.neighbor_points)
   {
-    double target_length = source_uniformity_target_length(ctx, (x + neighbor) * 0.5);
-    target_length = std::max(target_length, ctx.local_scale * 1e-3);
-    energy += sqr(((x - neighbor).length() - target_length) / target_length);
+    const double target_length = source_uniformity_target_length(ctx, (x + neighbor) * 0.5);
+    const double relative_overshoot =
+      ((x - neighbor).length() - target_length) / target_length;
+    energy += sqr(std::max(relative_overshoot, 0.0));
   }
   return energy;
 }
@@ -1167,7 +1176,7 @@ double CollapseStage::evaluate_newton_energy(const Phase2PlacementContext& ctx, 
   // same relative strength (O(1) per vertex, not growing with valence)
   // regardless of which placement strategy (qem vs newton) is in use.
   const double fan_count = static_cast<double>(std::max<size_t>(ctx.fan_edges.size(), 1));
-  const double neighbor_count = static_cast<double>(std::max<size_t>(ctx.neighbor_points.size(), 1));
+  const double neighbor_count = static_cast<double>(ctx.neighbor_points.size());
 
   double energy = 0.0;
   energy += param->qemWeight * evaluate_qem_energy(ctx, x);
@@ -1176,8 +1185,8 @@ double CollapseStage::evaluate_newton_energy(const Phase2PlacementContext& ctx, 
   energy += param->positionFidelityWeight * evaluate_position_fidelity_energy(ctx, x);
   energy += param->curvatureWeight * evaluate_curvature_normal_energy(ctx, x) / fan_count;
   energy += param->triangleQualityWeight * evaluate_triangle_quality_energy(ctx, x) / fan_count;
-  energy += param->triangleQualityWeight * evaluate_triangle_quality_gap_energy(ctx, x);
-  energy += param->uniformityWeight * evaluate_uniformity_energy(ctx, x) / neighbor_count;
+  if (kEnableUniformityInPhase2Solve)
+    energy += param->uniformityWeight * evaluate_uniformity_energy(ctx, x) / neighbor_count;
   return std::isfinite(energy) ? energy : DBL_MAX;
 }
 
@@ -1374,7 +1383,8 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
     }
   }
 
-  if (param->uniformityWeight > 0.0 && param->uniformityMode != "none")
+  if (kEnableUniformityInPhase2Solve &&
+    param->uniformityWeight > 0.0 && param->uniformityMode != "none")
   {
     for (const Vec3d& neighbor : ctx.neighbor_points)
     {
@@ -1399,7 +1409,7 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
   // (deriv.energy, set above from evaluate_newton_energy) used for
   // acceptance/line-search comparisons.
   const double fan_count = static_cast<double>(std::max<size_t>(ctx.fan_edges.size(), 1));
-  const double neighbor_count = static_cast<double>(std::max<size_t>(ctx.neighbor_points.size(), 1));
+  const double neighbor_count = static_cast<double>(ctx.neighbor_points.size());
   double curvature_multiplier = 1.0;
   if (param->curvatureMode == "weighted_qem" || param->curvatureMode == "weighted-qem")
   {
@@ -1477,48 +1487,20 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
     ad_energy += param->triangleQualityWeight * diff_sqr(ADScalar(1.0) - quality) / fan_count;
   }
 
-  // Match evaluate_triangle_quality_gap_energy: extra penalty for triangles
-  // currently below phase2NewtonQualityThreshold. Membership (which
-  // triangles are "below threshold") is decided from the real quality at
-  // the current x -- same frozen-at-current-iterate treatment used
-  // elsewhere in this function (e.g. closest-face lookups) for decisions
-  // that aren't themselves smooth -- while the penalty term itself stays
-  // differentiable so Newton's gradient reflects it.
-  if (param->triangleQualityWeight > 0.0 && param->phase2NewtonQualityThreshold > 0.0)
-  {
-    for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
-    {
-      const double real_quality = clamp_value(
-        triangle_quality_from_points(fan_edge.from, fan_edge.to, x), 0.0, 1.0);
-      if (real_quality < param->phase2NewtonQualityThreshold)
-      {
-        const ADScalar quality = diff_clamp(diff_triangle_quality(
-          diff_vec<ADScalar>(fan_edge.from),
-          diff_vec<ADScalar>(fan_edge.to),
-          ad_point), 0.0, 1.0);
-        const ADScalar gap = (ADScalar(param->phase2NewtonQualityThreshold) - quality) /
-          std::max(param->phase2NewtonQualityThreshold, 1e-8);
-        ad_energy += param->triangleQualityWeight * 10.0 * diff_sqr(gap) / fan_count;
-      }
-    }
-  }
-
   for (const DiffUniformityTerm& term : uniformity_terms)
   {
-    const double target_length = std::max(term.target_length, ctx.local_scale * 1e-3);
+    const double target_length = term.target_length;
     const ADScalar length = diff_norm(ad_point - diff_vec<ADScalar>(term.neighbor));
+    ADScalar relative_overshoot = (length - target_length) / target_length;
+    if (relative_overshoot < 0.0)
+      relative_overshoot = 0.0;
     ad_energy += param->uniformityWeight *
-      diff_sqr((length - target_length) / target_length) / neighbor_count;
+      diff_sqr(relative_overshoot) / neighbor_count;
   }
 
   Eigen::Vector3d gradient = Eigen::Vector3d::Zero();
   Eigen::Matrix3d hessian = autodiff::hessian(ad_energy, ad_x, gradient);
   hessian = 0.5 * (hessian + hessian.transpose());
-
-  const double damping = std::max(
-    1e-10,
-    1e-6 * std::max(1.0, std::abs(deriv.energy)) / std::max(sqr(ctx.local_scale), 1e-12));
-  hessian += Eigen::Matrix3d::Identity() * damping;
 
   if (!std::isfinite(gradient.x()) || !std::isfinite(gradient.y()) || !std::isfinite(gradient.z()) ||
     !hessian.allFinite())
@@ -1549,15 +1531,164 @@ bool CollapseStage::sampled_path_valid(EdgeCollapser& edge_collapser, const Vec3
   return true;
 }
 
-// Score used for queue priority and candidate comparison. Deliberately just
-// forwards to evaluate_newton_energy so that "which edge looks cheapest" and
-// "which candidate is best" are judged by the exact same energy across every
-// placement strategy (qem, newton_only, adaptive, ...), instead of two
-// formulas (with different normalization/terms) that can silently diverge.
-// This does not run Newton itself -- it's a plain evaluation at a single x.
+// Objective used for candidate comparison and line search. Queue ordering uses
+// evaluate_phase2_queue_score after the candidate position has been selected.
 double CollapseStage::evaluate_phase2_proxy_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
 {
   return evaluate_newton_energy(ctx, x);
+}
+
+// Compute dimensionless per-edge queue components. Unbounded components are
+// divided by their pass-wide maxima later, after every initial candidate in
+// the pass has been evaluated.
+CollapseStage::Phase2QueueComponents CollapseStage::evaluate_phase2_queue_components(
+  const Phase2PlacementContext& ctx, const Vec3d& x) const
+{
+  Phase2QueueComponents components;
+  if (!finite_vec(x))
+  {
+    components.qem = DBL_MAX;
+    return components;
+  }
+
+  if (param->qemWeight > 0.0)
+  {
+    double qem_normalizer = 0.0;
+    if (ctx.use_qem_matrix)
+    {
+      const double plane_count = std::max(ctx.qem_matrix.topLeftCorner<3, 3>().trace(), 0.0);
+      qem_normalizer = plane_count * sqr(ctx.local_scale);
+    }
+    else
+    {
+      for (const QEMPlane& plane : ctx.qem_planes)
+        qem_normalizer += std::max(plane.weight, 0.0);
+    }
+
+    components.qem =
+      evaluate_qem_energy(ctx, x) / std::max(qem_normalizer, 1e-24);
+  }
+
+  const double fan_count =
+    static_cast<double>(std::max<size_t>(ctx.fan_edges.size(), 1));
+
+  if (param->originalBarrierWeight > 0.0)
+  {
+    components.original_barrier =
+      evaluate_original_barrier_energy(ctx, x) / (6.0 * fan_count);
+  }
+
+  if (param->selfBarrierWeight > 0.0)
+  {
+    components.self_barrier =
+      evaluate_self_barrier_energy(ctx, x) / (4.0 * fan_count);
+  }
+
+  if (param->positionFidelityWeight > 0.0)
+    components.position_fidelity = evaluate_position_fidelity_energy(ctx, x);
+
+  if (param->curvatureWeight > 0.0 &&
+    (param->curvatureMode == "normal_matching" ||
+      param->curvatureMode == "normal-matching"))
+  {
+    components.curvature =
+      evaluate_curvature_normal_energy(ctx, x) / fan_count;
+  }
+
+  if (param->triangleQualityWeight > 0.0)
+  {
+    const double post_collapse_penalty = clamp_value(
+      evaluate_triangle_quality_energy(ctx, x) / fan_count, 0.0, 1.0);
+    const double pre_collapse_penalty =
+      evaluate_pre_collapse_triangle_quality_penalty(ctx);
+
+    // Positive improvement means this collapse removes more quality penalty
+    // than it creates. Map the [-1, 1] improvement to a [0, 1] cost so it can
+    // share the normalized queue with the absolute post-collapse penalty.
+    const double quality_improvement =
+      pre_collapse_penalty - post_collapse_penalty;
+    const double improvement_cost = 0.5 * (1.0 - quality_improvement);
+    components.triangle_quality =
+      0.5 * (post_collapse_penalty + improvement_cost);
+  }
+
+  if (param->uniformityWeight > 0.0 && param->uniformityMode != "none")
+  {
+    // Source-adaptive edge-size ratio used only for queue ordering:
+    //   source_ratio = nearest source-face mean edge / source global mean edge
+    //   cage_target = cage global mean edge * source_ratio
+    //   queue ratio = current cage edge / cage_target
+    // The pass-wide maximum normalizes this component later. A smaller ratio
+    // therefore gives this edge a better (smaller) queue score.
+    const double target_length =
+      source_uniformity_target_length(ctx, ctx.midpoint);
+    const double cage_edge_length =
+      (ctx.endpoint1 - ctx.endpoint0).length();
+    components.uniformity =
+      cage_edge_length / std::max(target_length, 1e-24);
+  }
+
+  return components;
+}
+
+// Normalize unbounded components by maxima frozen at the beginning of the
+// current pass, then combine the active components as a weighted average.
+double CollapseStage::evaluate_phase2_queue_score(
+  const Phase2QueueComponents& components) const
+{
+  double weighted_score = 0.0;
+  double total_weight = 0.0;
+  const auto normalized_by_pass_max = [](double value, double maximum)
+  {
+    if (!std::isfinite(value))
+      return 1.0;
+    if (maximum <= 1e-24)
+      return 0.0;
+    return clamp_value(value / maximum, 0.0, 1.0);
+  };
+  const auto add_component = [&](double weight, double score)
+  {
+    if (weight <= 0.0)
+      return;
+    weighted_score += weight * clamp_value(score, 0.0, 1.0);
+    total_weight += weight;
+  };
+
+  add_component(
+    param->qemWeight,
+    normalized_by_pass_max(components.qem, phase2_queue_component_maxima.qem));
+  add_component(
+    param->originalBarrierWeight,
+    normalized_by_pass_max(
+      components.original_barrier,
+      phase2_queue_component_maxima.original_barrier));
+  add_component(
+    param->selfBarrierWeight,
+    normalized_by_pass_max(
+      components.self_barrier,
+      phase2_queue_component_maxima.self_barrier));
+  add_component(
+    param->positionFidelityWeight,
+    normalized_by_pass_max(
+      components.position_fidelity,
+      phase2_queue_component_maxima.position_fidelity));
+
+  if (param->curvatureMode == "normal_matching" ||
+    param->curvatureMode == "normal-matching")
+    add_component(param->curvatureWeight, components.curvature);
+
+  add_component(param->triangleQualityWeight, components.triangle_quality);
+
+  if (param->uniformityMode != "none")
+  {
+    add_component(
+      param->uniformityWeight,
+      normalized_by_pass_max(
+        components.uniformity,
+        phase2_queue_component_maxima.uniformity));
+  }
+
+  return total_weight <= 0.0 ? 0.0 : weighted_score / total_weight;
 }
 
 double CollapseStage::evaluate_phase2_refinement_residual(const Phase2PlacementContext& ctx, const Vec3d& x) const
@@ -1577,11 +1708,12 @@ double CollapseStage::evaluate_phase2_refinement_residual(const Phase2PlacementC
       residual += param->curvatureWeight * evaluate_dihedral_preservation_energy(ctx, x);
   }
 
-  if (param->uniformityWeight > 0.0 && param->uniformityMode != "none")
+  if (kEnableUniformityInPhase2Solve &&
+    param->uniformityWeight > 0.0 && param->uniformityMode != "none")
   {
-    const double denom = std::max<size_t>(ctx.neighbor_points.size(), 1);
+    const double denom = static_cast<double>(ctx.neighbor_points.size());
     residual += param->uniformityWeight * evaluate_uniformity_energy(ctx, x) /
-      static_cast<double>(denom);
+      denom;
   }
 
   if (param->positionFidelityWeight > 0.0)
@@ -1603,24 +1735,21 @@ double CollapseStage::calc_phase2_fan_min_quality(const Phase2PlacementContext& 
   return min_quality == DBL_MAX ? 1.0 : min_quality;
 }
 
-double CollapseStage::source_uniformity_target_length(const Phase2PlacementContext& ctx, const Vec3d& p) const
+double CollapseStage::source_uniformity_target_length(const Phase2PlacementContext& ctx, const Vec3d& sample_point) const
 {
-  double target_length = ctx.global_target_length;
+  double target_length = ctx.avg_cage_edge_length;
   if (param->uniformityMode == "source")
   {
-    const double source_length = source_size_at(p);
-    if (avg_original_edge_length > 0.0 && std::isfinite(source_length))
+    const double source_edge_length = source_edge_length_at(sample_point);
+    if (avg_source_edge_length > 0.0 &&
+      source_edge_length > 0.0 && std::isfinite(source_edge_length))
     {
-      const double ratio = clamp_value(source_length / avg_original_edge_length, 0.5, 2.0);
+      const double ratio = source_edge_length / avg_source_edge_length;
       target_length *= ratio;
     }
   }
 
-  const double global_floor = ctx.global_target_length > 0.0 ?
-    0.25 * ctx.global_target_length : 0.0;
-  return std::max(
-    target_length,
-    std::max(global_floor, ctx.local_scale * 1e-3));
+  return target_length;
 }
 
 // Hard validity test for a proposed new vertex position. Collision checks are
@@ -1760,17 +1889,16 @@ bool CollapseStage::select_phase2_qem_line_search_candidate(
   // (which only checked hard constraints, never energy) with the same
   // sufficient-decrease acceptance test Newton uses.
   //
-  // QEM-only scoring: this value only feeds the phase2 PRIORITY QUEUE via
-  // compute_phase2_queue_placement_candidate; choose_phase2_collapse_placement
-  // discards it and re-scores the chosen point independently, so this stays
-  // consistent with solve_phase2_qem_placement's queue-time energy.
+  // Scored with evaluate_phase2_proxy_energy (all currently nonzero-weight
+  // terms) to select a placement along this line. Queue priority is evaluated
+  // separately on the selected point with evaluate_phase2_queue_score.
   const Vec3d& base = ctx.tangential_smoothing_point;
   if (!finite_vec(base))
     return false;
 
   const Vec3d direction = qem_point - base;
   const double direction_length = direction.length();
-  const double base_energy = evaluate_qem_only_energy(ctx, base);
+  const double base_energy = evaluate_phase2_proxy_energy(ctx, base);
   if (!std::isfinite(base_energy))
     return false;
 
@@ -1790,7 +1918,7 @@ bool CollapseStage::select_phase2_qem_line_search_candidate(
   // idea as finite_difference_newton_derivatives elsewhere in this file).
   const double h = std::max(direction_length * 1e-4, ctx.local_scale * 1e-6);
   const Vec3d probe = base + (h / direction_length) * direction;
-  const double probe_energy = evaluate_qem_only_energy(ctx, probe);
+  const double probe_energy = evaluate_phase2_proxy_energy(ctx, probe);
   const double descent = std::isfinite(probe_energy) ?
     std::max(1e-16, (base_energy - probe_energy) / h * direction_length) : 1e-16;
 
@@ -1799,7 +1927,7 @@ bool CollapseStage::select_phase2_qem_line_search_candidate(
   for (size_t ls = 0; ls < max_iter; ls++)
   {
     const Vec3d trial = base + alpha * direction;
-    const double trial_energy = evaluate_qem_only_energy(ctx, trial);
+    const double trial_energy = evaluate_phase2_proxy_energy(ctx, trial);
     if (std::isfinite(trial_energy) &&
       trial_energy <= base_energy - 1e-4 * alpha * descent &&
       phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, trial))
@@ -2195,13 +2323,14 @@ bool CollapseStage::solve_phase2_qem_placement(
     }
   }
 
-  if (!pure_qem && param->uniformityWeight > 0.0 && param->uniformityMode != "none" && !ctx.neighbor_points.empty())
+  if (kEnableUniformityInPhase2Solve && !pure_qem &&
+    param->uniformityWeight > 0.0 && param->uniformityMode != "none" &&
+    !ctx.neighbor_points.empty())
   {
     const double neighbor_count = static_cast<double>(ctx.neighbor_points.size());
     for (const Vec3d& neighbor : ctx.neighbor_points)
     {
-      double target_length = source_uniformity_target_length(ctx, (ctx.midpoint + neighbor) * 0.5);
-      target_length = std::max(target_length, ctx.local_scale * 1e-3);
+      const double target_length = source_uniformity_target_length(ctx, (ctx.midpoint + neighbor) * 0.5);
 
       Vec3d direction =
         normalized_or_fallback(ctx.midpoint - neighbor, ctx.tangential_smoothing_point - neighbor);
@@ -2350,14 +2479,9 @@ bool CollapseStage::solve_phase2_qem_placement(
       new_point = ctx.midpoint + offset / offset.length() * max_offset;
   }
 
-  // QEM-only, on purpose: the value returned here only ever reaches the
-  // phase2 PRIORITY QUEUE (compute_phase2_queue_placement_candidate) -- the
-  // choose_phase2_collapse_placement callers of this function discard this
-  // energy and independently re-score whatever candidate point comes out of
-  // it via evaluate_phase2_proxy_energy. So this only changes collapse
-  // ORDER, not which position gets picked for a given edge. Revert by
-  // restoring the `pure_qem ? ... : evaluate_phase2_proxy_energy(...)` form.
-  energy = evaluate_qem_only_energy(ctx, new_point);
+  // This energy compares placement candidates. Queue priority is recomputed
+  // from the selected point with normalized [0, 1] components.
+  energy = evaluate_phase2_proxy_energy(ctx, new_point);
   return finite_vec(new_point) && std::isfinite(energy);
 }
 
@@ -2412,14 +2536,15 @@ bool CollapseStage::solve_phase2_quadratic_surrogate(
     }
   }
 
-  if (param->uniformityWeight > 0.0 && param->uniformityMode != "none" && !ctx.neighbor_points.empty())
+  if (kEnableUniformityInPhase2Solve &&
+    param->uniformityWeight > 0.0 && param->uniformityMode != "none" &&
+    !ctx.neighbor_points.empty())
   {
     const double uniformity_surrogate_scale = 0.10;
     const double neighbor_count = static_cast<double>(ctx.neighbor_points.size());
     for (const Vec3d& neighbor : ctx.neighbor_points)
     {
-      double target_length = source_uniformity_target_length(ctx, (ctx.midpoint + neighbor) * 0.5);
-      target_length = std::max(target_length, ctx.local_scale * 1e-3);
+      const double target_length = source_uniformity_target_length(ctx, (ctx.midpoint + neighbor) * 0.5);
       Vec3d direction =
         normalized_or_fallback(ctx.midpoint - neighbor, ctx.tangential_smoothing_point - neighbor);
       direction = normalized_or_fallback(direction, Vec3d(1.0, 0.0, 0.0));
@@ -2474,7 +2599,7 @@ bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3
     return false;
 
   if (is_phase2_newton_only_strategy())
-    return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy, /*qem_only_score*/true);
+    return select_phase2_feasibility_fallback(eh, ctx, edge_collapser, new_point, energy, /*qem_only_score*/false);
 
   if (!solve_phase2_qem_placement(ctx, new_point, energy))
   {
@@ -2508,20 +2633,46 @@ bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3
   return true;
 }
 
-void CollapseStage::refresh_phase2_average_lengths(bool refresh_original)
+bool CollapseStage::compute_phase2_queue_candidate_data(
+  EdgeHandle eh, Vec3d& new_point, Phase2QueueComponents& components)
+{
+  double placement_energy = DBL_MAX;
+  if (!compute_phase2_queue_placement_candidate(
+    eh, new_point, placement_energy))
+    return false;
+
+  auto score_collapser = new_edge_collapser();
+  set_phase2_edge_collapser_flags(score_collapser);
+  if (!score_collapser.init(eh))
+    return false;
+
+  const Phase2PlacementContext score_ctx =
+    make_phase2_placement_context(eh, score_collapser);
+  components = evaluate_phase2_queue_components(score_ctx, new_point);
+  return std::isfinite(components.qem) &&
+    std::isfinite(components.original_barrier) &&
+    std::isfinite(components.self_barrier) &&
+    std::isfinite(components.position_fidelity) &&
+    std::isfinite(components.curvature) &&
+    std::isfinite(components.triangle_quality) &&
+    std::isfinite(components.uniformity);
+}
+
+void CollapseStage::refresh_phase2_average_lengths()
 {
   avg_edge_length = 0.0;
   for (EdgeHandle eh : rm->edges())
     avg_edge_length += rm->data(eh).edge_length;
   avg_edge_length = rm->n_edges() == 0 ? 0.0 : avg_edge_length / rm->n_edges();
 
-  if (!refresh_original && avg_original_edge_length > 0.0)
+  if (avg_source_edge_length_initialized)
     return;
 
-  avg_original_edge_length = 0.0;
+  avg_source_edge_length = 0.0;
   for (EdgeHandle eh : om->edges())
-    avg_original_edge_length += om->data(eh).edge_length;
-  avg_original_edge_length = om->n_edges() == 0 ? 0.0 : avg_original_edge_length / om->n_edges();
+    avg_source_edge_length += om->data(eh).edge_length;
+  avg_source_edge_length = om->n_edges() == 0 ? 0.0 : avg_source_edge_length / om->n_edges();
+  avg_source_edge_length_initialized = true;
 }
 
 bool CollapseStage::enqueue_phase2_candidate(EdgeHandle eh, size_t state)
@@ -2530,33 +2681,16 @@ bool CollapseStage::enqueue_phase2_candidate(EdgeHandle eh, size_t state)
     return false;
 
   Vec3d new_point;
-  double energy = DBL_MAX;
-  if (!compute_phase2_queue_placement_candidate(eh, new_point, energy))
+  Phase2QueueComponents components;
+  if (!compute_phase2_queue_candidate_data(eh, new_point, components))
     return false;
 
-  // Priority-only fairness bonus: the greedy global queue otherwise has no
-  // notion of "this region hasn't collapsed as far as it should have yet."
-  // If this fan is still smaller than the source-density-following
-  // target (ctx.local_scale < target_here), discount its priority energy so
-  // it doesn't keep losing the race to regions that are already at or past
-  // their own target -- without touching the placement/solve energy used to
-  // pick a position for this edge (that stays purely QEM/quality/uniformity/
-  // curvature, computed above).
-  double priority_energy = energy;
-  if (param->uniformityWeight > 0.0 && param->uniformityMode != "none")
-  {
-    auto fairness_collapser = new_edge_collapser();
-    set_phase2_edge_collapser_flags(fairness_collapser);
-    if (fairness_collapser.init(eh))
-    {
-      const Phase2PlacementContext ctx = make_phase2_placement_context(eh, fairness_collapser);
-      const double target_here = source_uniformity_target_length(ctx, ctx.midpoint);
-      const double deficit = std::max(0.0, 1.0 - ctx.local_scale / std::max(target_here, 1e-12));
-      priority_energy -= param->uniformityWeight * deficit;
-    }
-  }
+  const double priority_score =
+    evaluate_phase2_queue_score(components);
+  if (!std::isfinite(priority_score))
+    return false;
 
-  phase2_edges_to_collapse.emplace(eh, state, -priority_energy, new_point);
+  phase2_edges_to_collapse.emplace(eh, state, -priority_score, new_point);
   return true;
 }
 
@@ -2568,31 +2702,86 @@ void CollapseStage::initialize_phase2_candidates()
   update_states.resize(rm->n_edges(), 0);
   phase2_edges_to_collapse = Phase2EdgeRewardQueue();
 
-  refresh_phase2_average_lengths(true);
+  refresh_phase2_average_lengths();
 
   Logger::user_logger->info(
     "phase 2 energy [{}]: initializing {} edge candidates.",
     param->phase2PlacementStrategy, rm->n_edges());
 
+  struct InitialQueueCandidate
+  {
+    EdgeHandle edge;
+    Vec3d point;
+    Phase2QueueComponents components;
+  };
+
+  std::vector<InitialQueueCandidate> candidates;
+  candidates.reserve(rm->n_edges());
+  phase2_queue_component_maxima = Phase2QueueComponents();
+  phase2_queue_component_maxima.curvature = 1.0;
+  phase2_queue_component_maxima.triangle_quality = 1.0;
+
+  const auto include_in_maxima = [&](const Phase2QueueComponents& components)
+  {
+    phase2_queue_component_maxima.qem =
+      std::max(phase2_queue_component_maxima.qem, components.qem);
+    phase2_queue_component_maxima.original_barrier =
+      std::max(
+        phase2_queue_component_maxima.original_barrier,
+        components.original_barrier);
+    phase2_queue_component_maxima.self_barrier =
+      std::max(
+        phase2_queue_component_maxima.self_barrier,
+        components.self_barrier);
+    phase2_queue_component_maxima.position_fidelity =
+      std::max(
+        phase2_queue_component_maxima.position_fidelity,
+        components.position_fidelity);
+    phase2_queue_component_maxima.uniformity =
+      std::max(
+        phase2_queue_component_maxima.uniformity,
+        components.uniformity);
+  };
+
   size_t evaluated_edges = 0;
-  size_t enqueued_edges = 0;
   for (EdgeHandle eh : rm->edges())
   {
-    if (enqueue_phase2_candidate(eh, 0))
-      enqueued_edges++;
+    Vec3d new_point;
+    Phase2QueueComponents components;
+    if (compute_phase2_queue_candidate_data(eh, new_point, components))
+    {
+      candidates.push_back({ eh, new_point, components });
+      include_in_maxima(components);
+    }
 
     evaluated_edges++;
     if (evaluated_edges % 10000 == 0)
     {
       Logger::user_logger->info(
         "phase 2 energy candidates: {}/{} edges, {} enqueued.",
-        evaluated_edges, rm->n_edges(), enqueued_edges);
+        evaluated_edges, rm->n_edges(), candidates.size());
     }
   }
 
+  for (const InitialQueueCandidate& candidate : candidates)
+  {
+    const double priority_score =
+      evaluate_phase2_queue_score(candidate.components);
+    if (std::isfinite(priority_score))
+      phase2_edges_to_collapse.emplace(
+        candidate.edge, 0, -priority_score, candidate.point);
+  }
+
+  Logger::user_logger->info(
+    "phase 2 queue pass maxima: qem {}, originalBarrier {}, selfBarrier {}, positionFidelity {}, cageToSourceTargetEdgeRatio {}.",
+    phase2_queue_component_maxima.qem,
+    phase2_queue_component_maxima.original_barrier,
+    phase2_queue_component_maxima.self_barrier,
+    phase2_queue_component_maxima.position_fidelity,
+    phase2_queue_component_maxima.uniformity);
   Logger::user_logger->info(
     "phase 2 energy candidates: {}/{} edges, {} enqueued.",
-    evaluated_edges, rm->n_edges(), enqueued_edges);
+    evaluated_edges, rm->n_edges(), phase2_edges_to_collapse.size());
 }
 
 // After one collapse, only nearby edges have stale placement scores.
@@ -2730,7 +2919,7 @@ bool CollapseStage::refine_vertex_relocation_with_newton(
 
 void CollapseStage::do_phase2_final_newton_relocation()
 {
-  refresh_phase2_average_lengths(true);
+  refresh_phase2_average_lengths();
 
   std::vector<VertexHandle> vertices;
   vertices.reserve(rm->n_vertices());
@@ -2803,11 +2992,18 @@ void CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
     "phase 2 energy simplification [{}]: {} -> {} vertices.",
     param->phase2PlacementStrategy, rm->n_vertices(), target_vertices_num);
   Logger::user_logger->info(
-    "phase 2 energy terms: qemWeight {}, triangleQualityWeight {}, curvatureMode [{}], curvatureWeight {}, uniformityMode [{}], uniformityWeight {}, robustnessMode [{}].",
+    "phase 2 energy terms: qemWeight {}, triangleQualityWeight {}, curvatureMode [{}], curvatureWeight {}, uniformityMode [{}], uniformityWeight {}, positionFidelityWeight {}, selfBarrierWeight {}, originalBarrierWeight {}, robustnessMode [{}].",
     param->qemWeight, param->triangleQualityWeight,
     param->curvatureMode, param->curvatureWeight,
     param->uniformityMode, param->uniformityWeight,
+    param->positionFidelityWeight, param->selfBarrierWeight, param->originalBarrierWeight,
     param->robustnessMode);
+  if (!kEnableUniformityInPhase2Solve &&
+    param->uniformityWeight > 0.0 && param->uniformityMode != "none")
+  {
+    Logger::user_logger->info(
+      "phase 2 uniformity: queue-only experiment enabled; placement objectives exclude uniformity.");
+  }
   if (is_phase2_qem_no_collision_strategy())
     Logger::user_logger->info(
       "phase 2 QEM: pure Garland-Heckbert QEM is enabled; collision checks and non-QEM energies are disabled.");
@@ -2912,8 +3108,6 @@ void CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
         total_collapsed_edges++;
         remaining_vertices--;
 
-        if (total_collapsed_edges % 1000 == 0)
-          refresh_phase2_average_lengths(false);
         update_phase2_after_collapsing(center_v);
 
         if (total_collapsed_edges % 1000 == 0)

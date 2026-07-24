@@ -363,6 +363,18 @@ std::string normalize_parameter_token(std::string token)
   return token;
 }
 
+void apply_qem_energy_weights(
+  Cage::ParamCollapseStage& collapse, bool include_triangle_quality)
+{
+  collapse.qemWeight = 1.0;
+  collapse.selfBarrierWeight = 0.0;
+  collapse.originalBarrierWeight = 0.0;
+  collapse.positionFidelityWeight = 0.0;
+  collapse.curvatureWeight = 0.0;
+  collapse.triangleQualityWeight = include_triangle_quality ? 1.0 : 0.0;
+  collapse.uniformityWeight = 1.0;
+}
+
 void enable_newton_phase2_defaults(Cage::ParamCageGenerator& param)
 {
   auto& simplifier = param.paramCageSimplifier;
@@ -403,18 +415,11 @@ void enable_qem_phase2_defaults(Cage::ParamCageGenerator& param, bool skip_origi
   collapse.phase2PlacementStrategy =
     skip_original_collision_check ? "qem_no_collision" : "qem";
   collapse.robustnessMode = "exact_reject";
-  collapse.qemWeight = 1.0;
-  collapse.selfBarrierWeight = 0.0;
-  collapse.originalBarrierWeight = 0.0;
-  collapse.positionFidelityWeight = 0.0;
   if (skip_original_collision_check)
   {
-    collapse.qemWeight = 1.0;
     collapse.curvatureMode = "none";
     collapse.uniformityMode = "none";
-    collapse.curvatureWeight = 0.0;
-    collapse.triangleQualityWeight = 0.0;
-    collapse.uniformityWeight = 0.0;
+    apply_qem_energy_weights(collapse, false);
     collapse.phase2NewtonQualityThreshold = 0.0;
     collapse.phase2NewtonResidualThreshold = 0.0;
     collapse.phase2NewtonFinalRefineCollapses = 0;
@@ -423,10 +428,7 @@ void enable_qem_phase2_defaults(Cage::ParamCageGenerator& param, bool skip_origi
   {
     collapse.curvatureMode = "normal_matching";
     collapse.uniformityMode = "source";
-    collapse.curvatureWeight = 1.0;
-    collapse.triangleQualityWeight = 1.0;
-    collapse.uniformityWeight = 1.0;
-    collapse.positionFidelityWeight = 0.0;
+    apply_qem_energy_weights(collapse, true);
   }
 }
 
@@ -568,6 +570,7 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   {
     enable_newton_phase2_defaults(param);
     collapse.phase2PlacementStrategy = "newton_only";
+    apply_qem_energy_weights(collapse, true);
     return true;
   }
   if (token == "phase2_quadratic_surrogate" || token == "phase2_surrogate" ||
@@ -747,13 +750,22 @@ int main(int argc, char* argv[])
 
   if (!bf::is_regular_file(in_model_path))
   {
-    Logger::user_logger->error("error input file.");
+    Logger::user_logger->error("error input file: {}", in_model_path.string());
     return 1;
   }
 
-  if (!bf::is_directory(out_data_path))
+  if (!bf::exists(out_data_path))
   {
-    Logger::user_logger->error("error output directory.");
+    boost::system::error_code ec;
+    if (!bf::create_directories(out_data_path, ec) || ec)
+    {
+      Logger::user_logger->error("error output directory: {}", out_data_path.string());
+      return 1;
+    }
+  }
+  else if (!bf::is_directory(out_data_path))
+  {
+    Logger::user_logger->error("error output directory: {}", out_data_path.string());
     return 1;
   }
 
