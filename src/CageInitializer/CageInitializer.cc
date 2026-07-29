@@ -1,4 +1,6 @@
 #include "CageInitializer.hh"
+#include "CageSimplifier/SpaceSearch/DFaceTree.h"
+#include <algorithm>
 #include <fstream>
 #include <iomanip>
 
@@ -9,6 +11,56 @@ namespace CageInit
 
 namespace
 {
+bool hasExactNonAdjacentSelfIntersection(SM::SMeshT* mesh)
+{
+  Geometry::LightDFaceTree tree(*mesh);
+
+  for (SM::FaceHandle fh : mesh->faces())
+  {
+    // Adjacent faces meet at a shared edge or vertex by construction. Ignore
+    // all faces sharing a vertex with the query face so this query detects
+    // only non-adjacent triangle intersections.
+    std::vector<int> ignored_faces;
+    for (SM::VertexHandle vh : mesh->fv_range(fh))
+    {
+      for (SM::FaceHandle vfh : mesh->vf_range(vh))
+        ignored_faces.push_back(vfh.idx());
+    }
+
+    std::sort(ignored_faces.begin(), ignored_faces.end());
+    ignored_faces.erase(
+      std::unique(ignored_faces.begin(), ignored_faces.end()),
+      ignored_faces.end());
+
+    auto fv_it = mesh->fv_begin(fh);
+    const SM::VertexHandle v0 = *fv_it++;
+    const SM::VertexHandle v1 = *fv_it++;
+    const SM::VertexHandle v2 = *fv_it;
+
+    const auto& p0 = mesh->point(v0);
+    const auto& p1 = mesh->point(v1);
+    const auto& p2 = mesh->point(v2);
+    const auto* ep0 = mesh->data(v0).ep.get();
+    const auto* ep1 = mesh->data(v1).ep.get();
+    const auto* ep2 = mesh->data(v2).ep.get();
+
+    if (tree.do_intersect(
+      p0, p1, p2,
+      ep0, ep1, ep2,
+      std::move(ignored_faces)))
+    {
+      Logger::user_logger->critical(
+        "Phase 1 exact non-adjacent self-intersection detected: query face {}.",
+        fh.idx());
+      return true;
+    }
+  }
+
+  Logger::user_logger->info(
+    "Phase 1 exact non-adjacent self-intersection check passed.");
+  return false;
+}
+
 size_t countBoundaryEdges(SM::SMeshT* mesh)
 {
   size_t boundary_edges = 0;
@@ -115,6 +167,12 @@ void CageInitializer::generate()
 
   // step 2.2. retrieve cage from tetrahedral mesh.
   retrieveCage(outVMesh, outSMesh);
+  if (hasExactNonAdjacentSelfIntersection(outSMesh))
+  {
+    throw std::logic_error(
+      "Phase 1 cage has an exact non-adjacent self-intersection.");
+  }
+
   const std::string retrieve_cage_path =
     param->fileOutPath + param->fileName + "_debug_retrieve_cage.obj";
   OpenMesh::IO::write_mesh(*outSMesh, retrieve_cage_path, OpenMesh::IO::Options::Default, 15);
