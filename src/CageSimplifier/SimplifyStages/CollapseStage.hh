@@ -48,6 +48,7 @@ private:
   double avg_edge_length;
   double avg_source_edge_length;
   bool avg_source_edge_length_initialized;
+  double phase2_target_edge_length;
   std::vector<size_t> update_states;
 
   struct CollapseEdgeReward
@@ -248,6 +249,8 @@ private:
   double evaluate_phase2_refinement_residual(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double calc_phase2_fan_min_quality(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double source_uniformity_target_length(const Phase2PlacementContext& ctx, const Vec3d& sample_point) const;
+  double phase2_queue_uniformity_target_length(
+    const Phase2PlacementContext& ctx, const Vec3d& sample_point) const;
   double ipc_barrier(double distance, double dhat) const;
   double source_edge_length_at(const Vec3d& sample_point) const;
   bool closest_original_point(const Vec3d& p, Vec3d& closest) const;
@@ -283,6 +286,7 @@ private:
     EdgeHandle eh, Vec3d& new_point, Phase2QueueComponents& components);
   bool enqueue_phase2_candidate(EdgeHandle eh, size_t state);
   void refresh_phase2_average_lengths();
+  void initialize_phase2_target_edge_length(size_t target_vertices_num);
   void initialize_phase2_candidates();
   void update_phase2_after_collapsing(VertexHandle collapsed_center);
   bool refine_vertex_relocation_with_newton(

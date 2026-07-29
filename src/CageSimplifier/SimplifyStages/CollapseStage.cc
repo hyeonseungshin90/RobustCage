@@ -484,7 +484,8 @@ CollapseStage::CollapseStage(
   original_diagonal_length(_original_diagonal_length),
   avg_edge_length(0.0),
   avg_source_edge_length(0.0),
-  avg_source_edge_length_initialized(false)
+  avg_source_edge_length_initialized(false),
+  phase2_target_edge_length(0.0)
 {}
 
 CollapseStage::~CollapseStage()
@@ -1614,14 +1615,13 @@ CollapseStage::Phase2QueueComponents CollapseStage::evaluate_phase2_queue_compon
 
   if (param->uniformityWeight > 0.0 && param->uniformityMode != "none")
   {
-    // Source-adaptive edge-size ratio used only for queue ordering:
-    //   source_ratio = nearest source-face mean edge / source global mean edge
-    //   cage_target = cage global mean edge * source_ratio
-    //   queue ratio = current cage edge / cage_target
-    // The pass-wide maximum normalizes this component later. A smaller ratio
-    // therefore gives this edge a better (smaller) queue score.
+    // Edge-size ratio used only for queue ordering:
+    //   global mode: queue ratio = current cage edge / estimated target mean
+    //   source mode: preserve the source-adaptive target that scales the cage
+    //                global mean by the local/source mean-edge ratio
+    // A smaller ratio gives this edge a better (smaller) queue score.
     const double target_length =
-      source_uniformity_target_length(ctx, ctx.midpoint);
+      phase2_queue_uniformity_target_length(ctx, ctx.midpoint);
     const double cage_edge_length =
       (ctx.endpoint1 - ctx.endpoint0).length();
     components.uniformity =
@@ -1653,6 +1653,13 @@ double CollapseStage::evaluate_phase2_queue_score(
     weighted_score += weight * clamp_value(score, 0.0, 1.0);
     total_weight += weight;
   };
+  const auto add_nonnegative_component = [&](double weight, double score)
+  {
+    if (weight <= 0.0)
+      return;
+    weighted_score += weight * std::max(score, 0.0);
+    total_weight += weight;
+  };
 
   add_component(
     param->qemWeight,
@@ -1681,11 +1688,20 @@ double CollapseStage::evaluate_phase2_queue_score(
 
   if (param->uniformityMode != "none")
   {
-    add_component(
-      param->uniformityWeight,
-      normalized_by_pass_max(
-        components.uniformity,
-        phase2_queue_component_maxima.uniformity));
+    // The global component is already dimensionless relative to the fixed
+    // target length. Do not divide it by the pass maximum: that would cancel
+    // the target length and reduce the component back to edge/max-edge.
+    if (param->uniformityMode == "global")
+      add_nonnegative_component(param->uniformityWeight, components.uniformity);
+    else
+    {
+      // Preserve the previous source-adaptive queue normalization.
+      add_component(
+        param->uniformityWeight,
+        normalized_by_pass_max(
+          components.uniformity,
+          phase2_queue_component_maxima.uniformity));
+    }
   }
 
   return total_weight <= 0.0 ? 0.0 : weighted_score / total_weight;
@@ -1750,6 +1766,21 @@ double CollapseStage::source_uniformity_target_length(const Phase2PlacementConte
   }
 
   return target_length;
+}
+
+double CollapseStage::phase2_queue_uniformity_target_length(
+  const Phase2PlacementContext& ctx, const Vec3d& sample_point) const
+{
+  if (param->uniformityMode == "global" &&
+    phase2_target_edge_length > 0.0 &&
+    std::isfinite(phase2_target_edge_length))
+  {
+    return phase2_target_edge_length;
+  }
+
+  // Keep the previous source-adaptive/current-average implementation intact
+  // for non-global modes and as a defensive fallback.
+  return source_uniformity_target_length(ctx, sample_point);
 }
 
 // Hard validity test for a proposed new vertex position. Collision checks are
@@ -2685,6 +2716,46 @@ void CollapseStage::refresh_phase2_average_lengths()
   avg_source_edge_length_initialized = true;
 }
 
+void CollapseStage::initialize_phase2_target_edge_length(size_t target_vertices_num)
+{
+  refresh_phase2_average_lengths();
+  phase2_target_edge_length = avg_edge_length;
+
+  const double initial_vertices = static_cast<double>(rm->n_vertices());
+  const double initial_edges = static_cast<double>(rm->n_edges());
+  const double initial_faces = static_cast<double>(rm->n_faces());
+  const double euler_characteristic =
+    initial_vertices - initial_edges + initial_faces;
+  const double initial_topology_scale =
+    initial_vertices - euler_characteristic;
+  const double target_topology_scale =
+    static_cast<double>(target_vertices_num) - euler_characteristic;
+
+  if (avg_edge_length > 0.0 &&
+    std::isfinite(avg_edge_length) &&
+    initial_topology_scale > 0.0 &&
+    target_topology_scale > 0.0)
+  {
+    const double length_scale =
+      std::sqrt(initial_topology_scale / target_topology_scale);
+    if (std::isfinite(length_scale) && length_scale > 0.0)
+      phase2_target_edge_length = avg_edge_length * length_scale;
+  }
+  else
+  {
+    Logger::user_logger->warn(
+      "phase 2 target edge length: invalid topology/length inputs; "
+      "falling back to the initial mean edge length.");
+  }
+
+  Logger::user_logger->info(
+    "phase 2 target edge length: initial V/E/F {}/{}/{}, Euler characteristic {}, "
+    "initial mean {}, target vertices {}, estimated target mean {}.",
+    rm->n_vertices(), rm->n_edges(), rm->n_faces(),
+    euler_characteristic, avg_edge_length, target_vertices_num,
+    phase2_target_edge_length);
+}
+
 bool CollapseStage::enqueue_phase2_candidate(EdgeHandle eh, size_t state)
 {
   if (!eh.is_valid() || rm->status(eh).deleted())
@@ -2783,7 +2854,7 @@ void CollapseStage::initialize_phase2_candidates()
   }
 
   Logger::user_logger->info(
-    "phase 2 queue pass maxima: qem {}, originalBarrier {}, selfBarrier {}, positionFidelity {}, cageToSourceTargetEdgeRatio {}.",
+    "phase 2 queue pass maxima: qem {}, originalBarrier {}, selfBarrier {}, positionFidelity {}, maximumTargetEdgeRatio {}.",
     phase2_queue_component_maxima.qem,
     phase2_queue_component_maxima.original_barrier,
     phase2_queue_component_maxima.self_barrier,
@@ -3001,6 +3072,7 @@ void CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
   Logger::user_logger->info(
     "phase 2 energy simplification [{}]: {} -> {} vertices.",
     param->phase2PlacementStrategy, rm->n_vertices(), target_vertices_num);
+  initialize_phase2_target_edge_length(target_vertices_num);
   Logger::user_logger->info(
     "phase 2 energy terms: qemWeight {}, triangleQualityWeight {}, curvatureMode [{}], curvatureWeight {}, uniformityMode [{}], uniformityWeight {}, positionFidelityWeight {}, selfBarrierWeight {}, originalBarrierWeight {}, robustnessMode [{}].",
     param->qemWeight, param->triangleQualityWeight,

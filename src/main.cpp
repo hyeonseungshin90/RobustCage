@@ -371,7 +371,7 @@ void apply_qem_energy_weights(
   collapse.originalBarrierWeight = 0.0;
   collapse.positionFidelityWeight = 0.0;
   collapse.curvatureWeight = 0.0;
-  collapse.triangleQualityWeight = include_triangle_quality ? 0.0 : 0.0;
+  collapse.triangleQualityWeight = include_triangle_quality ? 1.0 : 0.0;
   collapse.uniformityWeight = 0.0;
 }
 
@@ -427,7 +427,10 @@ void enable_qem_phase2_defaults(Cage::ParamCageGenerator& param, bool skip_origi
   else
   {
     collapse.curvatureMode = "normal_matching";
-    collapse.uniformityMode = "source";
+    // phase2_qem ranks shorter cage edges ahead of longer ones by comparing
+    // each current edge with the estimated target mean. The previous source-adaptive
+    // queue calculation remains available through "uniformity_source".
+    collapse.uniformityMode = "global";
     apply_qem_energy_weights(collapse, true);
   }
 }
