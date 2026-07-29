@@ -1989,6 +1989,16 @@ bool CollapseStage::choose_phase2_collapse_placement(
       {
         append_candidate(qem_point, false, 0);
       }
+      else if (param->phase2QemRejectOnLinearCollision)
+      {
+        // Opt-in alternative to the backtracking line search below: if the
+        // raw linear-solve point already fails hard validity (collision,
+        // degenerate, wrinkle), reject this edge outright instead of
+        // searching for a nearby fallback placement.
+        if (!phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, qem_point))
+          return false;
+        append_candidate(qem_point, false, 0);
+      }
       else
       {
         Vec3d line_search_point;
@@ -3007,6 +3017,10 @@ void CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
   if (is_phase2_qem_no_collision_strategy())
     Logger::user_logger->info(
       "phase 2 QEM: pure Garland-Heckbert QEM is enabled; collision checks and non-QEM energies are disabled.");
+  if (is_phase2_qem_strategy() && !is_phase2_qem_no_collision_strategy() &&
+    param->phase2QemRejectOnLinearCollision)
+    Logger::user_logger->info(
+      "phase 2 QEM: phase2QemRejectOnLinearCollision is enabled; edges whose linear-solve point fails hard validity are rejected instead of backtracked.");
 
   if (is_phase2_qem_no_collision_strategy())
     initialize_phase2_qem_quadrics();

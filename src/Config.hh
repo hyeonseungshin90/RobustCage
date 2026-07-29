@@ -92,6 +92,12 @@ struct ParamCollapseStage
   std::string curvatureMode;
   // Uniformity mode: "none", "source", "global".
   std::string uniformityMode;
+  // When true, phase2PlacementStrategy "qem" rejects the edge outright (no
+  // collapse) if the raw QEM linear-solve point fails the hard validity
+  // checks (collision/degenerate/wrinkle), instead of backtracking toward a
+  // nearby fallback position. Default false keeps the existing backtracking
+  // behavior; this is an opt-in alternative.
+  bool phase2QemRejectOnLinearCollision;
 
   size_t newtonMaxIter;
   double newtonGradTol;
@@ -129,6 +135,7 @@ struct ParamCollapseStage
     jo["robustnessMode"] = robustnessMode;
     jo["curvatureMode"] = curvatureMode;
     jo["uniformityMode"] = uniformityMode;
+    jo["phase2QemRejectOnLinearCollision"] = phase2QemRejectOnLinearCollision;
     jo["newtonMaxIter"] = newtonMaxIter;
     jo["newtonGradTol"] = newtonGradTol;
     jo["newtonStepTol"] = newtonStepTol;
@@ -199,6 +206,10 @@ struct ParamCollapseStage
 
     auto uniformity_mode_it = jo.find("uniformityMode");
     uniformityMode = uniformity_mode_it != jo.end() ? std::string(uniformity_mode_it->value().as_string().c_str()) : "none";
+
+    auto phase2_qem_reject_on_linear_collision_it = jo.find("phase2QemRejectOnLinearCollision");
+    phase2QemRejectOnLinearCollision =
+      phase2_qem_reject_on_linear_collision_it != jo.end() ? phase2_qem_reject_on_linear_collision_it->value().as_bool() : false;
 
     auto newton_max_iter_it = jo.find("newtonMaxIter");
     newtonMaxIter = newton_max_iter_it != jo.end() ? newton_max_iter_it->value().as_int64() : 4;
@@ -431,6 +442,7 @@ struct ParamCageGenerator
     collapse.robustnessMode = "exact_backtracking";
     collapse.curvatureMode = "none";
     collapse.uniformityMode = "none";
+    collapse.phase2QemRejectOnLinearCollision = false;
     collapse.newtonMaxIter = 4;
     collapse.newtonGradTol = 1e-8;
     collapse.newtonStepTol = 1e-8;

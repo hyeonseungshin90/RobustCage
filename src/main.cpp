@@ -371,8 +371,8 @@ void apply_qem_energy_weights(
   collapse.originalBarrierWeight = 0.0;
   collapse.positionFidelityWeight = 0.0;
   collapse.curvatureWeight = 0.0;
-  collapse.triangleQualityWeight = include_triangle_quality ? 1.0 : 0.0;
-  collapse.uniformityWeight = 1.0;
+  collapse.triangleQualityWeight = include_triangle_quality ? 0.0 : 0.0;
+  collapse.uniformityWeight = 0.0;
 }
 
 void enable_newton_phase2_defaults(Cage::ParamCageGenerator& param)
@@ -544,6 +544,15 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
     token == "qem_only")
   {
     enable_qem_phase2_defaults(param);
+    return true;
+  }
+  if (token == "phase2_qem_reject_on_collision" ||
+    token == "qem_reject_on_collision" ||
+    token == "phase2_qem_linear_reject" ||
+    token == "qem_linear_reject")
+  {
+    enable_qem_phase2_defaults(param);
+    collapse.phase2QemRejectOnLinearCollision = true;
     return true;
   }
   if (token == "phase2_qem_no_collision" ||
