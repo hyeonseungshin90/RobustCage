@@ -371,8 +371,8 @@ void apply_qem_energy_weights(
   collapse.originalBarrierWeight = 0.0;
   collapse.positionFidelityWeight = 0.0;
   collapse.curvatureWeight = 0.0;
-  collapse.triangleQualityWeight = include_triangle_quality ? 1.0 : 0.0;
-  collapse.uniformityWeight = 0.0;
+  collapse.triangleQualityWeight = include_triangle_quality ? 0.0 : 0.0;
+  collapse.uniformityWeight = 1.0;
 }
 
 void enable_newton_phase2_defaults(Cage::ParamCageGenerator& param)

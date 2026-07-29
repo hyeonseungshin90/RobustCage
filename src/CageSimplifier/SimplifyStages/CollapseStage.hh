@@ -240,6 +240,10 @@ private:
   double evaluate_curvature_normal_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_dihedral_preservation_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_triangle_quality_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
+  Eigen::Matrix4d build_phase2_triangle_quality_surrogate_quadric(
+    const Phase2PlacementContext& ctx) const;
+  double evaluate_phase2_triangle_quality_surrogate(
+    const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_pre_collapse_triangle_quality_penalty(const Phase2PlacementContext& ctx) const;
   double evaluate_uniformity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_phase2_proxy_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
