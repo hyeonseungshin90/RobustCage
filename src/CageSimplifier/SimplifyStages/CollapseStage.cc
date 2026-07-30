@@ -221,107 +221,6 @@ Scalar diff_clamp(const Scalar& v, double lo, double hi)
 }
 
 template<typename Scalar>
-Scalar diff_point_segment_distance_sqr(
-  const DiffVec3<Scalar>& p,
-  const DiffVec3<Scalar>& a,
-  const DiffVec3<Scalar>& b)
-{
-  const DiffVec3<Scalar> ab = b - a;
-  const Scalar denom = diff_norm_sqr(ab);
-  if (denom <= 1e-30)
-    return diff_norm_sqr(p - a);
-
-  Scalar t = diff_dot(p - a, ab) / denom;
-  t = diff_clamp(t, 0.0, 1.0);
-  const DiffVec3<Scalar> closest = a + ab * t;
-  return diff_norm_sqr(p - closest);
-}
-
-template<typename Scalar>
-Scalar diff_point_triangle_distance_sqr(
-  const DiffVec3<Scalar>& p,
-  const DiffVec3<Scalar>& a,
-  const DiffVec3<Scalar>& b,
-  const DiffVec3<Scalar>& c)
-{
-  const DiffVec3<Scalar> ab = b - a;
-  const DiffVec3<Scalar> ac = c - a;
-  const DiffVec3<Scalar> tri_normal = diff_cross(ab, ac);
-  if (diff_norm_sqr(tri_normal) <= 1e-30)
-  {
-    const Scalar d01 = diff_point_segment_distance_sqr(p, a, b);
-    const Scalar d12 = diff_point_segment_distance_sqr(p, b, c);
-    const Scalar d20 = diff_point_segment_distance_sqr(p, c, a);
-    if (d01 <= d12 && d01 <= d20)
-      return d01;
-    if (d12 <= d20)
-      return d12;
-    return d20;
-  }
-
-  const DiffVec3<Scalar> ap = p - a;
-  const Scalar d1 = diff_dot(ab, ap);
-  const Scalar d2 = diff_dot(ac, ap);
-  if (d1 <= 0.0 && d2 <= 0.0)
-    return diff_norm_sqr(ap);
-
-  const DiffVec3<Scalar> bp = p - b;
-  const Scalar d3 = diff_dot(ab, bp);
-  const Scalar d4 = diff_dot(ac, bp);
-  if (d3 >= 0.0 && d4 <= d3)
-    return diff_norm_sqr(bp);
-
-  const Scalar vc = d1 * d4 - d3 * d2;
-  if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0)
-  {
-    const Scalar v = d1 / (d1 - d3);
-    const DiffVec3<Scalar> closest = a + ab * v;
-    return diff_norm_sqr(p - closest);
-  }
-
-  const DiffVec3<Scalar> cp = p - c;
-  const Scalar d5 = diff_dot(ab, cp);
-  const Scalar d6 = diff_dot(ac, cp);
-  if (d6 >= 0.0 && d5 <= d6)
-    return diff_norm_sqr(cp);
-
-  const Scalar vb = d5 * d2 - d1 * d6;
-  if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0)
-  {
-    const Scalar w = d2 / (d2 - d6);
-    const DiffVec3<Scalar> closest = a + ac * w;
-    return diff_norm_sqr(p - closest);
-  }
-
-  const Scalar va = d3 * d6 - d5 * d4;
-  if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0)
-  {
-    const DiffVec3<Scalar> bc = c - b;
-    const Scalar w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-    const DiffVec3<Scalar> closest = b + bc * w;
-    return diff_norm_sqr(p - closest);
-  }
-
-  const Scalar denom = Scalar(1.0) / (va + vb + vc);
-  const Scalar v = vb * denom;
-  const Scalar w = vc * denom;
-  const DiffVec3<Scalar> closest = a + ab * v + ac * w;
-  return diff_norm_sqr(p - closest);
-}
-
-template<typename Scalar>
-Scalar diff_ipc_barrier(const Scalar& distance, double dhat)
-{
-  if (dhat <= 0.0 || distance >= dhat)
-    return Scalar(0.0);
-
-  using std::log;
-  const double dmin = dhat * 1e-9;
-  const Scalar d = distance <= dmin ? Scalar(dmin) : distance;
-  return -diff_sqr(d - dhat) * log(d / dhat) / diff_sqr(dhat);
-}
-
-template<typename Scalar>
 Scalar diff_triangle_quality(
   const DiffVec3<Scalar>& p0,
   const DiffVec3<Scalar>& p1,
@@ -337,31 +236,6 @@ Scalar diff_triangle_quality(
   const Scalar area = Scalar(0.5) * diff_norm(diff_cross(p1 - p0, p2 - p0));
   return Scalar(4.0 * std::sqrt(3.0)) * area / denom;
 }
-
-template<typename Scalar>
-DiffVec3<Scalar> diff_triangle_normal(
-  const DiffVec3<Scalar>& p0,
-  const DiffVec3<Scalar>& p1,
-  const DiffVec3<Scalar>& p2)
-{
-  const DiffVec3<Scalar> n = diff_cross(p1 - p0, p2 - p0);
-  const Scalar inv_norm = Scalar(1.0) / diff_safe_sqrt(diff_norm_sqr(n));
-  return n * inv_norm;
-}
-
-struct DiffBarrierTerm
-{
-  double x_weight = 0.0;
-  Vec3d bias;
-  Vec3d tri[3];
-};
-
-struct DiffNormalTerm
-{
-  Vec3d from;
-  Vec3d to;
-  Vec3d source_normal;
-};
 
 struct DiffUniformityTerm
 {
@@ -773,15 +647,6 @@ CollapseStage::Phase2PlacementContext CollapseStage::make_phase2_vertex_relocati
   return ctx;
 }
 
-double CollapseStage::ipc_barrier(double distance, double dhat) const
-{
-  if (dhat <= 0.0 || distance >= dhat)
-    return 0.0;
-
-  const double d = std::max(distance, dhat * 1e-9);
-  return -sqr(d - dhat) * std::log(d / dhat) / sqr(dhat);
-}
-
 double CollapseStage::evaluate_qem_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
 {
   if (ctx.use_qem_matrix)
@@ -802,14 +667,14 @@ double CollapseStage::evaluate_qem_energy(const Phase2PlacementContext& ctx, con
   if (param->curvatureMode == "weighted_qem" || param->curvatureMode == "weighted-qem")
   {
     const double scaled_curvature = ctx.edge_curvature * ctx.local_scale;
-    energy *= 1.0 + param->curvatureWeight * sqr(scaled_curvature);
+    energy *= 1.0 + sqr(scaled_curvature);
   }
 
   return energy;
 }
 
-// Experimental: score by QEM alone (ignores quality/uniformity/curvature/
-// position fidelity), for testing ordering the queue purely by QEM
+// Experimental: score by QEM alone (ignores quality/uniformity/position
+// fidelity), for testing ordering the queue purely by QEM
 // cost while leaving the actual placement to Newton's full objective.
 // Not currently wired to anything (the qem_only_score parameter on
 // select_phase2_feasibility_fallback defaults to false everywhere, including
@@ -868,82 +733,6 @@ void CollapseStage::update_phase2_qem_quadric_after_collapse(
   if (!phase2_qem_quadric_prop_added || !center_vh.is_valid() || rm->status(center_vh).deleted())
     return;
   rm->property(phase2_qem_quadric_prop, center_vh) = quadric;
-}
-
-double CollapseStage::evaluate_original_barrier_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
-{
-  if (param->originalBarrierWeight <= 0.0)
-    return 0.0;
-
-  const double dhat = std::max(
-    original_diagonal_length * param->barrierActivationDistanceFactor,
-    ctx.local_scale * 1e-3);
-  double energy = 0.0;
-
-  for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
-  {
-    const Vec3d samples[6] = {
-      x,
-      fan_edge.from,
-      fan_edge.to,
-      (fan_edge.from + fan_edge.to) * 0.5,
-      (fan_edge.from + x) * 0.5,
-      (fan_edge.to + x) * 0.5
-    };
-
-    for (const Vec3d& sample : samples)
-    {
-#ifdef USE_TREE_SEARCH
-      const double distance = ot ? ot->closest_distance(sample).first : dhat;
-#else
-      const double distance = og ? og->closest_point(sample).first.second : dhat;
-#endif
-      energy += ipc_barrier(distance, dhat);
-    }
-  }
-  return energy;
-}
-
-double CollapseStage::evaluate_self_barrier_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
-{
-  if (param->selfBarrierWeight <= 0.0 || !lrt)
-    return 0.0;
-
-  const double dhat = std::max(
-    original_diagonal_length * param->barrierActivationDistanceFactor,
-    ctx.local_scale * 1e-3);
-  double energy = 0.0;
-
-  for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
-  {
-    const Vec3d samples[4] = {
-      (fan_edge.from + fan_edge.to + x) / 3.0,
-      (fan_edge.from + x) * 0.5,
-      (fan_edge.to + x) * 0.5,
-      x
-    };
-
-    for (const Vec3d& sample : samples)
-    {
-      double min_distance_sqr = DBL_MAX;
-      for (size_t prim_idx = 0; prim_idx < lrt->m_primitives.size(); prim_idx++)
-      {
-        if (prim_idx < lrt->m_primitive_deleted.size() && lrt->m_primitive_deleted[prim_idx])
-          continue;
-        const auto& prim = lrt->m_primitives[prim_idx];
-        if (ctx.ignored_faces.count(static_cast<int>(prim.tri.index)))
-          continue;
-        HeavyTriangle tri(prim.tri.ver0, prim.tri.ver1, prim.tri.ver2);
-        Vec3d closest;
-        const double distance_sqr = tri.closest_point(sample, closest);
-        if (distance_sqr < min_distance_sqr)
-          min_distance_sqr = distance_sqr;
-      }
-      if (min_distance_sqr != DBL_MAX)
-        energy += ipc_barrier(std::sqrt(min_distance_sqr), dhat);
-    }
-  }
-  return energy;
 }
 
 bool CollapseStage::closest_original_point(const Vec3d& p, Vec3d& closest) const
@@ -1017,86 +806,6 @@ double CollapseStage::evaluate_position_fidelity_energy(const Phase2PlacementCon
     append_sample(1.0 / 3.0, (fan_edge.from + fan_edge.to) / 3.0);
     append_sample(0.5, fan_edge.from * 0.5);
     append_sample(0.5, fan_edge.to * 0.5);
-  }
-
-  return count == 0 ? 0.0 : energy / static_cast<double>(count);
-}
-
-double CollapseStage::evaluate_curvature_normal_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
-{
-  if (param->curvatureMode != "normal_matching" && param->curvatureMode != "normal-matching")
-    return 0.0;
-
-  double energy = 0.0;
-  for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
-  {
-    const Vec3d normal = triangle_normal(fan_edge.from, fan_edge.to, x);
-    const Vec3d centroid = (fan_edge.from + fan_edge.to + x) / 3.0;
-
-    FaceHandle closest_face;
-#ifdef USE_TREE_SEARCH
-    if (!ot)
-      continue;
-    closest_face = FaceHandle(ot->closest_point(centroid).second);
-#else
-    if (!og)
-      continue;
-    closest_face = FaceHandle(og->closest_point(centroid).second);
-#endif
-    if (!closest_face.is_valid() || closest_face.idx() < 0 ||
-      closest_face.idx() >= static_cast<int>(om->n_faces()))
-      continue;
-
-    Vec3d pts[3];
-    collect_face_points(om, closest_face, pts);
-    const Vec3d source_normal = triangle_normal(pts[0], pts[1], pts[2]);
-    const double alignment = std::abs(clamp_value(normal | source_normal, -1.0, 1.0));
-    energy += sqr(1.0 - alignment);
-  }
-  return energy;
-}
-
-double CollapseStage::evaluate_dihedral_preservation_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const
-{
-  if (!finite_vec(x) || ctx.fan_edges.size() < 2)
-    return 0.0;
-
-  const double shared_tol = std::max(ctx.local_scale * 1e-8, original_diagonal_length * 1e-12);
-  const auto same_point = [&](const Vec3d& a, const Vec3d& b)
-  {
-    return (a - b).length() <= shared_tol;
-  };
-
-  double energy = 0.0;
-  size_t count = 0;
-  for (size_t i = 0; i < ctx.fan_edges.size(); i++)
-  {
-    const CollapseFanEdge& a = ctx.fan_edges[i];
-    for (size_t j = i + 1; j < ctx.fan_edges.size(); j++)
-    {
-      const CollapseFanEdge& b = ctx.fan_edges[j];
-      int shared_vertices = 0;
-      if (same_point(a.from, b.from))
-        shared_vertices++;
-      if (same_point(a.from, b.to))
-        shared_vertices++;
-      if (same_point(a.to, b.from))
-        shared_vertices++;
-      if (same_point(a.to, b.to))
-        shared_vertices++;
-      if (shared_vertices != 1)
-        continue;
-
-      const Vec3d normal_a = triangle_normal(a.from, a.to, x);
-      const Vec3d normal_b = triangle_normal(b.from, b.to, x);
-      const Vec3d reference_a = triangle_normal(a.from, a.to, a.apex);
-      const Vec3d reference_b = triangle_normal(b.from, b.to, b.apex);
-
-      const double current_dot = clamp_value(normal_a | normal_b, -1.0, 1.0);
-      const double reference_dot = clamp_value(reference_a | reference_b, -1.0, 1.0);
-      energy += sqr(current_dot - reference_dot);
-      count++;
-    }
   }
 
   return count == 0 ? 0.0 : energy / static_cast<double>(count);
@@ -1258,7 +967,7 @@ double CollapseStage::evaluate_newton_energy(const Phase2PlacementContext& ctx, 
   if (!finite_vec(x))
     return DBL_MAX;
 
-  // Normalize quality/uniformity/curvature by fan/neighbor count, matching
+  // Normalize quality/uniformity by fan/neighbor count, matching
   // evaluate_phase2_proxy_energy's convention, so a given weight means the
   // same relative strength (O(1) per vertex, not growing with valence)
   // regardless of which placement strategy (qem vs newton) is in use.
@@ -1267,10 +976,7 @@ double CollapseStage::evaluate_newton_energy(const Phase2PlacementContext& ctx, 
 
   double energy = 0.0;
   energy += param->qemWeight * evaluate_qem_energy(ctx, x);
-  energy += param->originalBarrierWeight * evaluate_original_barrier_energy(ctx, x);
-  energy += param->selfBarrierWeight * evaluate_self_barrier_energy(ctx, x);
   energy += param->positionFidelityWeight * evaluate_position_fidelity_energy(ctx, x);
-  energy += param->curvatureWeight * evaluate_curvature_normal_energy(ctx, x) / fan_count;
   if (kEnableTriangleQualityInPhase2QemSolve &&
     is_phase2_qem_strategy() &&
     !is_phase2_qem_no_collision_strategy())
@@ -1337,80 +1043,8 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
   if (!std::isfinite(deriv.energy))
     return deriv;
 
-  const double dhat = std::max(
-    original_diagonal_length * param->barrierActivationDistanceFactor,
-    ctx.local_scale * 1e-3);
-
-  std::vector<DiffBarrierTerm> original_barrier_terms;
-  std::vector<DiffBarrierTerm> self_barrier_terms;
   std::vector<DiffPositionFidelityTerm> position_fidelity_terms;
-  std::vector<DiffNormalTerm> normal_terms;
   std::vector<DiffUniformityTerm> uniformity_terms;
-
-  const auto append_original_barrier_term =
-    [&](double x_weight, const Vec3d& bias)
-  {
-    if (param->originalBarrierWeight <= 0.0)
-      return;
-
-    const Vec3d sample = bias + x_weight * x;
-    FaceHandle closest_face;
-#ifdef USE_TREE_SEARCH
-    if (!ot)
-      return;
-    closest_face = FaceHandle(ot->closest_point(sample).second);
-#else
-    if (!og)
-      return;
-    closest_face = FaceHandle(og->closest_point(sample).second);
-#endif
-    if (!closest_face.is_valid() || closest_face.idx() < 0 ||
-      closest_face.idx() >= static_cast<int>(om->n_faces()))
-      return;
-
-    DiffBarrierTerm term;
-    term.x_weight = x_weight;
-    term.bias = bias;
-    collect_face_points(om, closest_face, term.tri);
-    original_barrier_terms.push_back(term);
-  };
-
-  const auto append_self_barrier_term =
-    [&](double x_weight, const Vec3d& bias)
-  {
-    if (param->selfBarrierWeight <= 0.0 || !lrt)
-      return;
-
-    const Vec3d sample = bias + x_weight * x;
-    double min_distance_sqr = DBL_MAX;
-    DiffBarrierTerm best_term;
-    bool found = false;
-    for (size_t prim_idx = 0; prim_idx < lrt->m_primitives.size(); prim_idx++)
-    {
-      if (prim_idx < lrt->m_primitive_deleted.size() && lrt->m_primitive_deleted[prim_idx])
-        continue;
-      const auto& prim = lrt->m_primitives[prim_idx];
-      if (ctx.ignored_faces.count(static_cast<int>(prim.tri.index)))
-        continue;
-
-      HeavyTriangle tri(prim.tri.ver0, prim.tri.ver1, prim.tri.ver2);
-      Vec3d closest;
-      const double distance_sqr = tri.closest_point(sample, closest);
-      if (distance_sqr < min_distance_sqr)
-      {
-        min_distance_sqr = distance_sqr;
-        best_term.x_weight = x_weight;
-        best_term.bias = bias;
-        best_term.tri[0] = prim.tri.ver0;
-        best_term.tri[1] = prim.tri.ver1;
-        best_term.tri[2] = prim.tri.ver2;
-        found = true;
-      }
-    }
-
-    if (found)
-      self_barrier_terms.push_back(best_term);
-  };
 
   const auto append_position_fidelity_term =
     [&](double x_weight, const Vec3d& bias)
@@ -1433,51 +1067,9 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
   append_position_fidelity_term(1.0, Vec3d(0.0, 0.0, 0.0));
   for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
   {
-    append_original_barrier_term(1.0, Vec3d(0.0, 0.0, 0.0));
-    append_original_barrier_term(0.0, fan_edge.from);
-    append_original_barrier_term(0.0, fan_edge.to);
-    append_original_barrier_term(0.0, (fan_edge.from + fan_edge.to) * 0.5);
-    append_original_barrier_term(0.5, fan_edge.from * 0.5);
-    append_original_barrier_term(0.5, fan_edge.to * 0.5);
-
-    append_self_barrier_term(1.0 / 3.0, (fan_edge.from + fan_edge.to) / 3.0);
-    append_self_barrier_term(0.5, fan_edge.from * 0.5);
-    append_self_barrier_term(0.5, fan_edge.to * 0.5);
-    append_self_barrier_term(1.0, Vec3d(0.0, 0.0, 0.0));
-
     append_position_fidelity_term(1.0 / 3.0, (fan_edge.from + fan_edge.to) / 3.0);
     append_position_fidelity_term(0.5, fan_edge.from * 0.5);
     append_position_fidelity_term(0.5, fan_edge.to * 0.5);
-  }
-
-  if (param->curvatureWeight > 0.0 &&
-    (param->curvatureMode == "normal_matching" || param->curvatureMode == "normal-matching"))
-  {
-    for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
-    {
-      const Vec3d centroid = (fan_edge.from + fan_edge.to + x) / 3.0;
-      FaceHandle closest_face;
-#ifdef USE_TREE_SEARCH
-      if (!ot)
-        continue;
-      closest_face = FaceHandle(ot->closest_point(centroid).second);
-#else
-      if (!og)
-        continue;
-      closest_face = FaceHandle(og->closest_point(centroid).second);
-#endif
-      if (!closest_face.is_valid() || closest_face.idx() < 0 ||
-        closest_face.idx() >= static_cast<int>(om->n_faces()))
-        continue;
-
-      Vec3d pts[3];
-      collect_face_points(om, closest_face, pts);
-      DiffNormalTerm term;
-      term.from = fan_edge.from;
-      term.to = fan_edge.to;
-      term.source_normal = triangle_normal(pts[0], pts[1], pts[2]);
-      normal_terms.push_back(term);
-    }
   }
 
   if (kEnableUniformityInPhase2Solve &&
@@ -1511,7 +1103,7 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
   if (param->curvatureMode == "weighted_qem" || param->curvatureMode == "weighted-qem")
   {
     const double scaled_curvature = ctx.edge_curvature * ctx.local_scale;
-    curvature_multiplier += param->curvatureWeight * sqr(scaled_curvature);
+    curvature_multiplier += sqr(scaled_curvature);
   }
 
   for (const QEMPlane& plane : ctx.qem_planes)
@@ -1526,28 +1118,6 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
     ad_energy += weight * diff_sqr(value);
   }
 
-  for (const DiffBarrierTerm& term : original_barrier_terms)
-  {
-    const DiffVec3<ADScalar> sample = diff_vec<ADScalar>(term.bias) + ad_point * term.x_weight;
-    const ADScalar distance = diff_safe_sqrt(diff_point_triangle_distance_sqr(
-      sample,
-      diff_vec<ADScalar>(term.tri[0]),
-      diff_vec<ADScalar>(term.tri[1]),
-      diff_vec<ADScalar>(term.tri[2])));
-    ad_energy += param->originalBarrierWeight * diff_ipc_barrier(distance, dhat);
-  }
-
-  for (const DiffBarrierTerm& term : self_barrier_terms)
-  {
-    const DiffVec3<ADScalar> sample = diff_vec<ADScalar>(term.bias) + ad_point * term.x_weight;
-    const ADScalar distance = diff_safe_sqrt(diff_point_triangle_distance_sqr(
-      sample,
-      diff_vec<ADScalar>(term.tri[0]),
-      diff_vec<ADScalar>(term.tri[1]),
-      diff_vec<ADScalar>(term.tri[2])));
-    ad_energy += param->selfBarrierWeight * diff_ipc_barrier(distance, dhat);
-  }
-
   if (!position_fidelity_terms.empty())
   {
     const double position_weight =
@@ -1560,19 +1130,6 @@ CollapseStage::NewtonDerivatives CollapseStage::autodiff_newton_derivatives(
       const DiffVec3<ADScalar> residual = sample - diff_vec<ADScalar>(term.target);
       ad_energy += position_weight * diff_norm_sqr(residual);
     }
-  }
-
-  for (const DiffNormalTerm& term : normal_terms)
-  {
-    const DiffVec3<ADScalar> normal = diff_triangle_normal(
-      diff_vec<ADScalar>(term.from),
-      diff_vec<ADScalar>(term.to),
-      ad_point);
-    ADScalar alignment = diff_dot(normal, diff_vec<ADScalar>(term.source_normal));
-    alignment = diff_clamp(alignment, -1.0, 1.0);
-    using std::abs;
-    const ADScalar abs_alignment = abs(alignment);
-    ad_energy += param->curvatureWeight * diff_sqr(ADScalar(1.0) - abs_alignment) / fan_count;
   }
 
   if (kEnableTriangleQualityInPhase2QemSolve || !is_phase2_qem_strategy())
@@ -1639,8 +1196,8 @@ double CollapseStage::evaluate_phase2_proxy_energy(const Phase2PlacementContext&
 }
 
 // Compute per-edge queue components. QEM and the triangle surrogate retain
-// their raw locally scaled energies; legacy barrier/fidelity components still
-// use pass-wide maxima when the queue score is assembled.
+// their raw locally scaled energies; the fidelity component still uses a
+// pass-wide maximum when the queue score is assembled.
 CollapseStage::Phase2QueueComponents CollapseStage::evaluate_phase2_queue_components(
   const Phase2PlacementContext& ctx, const Vec3d& x) const
 {
@@ -1657,28 +1214,8 @@ CollapseStage::Phase2QueueComponents CollapseStage::evaluate_phase2_queue_compon
   const double fan_count =
     static_cast<double>(std::max<size_t>(ctx.fan_edges.size(), 1));
 
-  if (param->originalBarrierWeight > 0.0)
-  {
-    components.original_barrier =
-      evaluate_original_barrier_energy(ctx, x) / (6.0 * fan_count);
-  }
-
-  if (param->selfBarrierWeight > 0.0)
-  {
-    components.self_barrier =
-      evaluate_self_barrier_energy(ctx, x) / (4.0 * fan_count);
-  }
-
   if (param->positionFidelityWeight > 0.0)
     components.position_fidelity = evaluate_position_fidelity_energy(ctx, x);
-
-  if (param->curvatureWeight > 0.0 &&
-    (param->curvatureMode == "normal_matching" ||
-      param->curvatureMode == "normal-matching"))
-  {
-    components.curvature =
-      evaluate_curvature_normal_energy(ctx, x) / fan_count;
-  }
 
   if (param->triangleQualityWeight > 0.0)
   {
@@ -1760,24 +1297,10 @@ double CollapseStage::evaluate_phase2_queue_score(
 
   add_nonnegative_component(param->qemWeight, components.qem);
   add_component(
-    param->originalBarrierWeight,
-    normalized_by_pass_max(
-      components.original_barrier,
-      phase2_queue_component_maxima.original_barrier));
-  add_component(
-    param->selfBarrierWeight,
-    normalized_by_pass_max(
-      components.self_barrier,
-      phase2_queue_component_maxima.self_barrier));
-  add_component(
     param->positionFidelityWeight,
     normalized_by_pass_max(
       components.position_fidelity,
       phase2_queue_component_maxima.position_fidelity));
-
-  if (param->curvatureMode == "normal_matching" ||
-    param->curvatureMode == "normal-matching")
-    add_component(param->curvatureWeight, components.curvature);
 
   if (kEnableTriangleQualityInPhase2QemSolve &&
     is_phase2_qem_strategy() &&
@@ -1822,17 +1345,6 @@ double CollapseStage::evaluate_phase2_refinement_residual(const Phase2PlacementC
     return DBL_MAX;
 
   double residual = 0.0;
-  const bool use_normal_matching_curvature =
-    param->curvatureMode == "normal_matching" || param->curvatureMode == "normal-matching";
-  if (param->curvatureWeight > 0.0 && use_normal_matching_curvature)
-  {
-    const double denom = std::max<size_t>(ctx.fan_edges.size(), 1);
-    residual += param->curvatureWeight * evaluate_curvature_normal_energy(ctx, x) /
-      static_cast<double>(denom);
-    if (is_phase2_qem_strategy() && !is_phase2_qem_no_collision_strategy())
-      residual += param->curvatureWeight * evaluate_dihedral_preservation_energy(ctx, x);
-  }
-
   if (kEnableUniformityInPhase2Solve &&
     param->uniformityWeight > 0.0 && param->uniformityMode != "none")
   {
@@ -2422,7 +1934,7 @@ bool CollapseStage::solve_phase2_qem_placement(
   if (param->curvatureMode == "weighted_qem" || param->curvatureMode == "weighted-qem")
   {
     const double scaled_curvature = ctx.edge_curvature * ctx.local_scale;
-    curvature_multiplier += param->curvatureWeight * sqr(scaled_curvature);
+    curvature_multiplier += sqr(scaled_curvature);
   }
 
   Phase2HomogeneousQuadric quadric;
@@ -2465,57 +1977,6 @@ bool CollapseStage::solve_phase2_qem_placement(
     }
   }
 
-  if (!pure_qem && param->curvatureWeight > 0.0 &&
-    (param->curvatureMode == "normal_matching" || param->curvatureMode == "normal-matching") &&
-    !ctx.fan_edges.empty())
-  {
-    const double fan_count = static_cast<double>(ctx.fan_edges.size());
-    for (const CollapseFanEdge& fan_edge : ctx.fan_edges)
-    {
-      const Vec3d base = fan_edge.to - fan_edge.from;
-      const double base_length = base.length();
-      if (base_length <= ctx.local_scale * 1e-8 || !std::isfinite(base_length))
-        continue;
-
-      const Vec3d centroid = (fan_edge.from + fan_edge.to + ctx.midpoint) / 3.0;
-      FaceHandle closest_face;
-#ifdef USE_TREE_SEARCH
-      if (!ot)
-        continue;
-      closest_face = FaceHandle(ot->closest_point(centroid).second);
-#else
-      if (!og)
-        continue;
-      closest_face = FaceHandle(og->closest_point(centroid).second);
-#endif
-      if (!closest_face.is_valid() || closest_face.idx() < 0 ||
-        closest_face.idx() >= static_cast<int>(om->n_faces()))
-        continue;
-
-      Vec3d pts[3];
-      collect_face_points(om, closest_face, pts);
-      const Vec3d source_normal =
-        normalized_or_fallback(triangle_normal(pts[0], pts[1], pts[2]), Vec3d(0.0, 0.0, 1.0));
-      Vec3d tangent0 = base - (base | source_normal) * source_normal;
-      if (tangent0.length() <= 1e-12)
-      {
-        const Vec3d axis = std::abs(source_normal.x()) < 0.9 ?
-          Vec3d(1.0, 0.0, 0.0) : Vec3d(0.0, 1.0, 0.0);
-        tangent0 = axis - (axis | source_normal) * source_normal;
-      }
-      tangent0 = normalized_or_fallback(tangent0, Vec3d(1.0, 0.0, 0.0));
-      Vec3d tangent1 = normalized_or_fallback(source_normal.cross(tangent0), Vec3d(0.0, 0.0, 1.0));
-
-      const Vec3d edge_dir = base / base_length;
-      const Vec3d row0 = tangent0.cross(edge_dir);
-      const Vec3d row1 = tangent1.cross(edge_dir);
-      const double w = param->curvatureWeight * inv_scale_sqr / fan_count;
-
-      quadric.add_linear_residual(w, row0, row0 | fan_edge.from);
-      quadric.add_linear_residual(w, row1, row1 | fan_edge.from);
-    }
-  }
-
   if (!pure_qem && param->positionFidelityWeight > 0.0)
   {
     // Linearize the (nonlinear) closest-point lookup at the tangential smoothing
@@ -2527,8 +1988,8 @@ bool CollapseStage::solve_phase2_qem_placement(
     // don't fight each other into an off-surface compromise the way competing
     // point targets can. This mirrors how the QEM term itself uses add_plane.
     const Vec3d& ref = ctx.tangential_smoothing_point;
-    // Normalize by the sample count, same as the triangle-quality/uniformity/
-    // curvature blocks above (.../ fan_count), so this term's strength stays
+    // Normalize by the sample count, same as the triangle-quality/uniformity
+    // blocks above (.../ fan_count), so this term's strength stays
     // O(1) per vertex instead of growing with valence.
     const double sample_count = 1.0 + 3.0 * static_cast<double>(ctx.fan_edges.size());
     const double w_pf = param->positionFidelityWeight * inv_scale_sqr / sample_count;
@@ -2621,7 +2082,7 @@ bool CollapseStage::solve_phase2_quadratic_surrogate(
   if (param->curvatureMode == "weighted_qem" || param->curvatureMode == "weighted-qem")
   {
     const double scaled_curvature = ctx.edge_curvature * ctx.local_scale;
-    curvature_multiplier += param->curvatureWeight * sqr(scaled_curvature);
+    curvature_multiplier += sqr(scaled_curvature);
   }
 
   for (const QEMPlane& plane : ctx.qem_planes)
@@ -2773,10 +2234,7 @@ bool CollapseStage::compute_phase2_queue_candidate_data(
     make_phase2_placement_context(eh, score_collapser);
   components = evaluate_phase2_queue_components(score_ctx, new_point);
   return std::isfinite(components.qem) &&
-    std::isfinite(components.original_barrier) &&
-    std::isfinite(components.self_barrier) &&
     std::isfinite(components.position_fidelity) &&
-    std::isfinite(components.curvature) &&
     std::isfinite(components.triangle_quality) &&
     std::isfinite(components.uniformity);
 }
@@ -2881,18 +2339,9 @@ void CollapseStage::initialize_phase2_candidates()
   std::vector<InitialQueueCandidate> candidates;
   candidates.reserve(rm->n_edges());
   phase2_queue_component_maxima = Phase2QueueComponents();
-  phase2_queue_component_maxima.curvature = 1.0;
 
   const auto include_in_maxima = [&](const Phase2QueueComponents& components)
   {
-    phase2_queue_component_maxima.original_barrier =
-      std::max(
-        phase2_queue_component_maxima.original_barrier,
-        components.original_barrier);
-    phase2_queue_component_maxima.self_barrier =
-      std::max(
-        phase2_queue_component_maxima.self_barrier,
-        components.self_barrier);
     phase2_queue_component_maxima.position_fidelity =
       std::max(
         phase2_queue_component_maxima.position_fidelity,
@@ -2933,9 +2382,7 @@ void CollapseStage::initialize_phase2_candidates()
   }
 
   Logger::user_logger->info(
-    "phase 2 queue pass maxima: originalBarrier {}, selfBarrier {}, positionFidelity {}, maximumTargetEdgeRatio {}.",
-    phase2_queue_component_maxima.original_barrier,
-    phase2_queue_component_maxima.self_barrier,
+    "phase 2 queue pass maxima: positionFidelity {}, maximumTargetEdgeRatio {}.",
     phase2_queue_component_maxima.position_fidelity,
     phase2_queue_component_maxima.uniformity);
   Logger::user_logger->info(
@@ -3152,11 +2599,11 @@ void CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
     param->phase2PlacementStrategy, rm->n_vertices(), target_vertices_num);
   initialize_phase2_target_edge_length(target_vertices_num);
   Logger::user_logger->info(
-    "phase 2 energy terms: qemWeight {}, triangleQualityWeight {}, curvatureMode [{}], curvatureWeight {}, uniformityMode [{}], uniformityWeight {}, positionFidelityWeight {}, selfBarrierWeight {}, originalBarrierWeight {}, robustnessMode [{}].",
+    "phase 2 energy terms: qemWeight {}, triangleQualityWeight {}, curvatureMode [{}], uniformityMode [{}], uniformityWeight {}, positionFidelityWeight {}, robustnessMode [{}].",
     param->qemWeight, param->triangleQualityWeight,
-    param->curvatureMode, param->curvatureWeight,
+    param->curvatureMode,
     param->uniformityMode, param->uniformityWeight,
-    param->positionFidelityWeight, param->selfBarrierWeight, param->originalBarrierWeight,
+    param->positionFidelityWeight,
     param->robustnessMode);
   if (!kEnableUniformityInPhase2Solve &&
     param->uniformityWeight > 0.0 && param->uniformityMode != "none")

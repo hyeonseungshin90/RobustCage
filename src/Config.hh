@@ -75,7 +75,7 @@ struct ParamCollapseStage
   // Phase 2 placement strategy:
   // "adaptive": QEM linear solve first, Newton only for selected hard cases.
   // "linear_only": QEM linear solve only during collapse.
-  // "qem": use QEM plus quality/uniformity/curvature quadratic surrogates; no Newton.
+  // "qem": use QEM plus quality/uniformity terms; no Newton.
   // "qem_no_collision": pure Garland-Heckbert QEM only; non-QEM energies and collision rejection are disabled.
   // "final_newton": QEM linear solve during collapse, then one fixed-topology Newton polish.
   // "newton_only": skip QEM linear solve and use Newton placement for every popped edge.
@@ -88,7 +88,7 @@ struct ParamCollapseStage
   // "exact_backtracking": use exact local checks during backtracking.
   // "ipc_line_search": additionally sample the step path with exact checks.
   std::string robustnessMode;
-  // Curvature mode: "none", "weighted_qem", "normal_matching".
+  // Curvature mode: "none" or "weighted_qem".
   std::string curvatureMode;
   // Uniformity mode: "none", "source", "global".
   std::string uniformityMode;
@@ -112,13 +112,9 @@ struct ParamCollapseStage
   size_t phase2NewtonFinalRefineCollapses;
 
   double qemWeight;
-  double selfBarrierWeight;
-  double originalBarrierWeight;
   double positionFidelityWeight;
-  double curvatureWeight;
   double triangleQualityWeight;
   double uniformityWeight;
-  double barrierActivationDistanceFactor;
 
   boost::json::object serialize()const
   {
@@ -148,13 +144,9 @@ struct ParamCollapseStage
     jo["phase2NewtonResidualGrowth"] = phase2NewtonResidualGrowth;
     jo["phase2NewtonFinalRefineCollapses"] = phase2NewtonFinalRefineCollapses;
     jo["qemWeight"] = qemWeight;
-    jo["selfBarrierWeight"] = selfBarrierWeight;
-    jo["originalBarrierWeight"] = originalBarrierWeight;
     jo["positionFidelityWeight"] = positionFidelityWeight;
-    jo["curvatureWeight"] = curvatureWeight;
     jo["triangleQualityWeight"] = triangleQualityWeight;
     jo["uniformityWeight"] = uniformityWeight;
-    jo["barrierActivationDistanceFactor"] = barrierActivationDistanceFactor;
     return jo;
   }
   void deserialize(const boost::json::object& jo)
@@ -251,27 +243,15 @@ struct ParamCollapseStage
     auto qem_weight_it = jo.find("qemWeight");
     qemWeight = qem_weight_it != jo.end() ? qem_weight_it->value().as_double() : 1.0;
 
-    auto self_barrier_weight_it = jo.find("selfBarrierWeight");
-    selfBarrierWeight = self_barrier_weight_it != jo.end() ? self_barrier_weight_it->value().as_double() : 0.0;
-
-    auto original_barrier_weight_it = jo.find("originalBarrierWeight");
-    originalBarrierWeight = original_barrier_weight_it != jo.end() ? original_barrier_weight_it->value().as_double() : 0.1;
-
     auto position_fidelity_weight_it = jo.find("positionFidelityWeight");
     positionFidelityWeight =
       position_fidelity_weight_it != jo.end() ? position_fidelity_weight_it->value().as_double() : 1.0;
-
-    auto curvature_weight_it = jo.find("curvatureWeight");
-    curvatureWeight = curvature_weight_it != jo.end() ? curvature_weight_it->value().as_double() : 1.0;
 
     auto triangle_quality_weight_it = jo.find("triangleQualityWeight");
     triangleQualityWeight = triangle_quality_weight_it != jo.end() ? triangle_quality_weight_it->value().as_double() : 2.0;
 
     auto uniformity_weight_it = jo.find("uniformityWeight");
     uniformityWeight = uniformity_weight_it != jo.end() ? uniformity_weight_it->value().as_double() : 1.0;
-
-    auto barrier_activation_it = jo.find("barrierActivationDistanceFactor");
-    barrierActivationDistanceFactor = barrier_activation_it != jo.end() ? barrier_activation_it->value().as_double() : 0.01;
   }
 };
 
@@ -343,7 +323,7 @@ struct ParamCageSimplifier
   // Phase 2 simplification mode: "fast" keeps the original FastSimplifier,
   // "newton" uses adaptive QEM/Newton energy collapses, "linear_only"
   // uses the linear Phase 2 solve without Newton refinement, and "qem"
-  // uses QEM plus quality/uniformity/curvature quadratic surrogates with hard validity rejection.
+  // uses QEM plus quality/uniformity terms with hard validity rejection.
   // "qem_no_collision" uses pure Garland-Heckbert QEM cost/placement only.
   std::string phase2Mode;
   // iterations
@@ -455,13 +435,9 @@ struct ParamCageGenerator
     collapse.phase2NewtonResidualGrowth = 1.5;
     collapse.phase2NewtonFinalRefineCollapses = 25;
     collapse.qemWeight = 1.0;
-    collapse.selfBarrierWeight = 0.0;
-    collapse.originalBarrierWeight = 0.1;
     collapse.positionFidelityWeight = 1.0;
-    collapse.curvatureWeight = 1.0;
     collapse.triangleQualityWeight = 2.0;
     collapse.uniformityWeight = 1.0;
-    collapse.barrierActivationDistanceFactor = 0.01;
 
     auto& relocate = paramCageSimplifier.paramRelocate;
     relocate.smoothIter = 3;

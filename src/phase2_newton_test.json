@@ -1,7 +1,7 @@
 {
   "paramCageSimplifier": {
-    "phase2Mode": "newton",
     "maxIter": 50,
+    "phase2Mode": "newton",
     "relaxErrorIterStep": 5,
     "maxErrorRelaxIter": 4,
     "initError": 0.005,
@@ -15,8 +15,6 @@
       "robustnessMode": "exact_backtracking",
       "curvatureMode": "weighted_qem",
       "uniformityMode": "source",
-      "selfBarrierWeight": 0.0,
-      "originalBarrierWeight": 0.0,
       "positionFidelityWeight": 1.0
     },
     "paramFlip": {

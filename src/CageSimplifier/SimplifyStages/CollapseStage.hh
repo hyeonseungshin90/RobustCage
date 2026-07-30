@@ -172,10 +172,7 @@ private:
   struct Phase2QueueComponents
   {
     double qem = 0.0;
-    double original_barrier = 0.0;
-    double self_barrier = 0.0;
     double position_fidelity = 0.0;
-    double curvature = 0.0;
     double triangle_quality = 0.0;
     double uniformity = 0.0;
   };
@@ -234,11 +231,7 @@ private:
   double evaluate_newton_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_qem_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_qem_only_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
-  double evaluate_original_barrier_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
-  double evaluate_self_barrier_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_position_fidelity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
-  double evaluate_curvature_normal_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
-  double evaluate_dihedral_preservation_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_triangle_quality_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   Eigen::Matrix4d build_phase2_triangle_quality_surrogate_quadric(
     const Phase2PlacementContext& ctx) const;
@@ -255,7 +248,6 @@ private:
   double source_uniformity_target_length(const Phase2PlacementContext& ctx, const Vec3d& sample_point) const;
   double phase2_queue_uniformity_target_length(
     const Phase2PlacementContext& ctx, const Vec3d& sample_point) const;
-  double ipc_barrier(double distance, double dhat) const;
   double source_edge_length_at(const Vec3d& sample_point) const;
   bool closest_original_point(const Vec3d& p, Vec3d& closest) const;
   bool closest_original_plane(const Vec3d& p, Vec3d& normal, double& offset) const;

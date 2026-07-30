@@ -51,7 +51,7 @@ config.json
 | `collapse_post_face_area_hard` | collapse | `priorityMode = "post_face_area_hard"` |
 | `collapse_triangle_quality` | collapse | `priorityMode = "triangle_quality"` |
 | `collapse_triangle_quality_hard` | collapse | `priorityMode = "triangle_quality_hard"` |
-| `phase2_newton` | phase2 | `phase2Mode = "newton"`, `collapsePlacementMethod = "optimization"`, `phase2PlacementStrategy = "adaptive"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"`, `positionFidelityWeight = 1.0`, barrier weights `0.0` by default because exact checks are hard constraints |
+| `phase2_newton` | phase2 | `phase2Mode = "newton"`, `collapsePlacementMethod = "optimization"`, `phase2PlacementStrategy = "adaptive"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"`, `positionFidelityWeight = 1.0`; exact checks are hard constraints |
 | `phase2_adaptive` | phase2 | QEM linear solve first, Newton only when local quality/residual/final-collapse criteria request it |
 | `phase2_linear_only` | phase2 | `phase2Mode = "linear_only"`; QEM linear solve placement during Phase 2 collapse with no Newton refinement |
 | `phase2_qem` | phase2 | `phase2Mode = "qem"`; for a watertight manifold cage, estimate the target mean edge length as `initialMean * sqrt((initialVertices - chi) / (targetVertices - chi))`, where `chi = V - E + F`. Queue ranking combines QEM with `current edge length / target mean edge length`, so shorter edges receive higher priority. The previous source-adaptive queue ranking remains available by combining `phase2_qem+uniformity_source`. Accept valid QEM points directly, otherwise backtrack from tangential smoothing; skip the collapse candidate if no backtracking point satisfies hard intersection/validity checks |
@@ -73,7 +73,6 @@ config.json
 | `robust_ipc` | collapse | `robustnessMode = "ipc_line_search"` |
 | `curvature_none` | collapse | `curvatureMode = "none"` |
 | `curvature_weighted_qem` | collapse | `curvatureMode = "weighted_qem"` |
-| `curvature_normal_matching` | collapse | `curvatureMode = "normal_matching"` |
 | `uniformity_none` | collapse | `uniformityMode = "none"` |
 | `uniformity_source` | collapse | `uniformityMode = "source"`; preserve the source-adaptive target-edge calculation |
 | `uniformity_global` | collapse | `uniformityMode = "global"`; rank by current cage edge length relative to the Euler-estimated target mean edge length |
@@ -82,9 +81,8 @@ config.json
 
 Newton placement 세부 가중치는 JSON에서 조절합니다. 주요 키는
 `paramCageSimplifier.paramCollapse.phase2PlacementStrategy`,
-`qemWeight`, `selfBarrierWeight`,
-`originalBarrierWeight`, `positionFidelityWeight`, `curvatureWeight`, `triangleQualityWeight`,
-`uniformityWeight`, `barrierActivationDistanceFactor`, `newtonMaxIter`,
+`qemWeight`, `positionFidelityWeight`, `triangleQualityWeight`,
+`uniformityWeight`, `newtonMaxIter`,
 `lineSearchMaxIter`, `lineSearchCcdSamples`,
 `phase2NewtonQualityThreshold`, `phase2NewtonResidualThreshold`,
 `phase2NewtonResidualGrowth`, `phase2NewtonFinalRefineCollapses`,
