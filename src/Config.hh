@@ -73,31 +73,26 @@ struct ParamCollapseStage
   // "optimization" uses local QEM/Newton-style energies to choose the post-collapse vertex position.
   std::string collapsePlacementMethod;
   // Phase 2 placement strategy:
-  // "adaptive": QEM linear solve first, Newton only for selected hard cases.
-  // "linear_only": QEM linear solve only during collapse.
-  // "qem": use QEM plus quality/uniformity terms; no Newton.
-  // "qem_no_collision": pure Garland-Heckbert QEM only; non-QEM energies and collision rejection are disabled.
-  // "final_newton": QEM linear solve during collapse, then one fixed-topology Newton polish.
-  // "newton_only": skip QEM linear solve and use Newton placement for every popped edge.
-  // "quadratic_surrogate": use the 4x4 quadratic surrogate solve as a separate experimental path.
+  // "linear_solve": use the QEM-based linear system with quality terms and no Newton.
+  // "newton_solve": use Newton placement for every popped edge.
+  // "qem_original": pure Garland-Heckbert QEM; non-QEM energies and collision rejection are disabled.
   std::string phase2PlacementStrategy;
   // Newton solver mode: "damped" or "trust_region".
   std::string newtonSolverMode;
   // Robustness mode:
   // "exact_reject": optimize first, then reject invalid final positions.
   // "exact_backtracking": use exact local checks during backtracking.
-  // "ipc_line_search": additionally sample the step path with exact checks.
   std::string robustnessMode;
   // Curvature mode: "none" or "weighted_qem".
   std::string curvatureMode;
   // Uniformity mode: "none", "source", "global".
   std::string uniformityMode;
-  // When true, phase2PlacementStrategy "qem" rejects the edge outright (no
+  // When true, phase2PlacementStrategy "linear_solve" rejects the edge outright (no
   // collapse) if the raw QEM linear-solve point fails the hard validity
   // checks (collision/degenerate/wrinkle), instead of backtracking toward a
   // nearby fallback position. Default false keeps the existing backtracking
   // behavior; this is an opt-in alternative.
-  bool phase2QemRejectOnLinearCollision;
+  bool phase2LinearSolveCollisionReject;
 
   size_t newtonMaxIter;
   double newtonGradTol;
@@ -105,14 +100,7 @@ struct ParamCollapseStage
   double newtonFiniteDiffScale;
   double trustRegionRadiusScale;
   size_t lineSearchMaxIter;
-  size_t lineSearchCcdSamples;
-  double phase2NewtonQualityThreshold;
-  double phase2NewtonResidualThreshold;
-  double phase2NewtonResidualGrowth;
-  size_t phase2NewtonFinalRefineCollapses;
-
   double qemWeight;
-  double positionFidelityWeight;
   double triangleQualityWeight;
   double uniformityWeight;
 
@@ -131,20 +119,14 @@ struct ParamCollapseStage
     jo["robustnessMode"] = robustnessMode;
     jo["curvatureMode"] = curvatureMode;
     jo["uniformityMode"] = uniformityMode;
-    jo["phase2QemRejectOnLinearCollision"] = phase2QemRejectOnLinearCollision;
+    jo["phase2LinearSolveCollisionReject"] = phase2LinearSolveCollisionReject;
     jo["newtonMaxIter"] = newtonMaxIter;
     jo["newtonGradTol"] = newtonGradTol;
     jo["newtonStepTol"] = newtonStepTol;
     jo["newtonFiniteDiffScale"] = newtonFiniteDiffScale;
     jo["trustRegionRadiusScale"] = trustRegionRadiusScale;
     jo["lineSearchMaxIter"] = lineSearchMaxIter;
-    jo["lineSearchCcdSamples"] = lineSearchCcdSamples;
-    jo["phase2NewtonQualityThreshold"] = phase2NewtonQualityThreshold;
-    jo["phase2NewtonResidualThreshold"] = phase2NewtonResidualThreshold;
-    jo["phase2NewtonResidualGrowth"] = phase2NewtonResidualGrowth;
-    jo["phase2NewtonFinalRefineCollapses"] = phase2NewtonFinalRefineCollapses;
     jo["qemWeight"] = qemWeight;
-    jo["positionFidelityWeight"] = positionFidelityWeight;
     jo["triangleQualityWeight"] = triangleQualityWeight;
     jo["uniformityWeight"] = uniformityWeight;
     return jo;
@@ -185,7 +167,7 @@ struct ParamCollapseStage
     if (phase2_placement_strategy_it == jo.end())
       phase2_placement_strategy_it = jo.find("phase2PlacementMode");
     phase2PlacementStrategy =
-      phase2_placement_strategy_it != jo.end() ? std::string(phase2_placement_strategy_it->value().as_string().c_str()) : "adaptive";
+      phase2_placement_strategy_it != jo.end() ? std::string(phase2_placement_strategy_it->value().as_string().c_str()) : "linear_solve";
 
     auto solver_mode_it = jo.find("newtonSolverMode");
     newtonSolverMode = solver_mode_it != jo.end() ? std::string(solver_mode_it->value().as_string().c_str()) : "damped";
@@ -199,9 +181,9 @@ struct ParamCollapseStage
     auto uniformity_mode_it = jo.find("uniformityMode");
     uniformityMode = uniformity_mode_it != jo.end() ? std::string(uniformity_mode_it->value().as_string().c_str()) : "none";
 
-    auto phase2_qem_reject_on_linear_collision_it = jo.find("phase2QemRejectOnLinearCollision");
-    phase2QemRejectOnLinearCollision =
-      phase2_qem_reject_on_linear_collision_it != jo.end() ? phase2_qem_reject_on_linear_collision_it->value().as_bool() : false;
+    auto phase2_linear_solve_collision_reject_it = jo.find("phase2LinearSolveCollisionReject");
+    phase2LinearSolveCollisionReject =
+      phase2_linear_solve_collision_reject_it != jo.end() ? phase2_linear_solve_collision_reject_it->value().as_bool() : false;
 
     auto newton_max_iter_it = jo.find("newtonMaxIter");
     newtonMaxIter = newton_max_iter_it != jo.end() ? newton_max_iter_it->value().as_int64() : 4;
@@ -221,31 +203,8 @@ struct ParamCollapseStage
     auto line_search_max_iter_it = jo.find("lineSearchMaxIter");
     lineSearchMaxIter = line_search_max_iter_it != jo.end() ? line_search_max_iter_it->value().as_int64() : 6;
 
-    auto line_search_ccd_samples_it = jo.find("lineSearchCcdSamples");
-    lineSearchCcdSamples = line_search_ccd_samples_it != jo.end() ? line_search_ccd_samples_it->value().as_int64() : 4;
-
-    auto phase2_quality_threshold_it = jo.find("phase2NewtonQualityThreshold");
-    phase2NewtonQualityThreshold =
-      phase2_quality_threshold_it != jo.end() ? phase2_quality_threshold_it->value().as_double() : 0.12;
-
-    auto phase2_residual_threshold_it = jo.find("phase2NewtonResidualThreshold");
-    phase2NewtonResidualThreshold =
-      phase2_residual_threshold_it != jo.end() ? phase2_residual_threshold_it->value().as_double() : 0.25;
-
-    auto phase2_residual_growth_it = jo.find("phase2NewtonResidualGrowth");
-    phase2NewtonResidualGrowth =
-      phase2_residual_growth_it != jo.end() ? phase2_residual_growth_it->value().as_double() : 1.5;
-
-    auto phase2_final_refine_it = jo.find("phase2NewtonFinalRefineCollapses");
-    phase2NewtonFinalRefineCollapses =
-      phase2_final_refine_it != jo.end() ? phase2_final_refine_it->value().as_int64() : 25;
-
     auto qem_weight_it = jo.find("qemWeight");
     qemWeight = qem_weight_it != jo.end() ? qem_weight_it->value().as_double() : 1.0;
-
-    auto position_fidelity_weight_it = jo.find("positionFidelityWeight");
-    positionFidelityWeight =
-      position_fidelity_weight_it != jo.end() ? position_fidelity_weight_it->value().as_double() : 1.0;
 
     auto triangle_quality_weight_it = jo.find("triangleQualityWeight");
     triangleQualityWeight = triangle_quality_weight_it != jo.end() ? triangle_quality_weight_it->value().as_double() : 2.0;
@@ -321,10 +280,9 @@ struct ParamCageSimplifier
   // target
   size_t targetVerticesNum;
   // Phase 2 simplification mode: "fast" keeps the original FastSimplifier,
-  // "newton" uses adaptive QEM/Newton energy collapses, "linear_only"
-  // uses the linear Phase 2 solve without Newton refinement, and "qem"
-  // uses QEM plus quality/uniformity terms with hard validity rejection.
-  // "qem_no_collision" uses pure Garland-Heckbert QEM cost/placement only.
+  // "linear_solve" uses the QEM-based linear system, "newton_solve" uses
+  // Newton placement for every collapse, and "qem_original" uses pure
+  // Garland-Heckbert QEM cost/placement only.
   std::string phase2Mode;
   // iterations
   size_t maxIter;
@@ -417,25 +375,19 @@ struct ParamCageGenerator
     collapse.lengthQualityDegradationRatio = 0.5;
     collapse.lengthQualityMinQuality = 0.1;
     collapse.collapsePlacementMethod = "sampling";
-    collapse.phase2PlacementStrategy = "adaptive";
+    collapse.phase2PlacementStrategy = "linear_solve";
     collapse.newtonSolverMode = "damped";
     collapse.robustnessMode = "exact_backtracking";
     collapse.curvatureMode = "none";
     collapse.uniformityMode = "none";
-    collapse.phase2QemRejectOnLinearCollision = false;
+    collapse.phase2LinearSolveCollisionReject = false;
     collapse.newtonMaxIter = 4;
     collapse.newtonGradTol = 1e-8;
     collapse.newtonStepTol = 1e-8;
     collapse.newtonFiniteDiffScale = 1e-4;
     collapse.trustRegionRadiusScale = 0.25;
     collapse.lineSearchMaxIter = 6;
-    collapse.lineSearchCcdSamples = 4;
-    collapse.phase2NewtonQualityThreshold = 0.12;
-    collapse.phase2NewtonResidualThreshold = 0.25;
-    collapse.phase2NewtonResidualGrowth = 1.5;
-    collapse.phase2NewtonFinalRefineCollapses = 25;
     collapse.qemWeight = 1.0;
-    collapse.positionFidelityWeight = 1.0;
     collapse.triangleQualityWeight = 2.0;
     collapse.uniformityWeight = 1.0;
 

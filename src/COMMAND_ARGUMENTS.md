@@ -27,9 +27,11 @@ exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path>
 
 ```text
 default
-collapse+flip_triangle_quality_hard+relocate_triangle_quality_hard
-collapse_length+flip_triangle_quality_hard+relocate_triangle_quality_hard
-collapse_length_quality_relative,flip_triangle_quality_hard
+phase2_linear_solve
+phase2_linear_solve_collision_reject
+phase2_newton_solve
+phase2_qem_original
+collapse_length+phase2_linear_solve
 config.json
 ```
 
@@ -51,42 +53,19 @@ config.json
 | `collapse_post_face_area_hard` | collapse | `priorityMode = "post_face_area_hard"` |
 | `collapse_triangle_quality` | collapse | `priorityMode = "triangle_quality"` |
 | `collapse_triangle_quality_hard` | collapse | `priorityMode = "triangle_quality_hard"` |
-| `phase2_newton` | phase2 | `phase2Mode = "newton"`, `collapsePlacementMethod = "optimization"`, `phase2PlacementStrategy = "adaptive"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"`, `positionFidelityWeight = 1.0`; exact checks are hard constraints |
-| `phase2_adaptive` | phase2 | QEM linear solve first, Newton only when local quality/residual/final-collapse criteria request it |
-| `phase2_linear_only` | phase2 | `phase2Mode = "linear_only"`; QEM linear solve placement during Phase 2 collapse with no Newton refinement |
-| `phase2_qem` | phase2 | `phase2Mode = "qem"`; for a watertight manifold cage, estimate the target mean edge length as `initialMean * sqrt((initialVertices - chi) / (targetVertices - chi))`, where `chi = V - E + F`. Queue ranking combines QEM with `current edge length / target mean edge length`, so shorter edges receive higher priority. The previous source-adaptive queue ranking remains available by combining `phase2_qem+uniformity_source`. Accept valid QEM points directly, otherwise backtrack from tangential smoothing; skip the collapse candidate if no backtracking point satisfies hard intersection/validity checks |
-| `phase2_qem_reject_on_collision` / `qem_reject_on_collision` | phase2 | `phase2Mode = "qem"` (same defaults as `phase2_qem`) plus `phase2QemRejectOnLinearCollision = true`. If the raw QEM linear-solve point fails hard validity (collision/degenerate/wrinkle), reject the edge outright instead of backtracking from tangential smoothing. Standalone preset — unlike `phase2_qem`, no need to combine tokens. `phase2_qem` alone keeps the default `false` (backtracking) behavior. |
-| `phase2_qem_no_collision` | phase2 | `phase2Mode = "qem_no_collision"`; pure Garland-Heckbert QEM edge-collapse cost/placement only, with non-QEM energies and collision rejection disabled |
-| `phase2_final_newton` | phase2 | QEM linear solve placement during collapse, then one fixed-topology Newton relocation pass |
-| `phase2_newton_only` | phase2 | Skip QEM linear solve; use Newton placement for every popped collapse candidate |
-| `phase2_quadratic_surrogate` | phase2 | Separate experimental strategy: keep QEM queue ranking, then add the 4x4 quadratic surrogate as an extra placement candidate with QEM/fallback safeguards; no Newton refinement |
-| `flip_valence` | flip | `priorityMode = "valence"` |
-| `flip_triangle_quality_hard` | flip | `priorityMode = "triangle_quality_hard"` |
-| `relocate_hausdorff` | relocate | `priorityMode = "hausdorff"` |
-| `relocate_triangle_quality_hard` | relocate | `priorityMode = "triangle_quality_hard"` |
-| `collapse_optimization` / `collapse_newton` | phase2/collapse | `phase2Mode = "newton"`, `collapsePlacementMethod = "optimization"`, `curvatureMode = "weighted_qem"`, `uniformityMode = "source"` |
-| `collapse_sampling` | collapse | `collapsePlacementMethod = "sampling"` |
-| `newton_damped` | collapse | `newtonSolverMode = "damped"` |
-| `newton_trust_region` | collapse | `newtonSolverMode = "trust_region"` |
-| `robust_exact_reject` | collapse | `robustnessMode = "exact_reject"` |
-| `robust_exact_backtracking` | collapse | `robustnessMode = "exact_backtracking"` |
-| `robust_ipc` | collapse | `robustnessMode = "ipc_line_search"` |
-| `curvature_none` | collapse | `curvatureMode = "none"` |
-| `curvature_weighted_qem` | collapse | `curvatureMode = "weighted_qem"` |
-| `uniformity_none` | collapse | `uniformityMode = "none"` |
-| `uniformity_source` | collapse | `uniformityMode = "source"`; preserve the source-adaptive target-edge calculation |
-| `uniformity_global` | collapse | `uniformityMode = "global"`; rank by current cage edge length relative to the Euler-estimated target mean edge length |
+| `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; solve the QEM/quality linear system, accept valid points directly, and otherwise use Armijo backtracking from tangential smoothing |
+| `phase2_linear_solve_collision_reject` | phase2 | Same defaults as `phase2_linear_solve` plus `phase2LinearSolveCollisionReject = true`; reject an invalid raw linear-solve point instead of backtracking |
+| `phase2_newton_solve` | phase2 | `phase2Mode = "newton_solve"`; use Newton placement for every popped collapse candidate |
+| `phase2_qem_original` | phase2 | `phase2Mode = "qem_original"`; pure Garland-Heckbert QEM edge-collapse cost/placement with non-QEM energies and collision rejection disabled |
 
 알 수 없는 토큰이 들어오면 `unknown parameter token` 오류와 함께 실행이 중단됩니다.
 
 Newton placement 세부 가중치는 JSON에서 조절합니다. 주요 키는
 `paramCageSimplifier.paramCollapse.phase2PlacementStrategy`,
-`qemWeight`, `positionFidelityWeight`, `triangleQualityWeight`,
+`qemWeight`, `triangleQualityWeight`,
 `uniformityWeight`, `newtonMaxIter`,
-`lineSearchMaxIter`, `lineSearchCcdSamples`,
-`phase2NewtonQualityThreshold`, `phase2NewtonResidualThreshold`,
-`phase2NewtonResidualGrowth`, `phase2NewtonFinalRefineCollapses`,
-`phase2QemRejectOnLinearCollision`입니다.
+`lineSearchMaxIter`,
+`phase2LinearSolveCollisionReject`입니다.
 
 ## JSON Config
 
@@ -150,7 +129,7 @@ nested cage 생성:
 프리셋 조합 사용:
 
 ```powershell
-.\exeCageGenerator.exe collapse_length_quality_relative+flip_triangle_quality_hard C:\models\bunny.obj C:\out 500
+.\exeCageGenerator.exe collapse_length+phase2_linear_solve C:\models\bunny.obj C:\out 500
 ```
 
 JSON 설정 파일 사용:

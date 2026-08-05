@@ -7,7 +7,6 @@
 #include "Config.hh"
 #include "CageSimplifier/Topo/TopoOperations.h"
 #include "CageSimplifier/Topo/EdgeCollapser.h"
-#include "CageSimplifier/Topo/VertexRelocater.h"
 #include "CageSimplifier/Geom/GeometryCheck.h"
 
 namespace Cage
@@ -172,7 +171,6 @@ private:
   struct Phase2QueueComponents
   {
     double qem = 0.0;
-    double position_fidelity = 0.0;
     double triangle_quality = 0.0;
     double uniformity = 0.0;
   };
@@ -190,17 +188,13 @@ private:
   bool try_enqueue_collapse_candidate(
     EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after, const Vec3d& new_point, double priority_score);
   bool is_optimization_collapse_placement_method() const;
-  bool is_phase2_adaptive_strategy() const;
-  bool is_phase2_linear_only_strategy() const;
-  bool is_phase2_qem_strategy() const;
-  bool is_phase2_qem_no_collision_strategy() const;
-  bool is_phase2_final_newton_strategy() const;
-  bool is_phase2_newton_only_strategy() const;
-  bool is_phase2_quadratic_surrogate_strategy() const;
+  bool is_phase2_qem_based_strategy() const;
+  bool is_phase2_linear_solve_strategy() const;
+  bool is_phase2_qem_original_strategy() const;
+  bool is_phase2_newton_solve_strategy() const;
   bool is_trust_region_solver_mode() const;
   bool is_exact_reject_robustness_mode() const;
   bool is_exact_backtracking_robustness_mode() const;
-  bool is_ipc_line_search_robustness_mode() const;
   bool is_length_priority_mode() const;
   bool is_length_quality_priority_mode() const;
   bool is_length_quality_weighted_submode() const;
@@ -224,14 +218,12 @@ private:
   double calc_min_triangle_quality(SMeshT* mesh) const;
   double calc_min_triangle_quality(SMeshT* mesh, const std::set<FaceHandle>& faces) const;
   Phase2PlacementContext make_phase2_placement_context(EdgeHandle eh, EdgeCollapser& edge_collapser) const;
-  Phase2PlacementContext make_phase2_vertex_relocation_context(VertexHandle vh, VertexRelocater& vertex_relocater) const;
   NewtonDerivatives finite_difference_newton_derivatives(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   NewtonDerivatives approximate_newton_derivatives(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   NewtonDerivatives autodiff_newton_derivatives(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_newton_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_qem_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_qem_only_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
-  double evaluate_position_fidelity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_triangle_quality_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   Eigen::Matrix4d build_phase2_triangle_quality_surrogate_quadric(
     const Phase2PlacementContext& ctx) const;
@@ -246,31 +238,19 @@ private:
   double evaluate_phase2_refinement_residual(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double calc_phase2_fan_min_quality(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double source_uniformity_target_length(const Phase2PlacementContext& ctx, const Vec3d& sample_point) const;
-  double phase2_queue_uniformity_target_length(
-    const Phase2PlacementContext& ctx, const Vec3d& sample_point) const;
   double source_edge_length_at(const Vec3d& sample_point) const;
-  bool closest_original_point(const Vec3d& p, Vec3d& closest) const;
-  bool closest_original_plane(const Vec3d& p, Vec3d& normal, double& offset) const;
   bool collapse_target_valid(EdgeCollapser& edge_collapser, const Vec3d& x) const;
-  bool sampled_path_valid(EdgeCollapser& edge_collapser, const Vec3d& from, const Vec3d& to) const;
   bool phase2_placement_satisfies_hard_constraints(
     const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser, const Vec3d& x) const;
   void set_phase2_edge_collapser_flags(EdgeCollapser& edge_collapser) const;
-  bool should_refine_phase2_placement_with_newton(
-    const Phase2PlacementContext& ctx, const Vec3d& x,
-    size_t remaining_vertices, size_t target_vertices_num,
-    double min_quality, double nonlinear_residual) const;
   bool choose_phase2_collapse_placement(
     EdgeHandle eh, EdgeCollapser& edge_collapser, const Vec3d& queued_point,
-    size_t remaining_vertices, size_t target_vertices_num,
     Phase2PlacementDecision& decision, double& newton_seconds);
-  bool solve_phase2_qem_placement(
+  bool solve_phase2_quadric_placement(
     const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const;
-  bool select_phase2_qem_line_search_candidate(
+  bool select_phase2_linear_solve_line_search_candidate(
     const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
     const Vec3d& qem_point, Vec3d& selected_point, double& selected_energy) const;
-  bool solve_phase2_quadratic_surrogate(
-    const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const;
   void initialize_phase2_qem_quadrics();
   void update_phase2_qem_quadric_after_collapse(VertexHandle center_vh, const Eigen::Matrix4d& quadric);
   Eigen::Matrix4d phase2_qem_quadric(VertexHandle vh) const;
@@ -285,9 +265,6 @@ private:
   void initialize_phase2_target_edge_length(size_t target_vertices_num);
   void initialize_phase2_candidates();
   void update_phase2_after_collapsing(VertexHandle collapsed_center);
-  bool refine_vertex_relocation_with_newton(
-    VertexHandle vh, VertexRelocater& vertex_relocater, Vec3d& new_point, double& energy);
-  void do_phase2_final_newton_relocation();
   EdgeSide classify_edge_side(EdgeHandle eh) const;
   EdgeSideStats collect_candidate_edge_side_stats() const;
   void add_edge_side(EdgeSideStats& stats, EdgeSide side) const;
@@ -295,7 +272,6 @@ private:
 
 
   inline EdgeCollapser new_edge_collapser() { return EdgeCollapser(om, rm, ot, lrt, og); }
-  inline VertexRelocater new_vertex_relocater() { return VertexRelocater(om, rm, ot, lrt, nullptr, og); }
 };
 
 }// namespace CageSimp

@@ -10,36 +10,22 @@ namespace
 {
 bool is_phase2_energy_mode(const std::string& mode)
 {
-  return mode == "newton" || mode == "linear_only" || mode == "qem" ||
-    mode == "qem_no_collision";
+  return mode == "linear_solve" || mode == "newton_solve" ||
+    mode == "qem_original";
 }
 
-bool is_qem_phase2_mode(const std::string& mode)
+bool skips_phase2_flip_polish(const std::string& mode)
 {
-  return mode == "qem" || mode == "qem_no_collision";
+  return mode == "linear_solve" || mode == "qem_original";
 }
 
-void normalize_phase2_mode_alias(std::string& mode)
-{
-  if (mode == "qem_only")
-    mode = "qem";
-  if (mode == "qem-no-collision" ||
-    mode == "qem_no_collision_reject" ||
-    mode == "qem-no-collision-reject" ||
-    mode == "qem_no_intersection" ||
-    mode == "qem-no-intersection" ||
-    mode == "qem_no_intersection_reject" ||
-    mode == "qem-no-intersection-reject")
-    mode = "qem_no_collision";
-}
-
-void configure_qem_phase2_strategy(
-  ParamCollapseStage& collapse, bool skip_original_collision_check)
+void configure_phase2_strategy(
+  ParamCollapseStage& collapse, const std::string& mode)
 {
   collapse.collapsePlacementMethod = "optimization";
-  collapse.phase2PlacementStrategy =
-    skip_original_collision_check ? "qem_no_collision" : "qem";
-  collapse.robustnessMode = "exact_reject";
+  collapse.phase2PlacementStrategy = mode;
+  if (mode == "linear_solve" || mode == "qem_original")
+    collapse.robustnessMode = "exact_reject";
 }
 }
 
@@ -68,12 +54,8 @@ void CageSimplifier::simplify()
     rm->request_vertex_normals();
   rm->update_normals();
 
-  normalize_phase2_mode_alias(param->phase2Mode);
-
-  if (is_qem_phase2_mode(param->phase2Mode))
-    configure_qem_phase2_strategy(
-      param->paramCollapse,
-      param->phase2Mode == "qem_no_collision");
+  if (is_phase2_energy_mode(param->phase2Mode))
+    configure_phase2_strategy(param->paramCollapse, param->phase2Mode);
 
   degeneration_remover = std::make_unique<DegenerationRemover>(
     om, rm, vt.get(), ot.get(), lrt.get(), og.get());
@@ -175,7 +157,7 @@ void CageSimplifier::run_phase2_energy_simplification()
   collapse_stage->do_phase2_energy_simplification(param->targetVerticesNum);
   collapse_stage = nullptr;
 
-  if (is_qem_phase2_mode(param->phase2Mode))
+  if (skips_phase2_flip_polish(param->phase2Mode))
   {
     init_one_ring_faces(rm);
     return;

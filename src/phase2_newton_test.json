@@ -1,7 +1,7 @@
 {
   "paramCageSimplifier": {
     "maxIter": 50,
-    "phase2Mode": "newton",
+    "phase2Mode": "newton_solve",
     "relaxErrorIterStep": 5,
     "maxErrorRelaxIter": 4,
     "initError": 0.005,
@@ -10,12 +10,11 @@
       "maxValence": 8,
       "priorityMode": "hausdorff",
       "collapsePlacementMethod": "optimization",
-      "phase2PlacementStrategy": "adaptive",
+      "phase2PlacementStrategy": "newton_solve",
       "newtonSolverMode": "damped",
       "robustnessMode": "exact_backtracking",
       "curvatureMode": "weighted_qem",
-      "uniformityMode": "source",
-      "positionFidelityWeight": 1.0
+      "uniformityMode": "source"
     },
     "paramFlip": {
       "maxValence": 8

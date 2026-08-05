@@ -174,22 +174,12 @@ std::string phase2_mode_label(const Cage::ParamCageSimplifier& param)
   return "phase2_" + sanitize_path_component(param.phase2Mode);
 }
 
-std::string newton_phase2_detail_label(const Cage::ParamCollapseStage& param)
+std::string newton_solve_phase2_detail_label(const Cage::ParamCollapseStage& param)
 {
   std::string mode = "newton";
   mode += "_" + sanitize_path_component(param.phase2PlacementStrategy);
   mode += "_" + sanitize_path_component(param.newtonSolverMode);
   mode += "_" + sanitize_path_component(param.robustnessMode);
-  if (param.curvatureMode != "none")
-    mode += "_curv_" + sanitize_path_component(param.curvatureMode);
-  if (param.uniformityMode != "none")
-    mode += "_uniform_" + sanitize_path_component(param.uniformityMode);
-  return mode;
-}
-
-std::string linear_phase2_detail_label(const Cage::ParamCollapseStage& param)
-{
-  std::string mode = "linear_only";
   if (param.curvatureMode != "none")
     mode += "_curv_" + sanitize_path_component(param.curvatureMode);
   if (param.uniformityMode != "none")
@@ -214,16 +204,12 @@ std::string build_run_dir_name(const Cage::ParamCageGenerator& param)
   oss
     << format_timestamp(std::time(nullptr))
     << "__" << phase2_mode_label(simplifier);
-  if (simplifier.phase2Mode == "newton")
+  if (simplifier.phase2Mode == "newton_solve")
   {
-    oss << "__" << newton_phase2_detail_label(simplifier.paramCollapse);
+    oss << "__" << newton_solve_phase2_detail_label(simplifier.paramCollapse);
   }
-  else if (simplifier.phase2Mode == "linear_only")
-  {
-    oss << "__" << linear_phase2_detail_label(simplifier.paramCollapse);
-  }
-  else if (simplifier.phase2Mode != "qem" &&
-    simplifier.phase2Mode != "qem_no_collision")
+  else if (simplifier.phase2Mode != "linear_solve" &&
+    simplifier.phase2Mode != "qem_original")
   {
     oss
       << "__" << collapse_mode_label(simplifier.paramCollapse)
@@ -367,85 +353,58 @@ void apply_qem_energy_weights(
   Cage::ParamCollapseStage& collapse, bool include_triangle_quality)
 {
   collapse.qemWeight = 1.0;
-  collapse.positionFidelityWeight = 0.0;
   collapse.triangleQualityWeight = include_triangle_quality ? 1.0 : 0.0;
   collapse.uniformityWeight = 10.0;
 }
 
-void enable_newton_phase2_defaults(Cage::ParamCageGenerator& param)
+void enable_newton_solve_phase2_defaults(Cage::ParamCageGenerator& param)
 {
   auto& simplifier = param.paramCageSimplifier;
   auto& collapse = simplifier.paramCollapse;
-  simplifier.phase2Mode = "newton";
+  simplifier.phase2Mode = "newton_solve";
   collapse.collapsePlacementMethod = "optimization";
-  collapse.phase2PlacementStrategy = "adaptive";
+  collapse.phase2PlacementStrategy = "newton_solve";
   collapse.curvatureMode = "weighted_qem";
   collapse.uniformityMode = "source";
-  collapse.positionFidelityWeight = 1.0;
   collapse.triangleQualityWeight = 2.0;
   collapse.uniformityWeight = 1.0;
-  collapse.phase2NewtonQualityThreshold = 0.12;
-  collapse.phase2NewtonResidualThreshold = 0.25;
-  collapse.phase2NewtonResidualGrowth = 1.5;
-  collapse.phase2NewtonFinalRefineCollapses = 25;
   param.paramCageSimplifier.paramFlip.priorityMode = "triangle_quality_hard";
   param.paramCageSimplifier.paramFlip.requireRegularValence = false;
 }
 
-void enable_linear_only_phase2_defaults(Cage::ParamCageGenerator& param)
+void enable_linear_solve_phase2_defaults(Cage::ParamCageGenerator& param)
 {
-  enable_newton_phase2_defaults(param);
   auto& simplifier = param.paramCageSimplifier;
   auto& collapse = simplifier.paramCollapse;
-  simplifier.phase2Mode = "linear_only";
-  collapse.phase2PlacementStrategy = "linear_only";
+  simplifier.phase2Mode = "linear_solve";
+  collapse.collapsePlacementMethod = "optimization";
+  collapse.phase2PlacementStrategy = "linear_solve";
+  collapse.robustnessMode = "exact_reject";
+  collapse.curvatureMode = "none";
+  collapse.uniformityMode = "global";
+  apply_qem_energy_weights(collapse, true);
 }
 
-void enable_qem_phase2_defaults(Cage::ParamCageGenerator& param, bool skip_original_collision_check = false)
+void enable_qem_original_phase2_defaults(Cage::ParamCageGenerator& param)
 {
   auto& simplifier = param.paramCageSimplifier;
   auto& collapse = simplifier.paramCollapse;
-  simplifier.phase2Mode = skip_original_collision_check ? "qem_no_collision" : "qem";
+  simplifier.phase2Mode = "qem_original";
   collapse.collapsePlacementMethod = "optimization";
-  collapse.phase2PlacementStrategy =
-    skip_original_collision_check ? "qem_no_collision" : "qem";
+  collapse.phase2PlacementStrategy = "qem_original";
   collapse.robustnessMode = "exact_reject";
-  if (skip_original_collision_check)
-  {
-    collapse.curvatureMode = "none";
-    collapse.uniformityMode = "none";
-    apply_qem_energy_weights(collapse, false);
-    collapse.phase2NewtonQualityThreshold = 0.0;
-    collapse.phase2NewtonResidualThreshold = 0.0;
-    collapse.phase2NewtonFinalRefineCollapses = 0;
-  }
-  else
-  {
-    collapse.curvatureMode = "none";
-    // phase2_qem ranks shorter cage edges ahead of longer ones by comparing
-    // each current edge with the estimated target mean. The previous source-adaptive
-    // queue calculation remains available through "uniformity_source".
-    collapse.uniformityMode = "global";
-    apply_qem_energy_weights(collapse, true);
-  }
+  collapse.curvatureMode = "none";
+  collapse.uniformityMode = "none";
+  apply_qem_energy_weights(collapse, false);
 }
 
 bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerator& param)
 {
   const std::string token = normalize_parameter_token(raw_token);
-  auto& simplifier = param.paramCageSimplifier;
   auto& collapse = param.paramCageSimplifier.paramCollapse;
-  auto& relocate = param.paramCageSimplifier.paramRelocate;
-  auto& flip = param.paramCageSimplifier.paramFlip;
 
   if (token.empty() || token == "default")
     return true;
-
-  if (token == "phase2_newton" || token == "newton_phase2")
-  {
-    enable_newton_phase2_defaults(param);
-    return true;
-  }
 
   if (token == "collapse" || token == "collapse_default" || token == "collapse_hausdorff")
   {
@@ -512,153 +471,29 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
     collapse.priorityMode = "triangle_quality_hard";
     return true;
   }
-  if (token == "collapse_sampling" || token == "sampling")
+  if (token == "phase2_linear_solve" || token == "linear_solve")
   {
-    collapse.collapsePlacementMethod = "sampling";
+    enable_linear_solve_phase2_defaults(param);
     return true;
   }
-  if (token == "collapse_optimization" || token == "optimization" ||
-    token == "collapse_energy" || token == "energy" ||
-    token == "collapse_newton" || token == "newton" || token == "placement_newton")
+  if (token == "phase2_linear_solve_collision_reject" ||
+    token == "linear_solve_collision_reject")
   {
-    enable_newton_phase2_defaults(param);
+    enable_linear_solve_phase2_defaults(param);
+    collapse.phase2LinearSolveCollisionReject = true;
     return true;
   }
-  if (token == "phase2_adaptive" || token == "phase2_placement_adaptive" ||
-    token == "adaptive")
+  if (token == "phase2_qem_original" || token == "qem_original")
   {
-    enable_newton_phase2_defaults(param);
-    collapse.phase2PlacementStrategy = "adaptive";
+    enable_qem_original_phase2_defaults(param);
     return true;
   }
-  if (token == "phase2_linear_only" || token == "phase2_placement_linear_only" ||
-    token == "linear_only")
+  if (token == "phase2_newton_solve" || token == "newton_solve")
   {
-    enable_linear_only_phase2_defaults(param);
-    return true;
-  }
-  if (token == "phase2_qem" || token == "qem" ||
-    token == "phase2_qem_only" || token == "phase2_placement_qem_only" ||
-    token == "qem_only")
-  {
-    enable_qem_phase2_defaults(param);
-    return true;
-  }
-  if (token == "phase2_qem_reject_on_collision" ||
-    token == "qem_reject_on_collision" ||
-    token == "phase2_qem_linear_reject" ||
-    token == "qem_linear_reject")
-  {
-    enable_qem_phase2_defaults(param);
-    collapse.phase2QemRejectOnLinearCollision = true;
-    return true;
-  }
-  if (token == "phase2_qem_no_collision" ||
-    token == "qem_no_collision" ||
-    token == "phase2_qem_no_intersection" ||
-    token == "qem_no_intersection" ||
-    token == "phase2_qem_no_intersection_reject" ||
-    token == "qem_no_intersection_reject" ||
-    token == "phase2_qem_no_collision_reject" ||
-    token == "qem_no_collision_reject")
-  {
-    enable_qem_phase2_defaults(param, true);
-    return true;
-  }
-  if (token == "phase2_final_newton" || token == "phase2_placement_final_newton" ||
-    token == "final_newton")
-  {
-    enable_newton_phase2_defaults(param);
-    collapse.phase2PlacementStrategy = "final_newton";
-    return true;
-  }
-  if (token == "phase2_newton_only" || token == "phase2_placement_newton_only" ||
-    token == "newton_only")
-  {
-    enable_newton_phase2_defaults(param);
-    collapse.phase2PlacementStrategy = "newton_only";
+    enable_newton_solve_phase2_defaults(param);
     apply_qem_energy_weights(collapse, true);
     return true;
   }
-  if (token == "phase2_quadratic_surrogate" || token == "phase2_surrogate" ||
-    token == "quadratic_surrogate" || token == "surrogate")
-  {
-    enable_newton_phase2_defaults(param);
-    collapse.phase2PlacementStrategy = "quadratic_surrogate";
-    return true;
-  }
-  if (token == "newton_damped" || token == "solver_damped")
-  {
-    collapse.newtonSolverMode = "damped";
-    return true;
-  }
-  if (token == "newton_trust_region" || token == "trust_region" || token == "solver_trust_region")
-  {
-    collapse.newtonSolverMode = "trust_region";
-    return true;
-  }
-  if (token == "robust_exact_reject" || token == "exact_reject")
-  {
-    collapse.robustnessMode = "exact_reject";
-    return true;
-  }
-  if (token == "robust_exact_backtracking" || token == "exact_backtracking")
-  {
-    collapse.robustnessMode = "exact_backtracking";
-    return true;
-  }
-  if (token == "robust_ipc" || token == "robust_ipc_line_search" ||
-    token == "ipc_line_search" || token == "robust_ccd")
-  {
-    collapse.robustnessMode = "ipc_line_search";
-    return true;
-  }
-  if (token == "curvature_none" || token == "curv_none")
-  {
-    collapse.curvatureMode = "none";
-    return true;
-  }
-  if (token == "curvature_weighted_qem" || token == "curv_weighted_qem")
-  {
-    collapse.curvatureMode = "weighted_qem";
-    return true;
-  }
-  if (token == "uniformity_none" || token == "uniform_none")
-  {
-    collapse.uniformityMode = "none";
-    return true;
-  }
-  if (token == "uniformity_source" || token == "uniform_source")
-  {
-    collapse.uniformityMode = "source";
-    return true;
-  }
-  if (token == "uniformity_global" || token == "uniform_global")
-  {
-    collapse.uniformityMode = "global";
-    return true;
-  }
-  if (token == "flip_valence")
-  {
-    flip.priorityMode = "valence";
-    return true;
-  }
-  if (token == "flip_triangle_quality_hard")
-  {
-    flip.priorityMode = "triangle_quality_hard";
-    return true;
-  }
-  if (token == "relocate_hausdorff")
-  {
-    relocate.priorityMode = "hausdorff";
-    return true;
-  }
-  if (token == "relocate_triangle_quality_hard")
-  {
-    relocate.priorityMode = "triangle_quality_hard";
-    return true;
-  }
-
   Logger::user_logger->error("unknown parameter token: {}", raw_token);
   return false;
 }
@@ -702,7 +537,7 @@ int main(int argc, char* argv[])
     printf("Need args:\n");
     printf("arg[0]: parameters.\n");
     printf("input \"default\" to set default parameters\n");
-    printf("input \"collapse\" to use default collapse priority; combine with flip/relocate presets to change only those stages\n");
+    printf("input \"collapse\" to use default collapse priority\n");
     printf("input \"collapse_length\" to set length-based collapse priority\n");
     printf("input \"collapse_length_quality\" to use weighted length + triangle quality priority\n");
     printf("input \"collapse_length_quality_weighted\" to use weighted quality penalty\n");
@@ -715,18 +550,11 @@ int main(int argc, char* argv[])
     printf("input \"collapse_post_face_area_hard\" to require post-collapse max face area not to increase\n");
     printf("input \"collapse_triangle_quality\" to use triangle quality priority\n");
     printf("input \"collapse_triangle_quality_hard\" to require post-collapse min triangle quality not to decrease\n");
-    printf("input \"phase2_newton\" to replace Phase 2 with optimization collapses and default curvature/uniformity energies\n");
-    printf("input \"phase2_qem\" to run QEM + quality/uniformity Phase 2 collapses with QEM-first backtracking and hard intersection constraints\n");
-    printf("input \"phase2_qem_no_collision\" to run pure Garland-Heckbert QEM without collision rejection\n");
-    printf("input \"phase2_quadratic_surrogate\" to use the separate 4x4 quadratic surrogate Phase 2 strategy\n");
-    printf("input \"collapse_optimization\" to use the optimization Phase 2 replacement with default curvature/uniformity energies\n");
-    printf("input \"newton_damped\" or \"newton_trust_region\" to choose the Newton solver\n");
-    printf("input \"robust_exact_reject\", \"robust_exact_backtracking\", or \"robust_ipc\" to choose robustness handling\n");
-    printf("input \"curvature_weighted_qem\" or \"curvature_none\" to choose curvature energy\n");
-    printf("input \"uniformity_source\", \"uniformity_global\", or \"uniformity_none\" to choose one uniformity energy\n");
-    printf("input \"flip_triangle_quality_hard\" to require post-flip min triangle quality not to decrease\n");
-    printf("input \"relocate_triangle_quality_hard\" to require post-relocate min triangle quality not to decrease\n");
-    printf("combine presets with '+' or ',', for example \"collapse_length+flip_triangle_quality_hard+relocate_triangle_quality_hard\".\n");
+    printf("input \"phase2_linear_solve\" to run linear-solve Phase 2 collapses with Armijo backtracking and hard intersection constraints\n");
+    printf("input \"phase2_linear_solve_collision_reject\" to reject invalid raw linear-solve placements without backtracking\n");
+    printf("input \"phase2_newton_solve\" to use Newton placement for every Phase 2 collapse candidate\n");
+    printf("input \"phase2_qem_original\" to run original Garland-Heckbert QEM without collision rejection\n");
+    printf("combine presets with '+' or ',', for example \"collapse_length+phase2_linear_solve\".\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
     printf("arg[2]: output dir path.\n");
