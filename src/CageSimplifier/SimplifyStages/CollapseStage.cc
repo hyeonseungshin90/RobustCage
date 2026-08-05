@@ -279,24 +279,6 @@ struct Phase2HomogeneousQuadric
     add_metric_target(weight, Eigen::Matrix3d::Identity(), target);
   }
 
-  bool solve(const Vec3d& regularization_target, double regularization, Vec3d& x) const
-  {
-    Eigen::Matrix3d A = Q.topLeftCorner<3, 3>();
-    Eigen::Vector3d rhs = -Q.topRightCorner<3, 1>();
-    A = 0.5 * (A + A.transpose());
-
-    const double reg = std::max(regularization, 1e-12);
-    A += reg * Eigen::Matrix3d::Identity();
-    rhs += reg * to_eigen(regularization_target);
-
-    const Eigen::Vector3d solved = A.ldlt().solve(rhs);
-    if (!std::isfinite(solved.x()) || !std::isfinite(solved.y()) || !std::isfinite(solved.z()))
-      return false;
-
-    x = from_eigen(solved);
-    return finite_vec(x);
-  }
-
   bool solve_unregularized(Vec3d& x) const
   {
     Eigen::Matrix3d A = Q.topLeftCorner<3, 3>();
@@ -314,11 +296,6 @@ struct Phase2HomogeneousQuadric
 
     x = from_eigen(solved);
     return finite_vec(x);
-  }
-
-  double trace3() const
-  {
-    return Q(0, 0) + Q(1, 1) + Q(2, 2);
   }
 
   double evaluate(const Vec3d& x) const
@@ -1038,13 +1015,12 @@ CollapseStage::Phase2QueueComponents CollapseStage::evaluate_phase2_queue_compon
   return components;
 }
 
-// Combine active components as a weighted average. QEM and the linear-solve
+// Combine active components as a weighted sum. QEM and the linear-solve
 // triangle surrogate are intentionally not pass-normalized.
 double CollapseStage::evaluate_phase2_queue_score(
   const Phase2QueueComponents& components) const
 {
   double weighted_score = 0.0;
-  double total_weight = 0.0;
   const auto normalized_by_pass_max = [](double value, double maximum)
   {
     if (!std::isfinite(value))
@@ -1058,14 +1034,12 @@ double CollapseStage::evaluate_phase2_queue_score(
     if (weight <= 0.0)
       return;
     weighted_score += weight * clamp_value(score, 0.0, 1.0);
-    total_weight += weight;
   };
   const auto add_nonnegative_component = [&](double weight, double score)
   {
     if (weight <= 0.0)
       return;
     weighted_score += weight * std::max(score, 0.0);
-    total_weight += weight;
   };
 
   add_nonnegative_component(param->qemWeight, components.qem);
@@ -1103,7 +1077,7 @@ double CollapseStage::evaluate_phase2_queue_score(
     }
   }
 
-  return total_weight <= 0.0 ? 0.0 : weighted_score / total_weight;
+  return weighted_score;
 }
 
 double CollapseStage::evaluate_phase2_refinement_residual(const Phase2PlacementContext& ctx, const Vec3d& x) const
@@ -1634,11 +1608,7 @@ bool CollapseStage::solve_phase2_quadric_placement(
     }
   }
 
-  const double regularization =
-    std::max(1e-12, 1e-8 * std::max(1.0, std::abs(quadric.trace3())));
-  const bool solved = pure_qem ?
-    quadric.solve_unregularized(new_point) :
-    quadric.solve(ctx.midpoint, regularization, new_point);
+  const bool solved = quadric.solve_unregularized(new_point);
   if (!solved)
   {
     if (!pure_qem)
