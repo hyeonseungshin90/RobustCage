@@ -1216,11 +1216,14 @@ bool CollapseStage::select_phase2_linear_solve_line_search_candidate(
   if (!finite_vec(qem_point))
     return false;
 
-  // Armijo backtracking from the tangential smoothing point toward the QEM
-  // solution. A trial must satisfy both sufficient energy decrease and the
-  // hard placement constraints.
-  const Vec3d& base = ctx.tangential_smoothing_point;
-  if (!finite_vec(base))
+  // Build the Botsch-Kobbelt area-equalizing tangential smoothing endpoint
+  // from the raw linear-system solution, not from the edge midpoint. Armijo
+  // backtracking then moves from that endpoint toward the raw solution; its
+  // alpha supplies the effective damping for the smoothing displacement.
+  Vec3d smooth_normal;
+  Vec3d base;
+  if (!edge_collapser.predict_area_equalizing_tangential_smooth_target(
+    qem_point, smooth_normal, base, /*damping*/1.0) || !finite_vec(base))
     return false;
 
   const Vec3d direction = qem_point - base;

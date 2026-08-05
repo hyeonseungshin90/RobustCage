@@ -1,10 +1,57 @@
 #include "EdgeCollapser.h"
+#include <algorithm>
+#include <cmath>
+#include <map>
 #include <set>
 
 namespace Cage
 {
 namespace CageSimp
 {
+namespace
+{
+bool finite_point(const Vec3d& point)
+{
+  return std::isfinite(point.x()) &&
+    std::isfinite(point.y()) &&
+    std::isfinite(point.z());
+}
+
+// Mixed Voronoi area associated with p in triangle (p, q, r), using the
+// midpoint construction for obtuse triangles described by Meyer et al.
+double mixed_voronoi_area_at_vertex(
+  const Vec3d& p, const Vec3d& q, const Vec3d& r)
+{
+  if (!finite_point(p) || !finite_point(q) || !finite_point(r))
+    return 0.0;
+
+  const Vec3d pq = q - p;
+  const Vec3d pr = r - p;
+  const Vec3d qr = r - q;
+  const double twice_area = pq.cross(pr).length();
+  const double max_edge_sqr = std::max(
+    pq.sqrnorm(), std::max(pr.sqrnorm(), qr.sqrnorm()));
+  if (!std::isfinite(twice_area) || !std::isfinite(max_edge_sqr) ||
+    max_edge_sqr <= 0.0 || twice_area <= 1e-14 * max_edge_sqr)
+    return 0.0;
+
+  const double triangle_area = 0.5 * twice_area;
+  const double dot_p = pq | pr;
+  const double dot_q = (p - q) | (r - q);
+  const double dot_r = (p - r) | (q - r);
+
+  if (dot_p < 0.0)
+    return 0.5 * triangle_area;
+  if (dot_q < 0.0 || dot_r < 0.0)
+    return 0.25 * triangle_area;
+
+  const double cot_q = dot_q / twice_area;
+  const double cot_r = dot_r / twice_area;
+  const double area =
+    (pr.sqrnorm() * cot_q + pq.sqrnorm() * cot_r) / 8.0;
+  return std::isfinite(area) && area > 0.0 ? area : 0.0;
+}
+}
 
 /// @brief initialize essential data, prepare for collapsing.
 /// @return false if collapse can't be done.
@@ -242,6 +289,102 @@ void EdgeCollapser::predict_tangential_weighted_smooth_target(const Vec3d& new_p
     target = target + (vertex_normal | (new_point - target)) * vertex_normal;
   }
   else predict_tangential_smooth_target(new_point, vertex_normal, target);
+}
+
+// Area-equalizing tangential smoothing from Botsch and Kobbelt, SGP 2004.
+// The collapse has not been committed, so neighbor Voronoi areas and the
+// center normal are evaluated on the predicted post-collapse one-ring.
+bool EdgeCollapser::predict_area_equalizing_tangential_smooth_target(
+  const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target,
+  double damping)const
+{
+  ASSERT(initialized, "edge collapser not initialized.");
+
+  vertex_normal = Vec3d(0.0, 0.0, 0.0);
+  target = new_point;
+  if (!finite_point(new_point) || !std::isfinite(damping) ||
+    damping < 0.0 || damping > 1.0)
+    return false;
+
+  std::map<VertexHandle, double> neighbor_areas;
+  for (HalfedgeHandle h : halfedges)
+  {
+    neighbor_areas[rm->from_vertex_handle(h)] = 0.0;
+    neighbor_areas[rm->to_vertex_handle(h)] = 0.0;
+  }
+  if (neighbor_areas.empty())
+    return false;
+
+  // Preserve each neighbor's Voronoi-area contributions from faces outside
+  // the collapse region. Affected faces are replaced by the predicted fan
+  // below.
+  for (auto& neighbor_area : neighbor_areas)
+  {
+    const VertexHandle neighbor = neighbor_area.first;
+    for (FaceHandle fh : rm->vf_range(neighbor))
+    {
+      if (!fh.is_valid() || rm->status(fh).deleted() ||
+        one_ring_faces.find(fh) != one_ring_faces.end())
+        continue;
+
+      Vec3d other_points[2];
+      size_t other_count = 0;
+      for (VertexHandle fv : rm->fv_range(fh))
+      {
+        if (fv != neighbor && other_count < 2)
+          other_points[other_count++] = rm->point(fv);
+      }
+      if (other_count == 2)
+      {
+        neighbor_area.second += mixed_voronoi_area_at_vertex(
+          rm->point(neighbor), other_points[0], other_points[1]);
+      }
+    }
+  }
+
+  Vec3d normal_sum(0.0, 0.0, 0.0);
+  for (HalfedgeHandle h : halfedges)
+  {
+    const VertexHandle from_vh = rm->from_vertex_handle(h);
+    const VertexHandle to_vh = rm->to_vertex_handle(h);
+    const Vec3d& from = rm->point(from_vh);
+    const Vec3d& to = rm->point(to_vh);
+
+    const Vec3d face_normal =
+      (from - new_point).cross(to - new_point);
+    if (finite_point(face_normal))
+      normal_sum += face_normal;
+
+    neighbor_areas[from_vh] +=
+      mixed_voronoi_area_at_vertex(from, to, new_point);
+    neighbor_areas[to_vh] +=
+      mixed_voronoi_area_at_vertex(to, new_point, from);
+  }
+
+  const double normal_length = normal_sum.length();
+  if (!std::isfinite(normal_length) || normal_length <= 0.0)
+    return false;
+  vertex_normal = normal_sum / normal_length;
+
+  Vec3d gravity_centroid(0.0, 0.0, 0.0);
+  double total_area = 0.0;
+  for (const auto& neighbor_area : neighbor_areas)
+  {
+    const double area = neighbor_area.second;
+    if (!std::isfinite(area) || area <= 0.0)
+      continue;
+    gravity_centroid += area * rm->point(neighbor_area.first);
+    total_area += area;
+  }
+  if (!std::isfinite(total_area) || total_area <= 0.0)
+    return false;
+  gravity_centroid /= total_area;
+
+  const Vec3d update = gravity_centroid - new_point;
+  const Vec3d tangential_update =
+    update - (vertex_normal | update) * vertex_normal;
+  target = new_point + damping * tangential_update;
+  return finite_point(target);
 }
 
 /// @brief calculate local Hausdorff distance before collapsing.

@@ -57,6 +57,9 @@ public:
   void predict_tangential_smooth_target(const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target)const;
   void predict_weighted_smooth_target(const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target)const;
   void predict_tangential_weighted_smooth_target(const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target)const;
+  bool predict_area_equalizing_tangential_smooth_target(
+    const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target,
+    double damping)const;
 
   const std::vector<HalfedgeHandle>& get_halfedges()const { ASSERT(initialized, "not initialized."); return halfedges; }
   const VertexHandle get_collapsed_center() const { ASSERT(initialized, "not initialized."); return center_vh; }
