@@ -9,6 +9,10 @@ bool EdgeFlipper::init(EdgeHandle e)
 {
   clear();
 
+  // Flipping a rail edge would delete part of the labeled closed loop.
+  if (rm->data(e).boundary_rail_id >= 0)
+    return false;
+
   if (!rm->is_flip_ok(e))
     return false;
 

@@ -1,5 +1,6 @@
 #pragma once
 #include "CageInitializer/CageInitializer.hh"
+#include "CageInitializer/BoundaryRailBuilder.hh"
 #include "CageSimplifier/CageSimplifier.hh"
 
 namespace Cage
@@ -29,6 +30,7 @@ public:
   std::unique_ptr<SM::SMeshT> cage;
 public:
   void stageInitialize();
+  void stageBuildBoundaryRails();
   void stageSimplify();
 
   void generate();

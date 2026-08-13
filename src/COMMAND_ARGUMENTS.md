@@ -53,10 +53,10 @@ config.json
 | `collapse_post_face_area_hard` | collapse | `priorityMode = "post_face_area_hard"` |
 | `collapse_triangle_quality` | collapse | `priorityMode = "triangle_quality"` |
 | `collapse_triangle_quality_hard` | collapse | `priorityMode = "triangle_quality_hard"` |
-| `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; solve the QEM/quality linear system, accept valid points directly, and otherwise use Armijo backtracking from tangential smoothing |
-| `phase2_linear_solve_collision_reject` | phase2 | Same defaults as `phase2_linear_solve` plus `phase2LinearSolveCollisionReject = true`; reject an invalid raw linear-solve point instead of backtracking |
-| `phase2_newton_solve` | phase2 | `phase2Mode = "newton_solve"`; use Newton placement for every popped collapse candidate |
-| `phase2_qem_original` | phase2 | `phase2Mode = "qem_original"`; pure Garland-Heckbert QEM edge-collapse cost/placement with non-QEM energies and collision rejection disabled |
+| `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; build source-boundary rails; solve the QEM/quality linear system, accept valid points directly, and otherwise use Armijo backtracking from tangential smoothing |
+| `phase2_linear_solve_collision_reject` | phase2 | Same defaults and source-boundary rails as `phase2_linear_solve` plus `phase2LinearSolveCollisionReject = true`; reject an invalid raw linear-solve point instead of backtracking |
+| `phase2_newton_solve` | phase2 | `phase2Mode = "newton_solve"`; build source-boundary rails and use Newton placement for every popped collapse candidate |
+| `phase2_qem_original` | phase2 | `phase2Mode = "qem_original"`; build source-boundary rails; pure Garland-Heckbert QEM edge-collapse cost/placement with non-QEM energies and collision rejection disabled |
 
 알 수 없는 토큰이 들어오면 `unknown parameter token` 오류와 함께 실행이 중단됩니다.
 

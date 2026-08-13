@@ -474,23 +474,31 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   if (token == "phase2_linear_solve" || token == "linear_solve")
   {
     enable_linear_solve_phase2_defaults(param);
+    if (token == "phase2_linear_solve")
+      param.paramCageSimplifier.enableBoundaryRails = true;
     return true;
   }
   if (token == "phase2_linear_solve_collision_reject" ||
     token == "linear_solve_collision_reject")
   {
     enable_linear_solve_phase2_defaults(param);
+    if (token == "phase2_linear_solve_collision_reject")
+      param.paramCageSimplifier.enableBoundaryRails = true;
     collapse.phase2LinearSolveCollisionReject = true;
     return true;
   }
   if (token == "phase2_qem_original" || token == "qem_original")
   {
     enable_qem_original_phase2_defaults(param);
+    if (token == "phase2_qem_original")
+      param.paramCageSimplifier.enableBoundaryRails = true;
     return true;
   }
   if (token == "phase2_newton_solve" || token == "newton_solve")
   {
     enable_newton_solve_phase2_defaults(param);
+    if (token == "phase2_newton_solve")
+      param.paramCageSimplifier.enableBoundaryRails = true;
     apply_qem_energy_weights(collapse, true);
     return true;
   }

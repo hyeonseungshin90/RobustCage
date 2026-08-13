@@ -1286,14 +1286,15 @@ bool CollapseStage::choose_phase2_collapse_placement(
   const double duplicate_tol = std::max(ctx.local_scale * 1e-8, original_diagonal_length * 1e-12);
   const auto append_candidate = [&](const Vec3d& p, bool fallback)
   {
-    if (!finite_vec(p))
+    const Vec3d constrained = edge_collapser.constrained_target_point(p);
+    if (!finite_vec(constrained))
       return;
     for (const Vec3d& existing : candidates)
     {
-      if ((existing - p).length() <= duplicate_tol)
+      if ((existing - constrained).length() <= duplicate_tol)
         return;
     }
-    candidates.push_back(p);
+    candidates.push_back(constrained);
     is_fallback.push_back(fallback);
   };
 
@@ -1389,6 +1390,8 @@ bool CollapseStage::choose_phase2_collapse_placement(
   newton_seconds += std::chrono::duration<double>(
     std::chrono::steady_clock::now() - newton_start_time).count();
 
+  if (newton_ok)
+    refined_point = edge_collapser.constrained_target_point(refined_point);
   if (newton_ok && phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, refined_point))
   {
     const double current_energy = evaluate_newton_energy(ctx, decision.point);
@@ -1706,6 +1709,8 @@ bool CollapseStage::compute_phase2_queue_candidate_data(
   set_phase2_edge_collapser_flags(score_collapser);
   if (!score_collapser.init(eh))
     return false;
+
+  new_point = score_collapser.constrained_target_point(new_point);
 
   const Phase2PlacementContext score_ctx =
     make_phase2_placement_context(eh, score_collapser);

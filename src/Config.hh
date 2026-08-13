@@ -284,6 +284,9 @@ struct ParamCageSimplifier
   // Newton placement for every collapse, and "qem_original" uses pure
   // Garland-Heckbert QEM cost/placement only.
   std::string phase2Mode;
+  // Build and preserve source-boundary rails on the initial cage.  This is
+  // deliberately opt-in so the original/default pipeline is unchanged.
+  bool enableBoundaryRails = false;
   // iterations
   size_t maxIter;
   // distance error control
@@ -308,6 +311,7 @@ struct ParamCageSimplifier
     boost::json::object jo;
     jo["maxIter"] = maxIter;
     jo["phase2Mode"] = phase2Mode;
+    jo["enableBoundaryRails"] = enableBoundaryRails;
     jo["relaxErrorIterStep"] = relaxErrorIterStep;
     jo["maxErrorRelaxIter"] = maxErrorRelaxIter;
     jo["initError"] = initError;
@@ -322,6 +326,9 @@ struct ParamCageSimplifier
     maxIter = jo.at("maxIter").as_int64();
     auto phase2_mode_it = jo.find("phase2Mode");
     phase2Mode = phase2_mode_it != jo.end() ? std::string(phase2_mode_it->value().as_string().c_str()) : "fast";
+    auto boundary_rails_it = jo.find("enableBoundaryRails");
+    enableBoundaryRails = boundary_rails_it != jo.end() ?
+      boundary_rails_it->value().as_bool() : false;
     relaxErrorIterStep = jo.at("relaxErrorIterStep").as_int64();
     maxErrorRelaxIter = jo.at("maxErrorRelaxIter").as_int64();
     initError = jo.at("initError").as_double();
@@ -352,6 +359,7 @@ struct ParamCageGenerator
 
     auto& simplifier = paramCageSimplifier;
     simplifier.phase2Mode = "fast";
+    simplifier.enableBoundaryRails = false;
     simplifier.maxIter = 30;
     simplifier.relaxErrorIterStep = 5;
     simplifier.maxErrorRelaxIter = 4;

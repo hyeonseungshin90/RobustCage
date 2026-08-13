@@ -16,6 +16,16 @@ void CageGenerator::stageInitialize()
   cageInitializer->generate();
 }
 
+void CageGenerator::stageBuildBoundaryRails()
+{
+  BoundaryRailBuilder rail_builder(originalMesh.get(), cage.get());
+  if (!rail_builder.build())
+  {
+    Logger::user_logger->warn(
+      "one or more boundary rails could not be constructed; continuing with the successfully constructed rails.");
+  }
+}
+
 void CageGenerator::stageSimplify()
 {
   cageSimplifier = std::make_unique<CageSimplifier>(
@@ -30,6 +40,8 @@ void CageGenerator::generate()
 
   const auto phase1_start = std::chrono::steady_clock::now();
   stageInitialize();
+  if (param.paramCageSimplifier.enableBoundaryRails)
+    stageBuildBoundaryRails();
   const double phase1_seconds = std::chrono::duration<double>(
     std::chrono::steady_clock::now() - phase1_start).count();
 

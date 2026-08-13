@@ -64,6 +64,8 @@ bool EdgeCollapser::init(EdgeHandle _e)
   // can't collapse
   if (!rm->is_collapse_ok(collapse_he))
     return false;
+  if (!initialize_rail_constraint(_e))
+    return false;
 
   predict_faces_after_collapse();
   initialized = true;
@@ -77,6 +79,77 @@ void EdgeCollapser::clear()
   one_ring_faces.clear();
   faces_in_links.clear();
   initialized = false;
+  rail_collapse_id = -1;
+  rail_neighbor0 = VertexHandle();
+  rail_neighbor1 = VertexHandle();
+}
+
+bool EdgeCollapser::initialize_rail_constraint(EdgeHandle edge)
+{
+  const VertexHandle from = rm->from_vertex_handle(collapse_he);
+  const VertexHandle to = rm->to_vertex_handle(collapse_he);
+  const int from_rail = rm->data(from).boundary_rail_id;
+  const int to_rail = rm->data(to).boundary_rail_id;
+  const bool from_is_rail = from_rail >= 0;
+  const bool to_is_rail = to_rail >= 0;
+
+  // A rail vertex may never disappear into an unconstrained vertex.
+  if (from_is_rail != to_is_rail)
+    return false;
+  if (!from_is_rail)
+    return rm->data(edge).boundary_rail_id < 0;
+
+  // Different source boundaries may not merge, and two vertices of the same
+  // boundary may collapse only across an actual rail edge (not a chord).
+  if (from_rail != to_rail || rm->data(edge).boundary_rail_id != from_rail)
+    return false;
+
+  const auto other_rail_neighbor = [&](VertexHandle vertex, VertexHandle other,
+    VertexHandle& neighbor)
+  {
+    size_t rail_degree = 0;
+    neighbor = VertexHandle();
+    for (HalfedgeHandle outgoing : rm->voh_range(vertex))
+    {
+      const EdgeHandle incident = rm->edge_handle(outgoing);
+      if (rm->data(incident).boundary_rail_id != from_rail)
+        continue;
+      const VertexHandle adjacent = rm->to_vertex_handle(outgoing);
+      if (rm->data(adjacent).boundary_rail_id != from_rail)
+        return false;
+      rail_degree++;
+      if (adjacent != other)
+        neighbor = adjacent;
+    }
+    return rail_degree == 2 && neighbor.is_valid();
+  };
+
+  if (!other_rail_neighbor(from, to, rail_neighbor0) ||
+    !other_rail_neighbor(to, from, rail_neighbor1))
+    return false;
+  // The common neighbor case is a three-vertex cycle.  Collapsing it would
+  // leave fewer than the required three rail vertices.
+  if (rail_neighbor0 == rail_neighbor1)
+    return false;
+
+  rail_collapse_id = from_rail;
+  rail_segment0 = rm->point(from);
+  rail_segment1 = rm->point(to);
+  return true;
+}
+
+Vec3d EdgeCollapser::constrained_target_point(const Vec3d& new_point)const
+{
+  ASSERT(initialized, "edge collapser not initialized.");
+  if (rail_collapse_id < 0)
+    return new_point;
+  const Vec3d segment = rail_segment1 - rail_segment0;
+  const double segment_sqr = segment.squaredNorm();
+  if (segment_sqr <= 0.0)
+    return rail_segment0;
+  const double t = std::max(0.0, std::min(1.0,
+    ((new_point - rail_segment0) | segment) / segment_sqr));
+  return rail_segment0 + segment * t;
 }
 
 void EdgeCollapser::set_flags(
@@ -101,12 +174,18 @@ bool EdgeCollapser::try_collapse_edge(const Vec3d& new_point, const ExactPoint* 
 {
   ASSERT(initialized, "uninitialized edge collapser");
 
+  const Vec3d effective_point = constrained_target_point(new_point);
+  const double point_tolerance = rail_collapse_id >= 0 ? std::max(
+    (rail_segment1 - rail_segment0).length() * 1e-12, 1e-15) : 1e-15;
+  const ExactPoint* effective_ep =
+    (effective_point - new_point).length() <= point_tolerance ? new_ep : nullptr;
+
   // check and backup before collapsing
-  if (f_check_wrinkle && collapse_would_cause_wrinkle(new_point))
+  if (f_check_wrinkle && collapse_would_cause_wrinkle(effective_point))
     return false;
-  if (collapse_would_cause_degenerate(new_point, new_ep))
+  if (collapse_would_cause_degenerate(effective_point, effective_ep))
     return false;
-  if (collapse_would_cause_intersection(new_point, new_ep))
+  if (collapse_would_cause_intersection(effective_point, effective_ep))
     return false;
   if (f_update_links)
     backup_links();
@@ -116,7 +195,8 @@ bool EdgeCollapser::try_collapse_edge(const Vec3d& new_point, const ExactPoint* 
   update_remeshing_tree_deleted();
 
   // do real collapse
-  collapse_edge(collapse_he, new_point, new_ep);
+  collapse_edge(collapse_he, effective_point, effective_ep);
+  update_rail_after_collapse();
 
   // udpate after collapsing
   if (f_update_target_length)
@@ -432,11 +512,15 @@ bool EdgeCollapser::target_point_is_valid(const Vec3d& new_point, const ExactPoi
 {
   ASSERT(initialized, "collapser not initialized.");
 
-  if (f_check_wrinkle && collapse_would_cause_wrinkle(new_point))
+  const Vec3d effective_point = constrained_target_point(new_point);
+  const ExactPoint* effective_ep =
+    (effective_point - new_point).length() <= 1e-15 ? new_ep : nullptr;
+
+  if (f_check_wrinkle && collapse_would_cause_wrinkle(effective_point))
     return false;
-  if (collapse_would_cause_degenerate(new_point, new_ep))
+  if (collapse_would_cause_degenerate(effective_point, effective_ep))
     return false;
-  if (collapse_would_cause_intersection(new_point, new_ep))
+  if (collapse_would_cause_intersection(effective_point, effective_ep))
     return false;
   return true;
 }
@@ -536,6 +620,21 @@ void EdgeCollapser::collapse_edge(HalfedgeHandle he, const Vec3d& new_point, con
   else
     rm->data(center_vh).ep = nullptr;
   rm->collapse(he);
+}
+
+void EdgeCollapser::update_rail_after_collapse()
+{
+  if (rail_collapse_id < 0)
+    return;
+  rm->data(center_vh).boundary_rail_id = rail_collapse_id;
+  for (HalfedgeHandle outgoing : rm->voh_range(center_vh))
+  {
+    const VertexHandle neighbor = rm->to_vertex_handle(outgoing);
+    EdgeHandle edge = rm->edge_handle(outgoing);
+    rm->data(edge).boundary_rail_id =
+      (neighbor == rail_neighbor0 || neighbor == rail_neighbor1) ?
+      rail_collapse_id : -1;
+  }
 }
 
 void EdgeCollapser::update_target_len()

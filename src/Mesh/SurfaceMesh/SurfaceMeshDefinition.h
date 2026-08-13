@@ -44,6 +44,9 @@ struct MeshTraits : public OpenMesh::DefaultTraits
   EdgeTraits
   {
   public:
+    // -1 means this edge is not part of a source-boundary rail.
+    int boundary_rail_id = -1;
+
     size_t samples_num = 0;
 
     double edge_length = 0.0;
@@ -60,6 +63,9 @@ struct MeshTraits : public OpenMesh::DefaultTraits
   VertexTraits
   {
   public:
+    // -1 means this vertex is not part of a source-boundary rail.
+    int boundary_rail_id;
+
     std::unique_ptr<ExactPoint> ep;
 
     double target_length;
@@ -67,11 +73,12 @@ struct MeshTraits : public OpenMesh::DefaultTraits
     double out_error;
     double out_surround_error;
 
-    VertexT() : ep(nullptr), target_length(0.0), out_error(0.0), out_surround_error(0.0)
+    VertexT() : boundary_rail_id(-1), ep(nullptr), target_length(0.0), out_error(0.0), out_surround_error(0.0)
     {}
     // copy constructor
     VertexT(const VertexT& rhs)
     {
+      boundary_rail_id = rhs.boundary_rail_id;
       if (rhs.ep) ep = std::make_unique<ExactPoint>(*rhs.ep);
       target_length = rhs.target_length;
       out_error = rhs.out_error;
@@ -79,7 +86,9 @@ struct MeshTraits : public OpenMesh::DefaultTraits
     }
     VertexT& operator=(const VertexT& rhs)
     {
+      boundary_rail_id = rhs.boundary_rail_id;
       if (rhs.ep) ep = std::make_unique<ExactPoint>(*rhs.ep);
+      else ep = nullptr;
       target_length = rhs.target_length;
       out_error = rhs.out_error;
       out_surround_error = rhs.out_surround_error;
@@ -88,6 +97,7 @@ struct MeshTraits : public OpenMesh::DefaultTraits
     // move constructor
     VertexT(VertexT&& rhs)
     {
+      boundary_rail_id = rhs.boundary_rail_id;
       if (rhs.ep)  ep = std::move(rhs.ep);
       target_length = rhs.target_length;
       out_error = rhs.out_error;
@@ -95,7 +105,9 @@ struct MeshTraits : public OpenMesh::DefaultTraits
     }
     VertexT& operator=(VertexT&& rhs)
     {
+      boundary_rail_id = rhs.boundary_rail_id;
       if (rhs.ep)  ep = std::move(rhs.ep);
+      else ep = nullptr;
       target_length = rhs.target_length;
       out_error = rhs.out_error;
       out_surround_error = rhs.out_surround_error;

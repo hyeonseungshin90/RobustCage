@@ -52,6 +52,9 @@ public:
   double local_Hausdorff_before_collapsing()const;
   double local_Hausdorff_after_collapsing(SMeshT* local_rm, const Vec3d& new_point, double& threshold)const;
   bool target_point_is_valid(const Vec3d& new_point, const ExactPoint* new_ep)const;
+  // Rail collapses are allowed only along the current rail segment.  For a
+  // non-rail collapse this returns new_point unchanged.
+  Vec3d constrained_target_point(const Vec3d& new_point)const;
 
   void predict_smooth_target(const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target)const;
   void predict_tangential_smooth_target(const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target)const;
@@ -85,6 +88,11 @@ private:
   /* safe for parallel */
 
   bool initialized;
+  int rail_collapse_id = -1;
+  VertexHandle rail_neighbor0;
+  VertexHandle rail_neighbor1;
+  Vec3d rail_segment0;
+  Vec3d rail_segment1;
   /// collapse edge
   HalfedgeHandle collapse_he;
   HalfedgeHandle collapse_he_opp;
@@ -96,6 +104,8 @@ private:
   bool collapse_would_cause_wrinkle(const Vec3d& new_point)const;
   bool collapse_would_cause_intersection(const Vec3d& new_point, const ExactPoint* new_ep)const;
   bool collapse_would_cause_degenerate(const Vec3d& new_point, const ExactPoint* new_ep)const;
+  bool initialize_rail_constraint(EdgeHandle edge);
+  void update_rail_after_collapse();
 
   /* only serial */
 
