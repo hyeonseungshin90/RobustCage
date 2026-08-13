@@ -58,15 +58,6 @@ struct ParamCollapseStage
 {
   // constraints
   size_t maxValence;
-  // Supported modes: "hausdorff", "length", "length_quality",
-  // "post_edge_length", "post_face_area", "triangle_quality",
-  // "post_edge_length_hard", "post_face_area_hard", "triangle_quality_hard".
-  std::string priorityMode;
-  // Supported length-quality submodes: "weighted", "relative_reject", "absolute_reject", "lexicographic".
-  std::string lengthQualitySubMode;
-  double lengthQualityWeight;
-  double lengthQualityDegradationRatio;
-  double lengthQualityMinQuality;
 
   // Collapse placement method:
   // "sampling" keeps the original candidate sampling strategy.
@@ -108,11 +99,6 @@ struct ParamCollapseStage
   {
     boost::json::object jo;
     jo["maxValence"] = maxValence;
-    jo["priorityMode"] = priorityMode;
-    jo["lengthQualitySubMode"] = lengthQualitySubMode;
-    jo["lengthQualityWeight"] = lengthQualityWeight;
-    jo["lengthQualityDegradationRatio"] = lengthQualityDegradationRatio;
-    jo["lengthQualityMinQuality"] = lengthQualityMinQuality;
     jo["collapsePlacementMethod"] = collapsePlacementMethod;
     jo["phase2PlacementStrategy"] = phase2PlacementStrategy;
     jo["newtonSolverMode"] = newtonSolverMode;
@@ -134,27 +120,6 @@ struct ParamCollapseStage
   void deserialize(const boost::json::object& jo)
   {
     maxValence = jo.at("maxValence").as_int64();
-    auto priority_mode_it = jo.find("priorityMode");
-    if (priority_mode_it != jo.end())
-      priorityMode = std::string(priority_mode_it->value().as_string().c_str());
-    else
-      priorityMode = "hausdorff";
-
-    auto lq_submode_it = jo.find("lengthQualitySubMode");
-    if (lq_submode_it != jo.end())
-      lengthQualitySubMode = std::string(lq_submode_it->value().as_string().c_str());
-    else
-      lengthQualitySubMode = "weighted";
-
-    auto lq_weight_it = jo.find("lengthQualityWeight");
-    lengthQualityWeight = lq_weight_it != jo.end() ? lq_weight_it->value().as_double() : 5.0;
-
-    auto lq_ratio_it = jo.find("lengthQualityDegradationRatio");
-    lengthQualityDegradationRatio = lq_ratio_it != jo.end() ? lq_ratio_it->value().as_double() : 0.5;
-
-    auto lq_min_quality_it = jo.find("lengthQualityMinQuality");
-    lengthQualityMinQuality = lq_min_quality_it != jo.end() ? lq_min_quality_it->value().as_double() : 0.05;
-
     auto collapse_placement_method_it = jo.find("collapsePlacementMethod");
     if (collapse_placement_method_it == jo.end())
       collapse_placement_method_it = jo.find("placementMode");
@@ -377,11 +342,6 @@ struct ParamCageGenerator
 
     auto& collapse = paramCageSimplifier.paramCollapse;
     collapse.maxValence = 8;
-    collapse.priorityMode = "hausdorff";
-    collapse.lengthQualitySubMode = "weighted";
-    collapse.lengthQualityWeight = 5.0;
-    collapse.lengthQualityDegradationRatio = 0.5;
-    collapse.lengthQualityMinQuality = 0.1;
     collapse.collapsePlacementMethod = "sampling";
     collapse.phase2PlacementStrategy = "linear_solve";
     collapse.newtonSolverMode = "damped";

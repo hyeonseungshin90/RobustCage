@@ -23,7 +23,7 @@ exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path>
 1. 같은 경로에 실제 파일이 있으면 JSON 설정 파일로 읽습니다.
 2. 파일이 아니면 프리셋 토큰 문자열로 처리합니다.
 
-토큰은 `+` 또는 `,`로 조합할 수 있습니다. `-`는 내부적으로 `_`로 바뀌므로 `collapse-length-quality`와 `collapse_length_quality`는 같은 의미로 처리됩니다.
+토큰은 `+` 또는 `,`로 조합할 수 있습니다. `-`는 내부적으로 `_`로 바뀌므로 `phase2-linear-solve`와 `phase2_linear_solve`는 같은 의미로 처리됩니다.
 
 ```text
 default
@@ -31,7 +31,6 @@ phase2_linear_solve
 phase2_linear_solve_collision_reject
 phase2_newton_solve
 phase2_qem_original
-collapse_length+phase2_linear_solve
 phase2_linear_solve+boundary_rail
 config.json
 ```
@@ -41,19 +40,6 @@ config.json
 | 토큰 | 적용 대상 | 효과 |
 |---|---|---|
 | `default` | 전체 | 기본 파라미터를 그대로 사용합니다. |
-| `collapse` / `collapse_default` / `collapse_hausdorff` | collapse | `priorityMode = "hausdorff"` |
-| `collapse_length` | collapse | `priorityMode = "length"` |
-| `collapse_length_quality` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "weighted"` |
-| `collapse_length_quality_weighted` | collapse | `collapse_length_quality`와 동일합니다. |
-| `collapse_length_quality_relative` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "relative_reject"` |
-| `collapse_length_quality_absolute` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "absolute_reject"` |
-| `collapse_length_quality_lexicographic` | collapse | `priorityMode = "length_quality"`, `lengthQualitySubMode = "lexicographic"` |
-| `collapse_post_edge_length` | collapse | `priorityMode = "post_edge_length"` |
-| `collapse_post_edge_length_hard` | collapse | `priorityMode = "post_edge_length_hard"` |
-| `collapse_post_face_area` | collapse | `priorityMode = "post_face_area"` |
-| `collapse_post_face_area_hard` | collapse | `priorityMode = "post_face_area_hard"` |
-| `collapse_triangle_quality` | collapse | `priorityMode = "triangle_quality"` |
-| `collapse_triangle_quality_hard` | collapse | `priorityMode = "triangle_quality_hard"` |
 | `boundary_rail` | phase1.5/phase2 | Build source-boundary anchors and closed cage edge loops, then preserve their labels during Phase 2. Must be combined with one of the four energy Phase 2 presets. |
 | `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; solve the QEM/quality linear system, accept valid points directly, and otherwise use Armijo backtracking from tangential smoothing |
 | `phase2_linear_solve_collision_reject` | phase2 | Same defaults as `phase2_linear_solve` plus `phase2LinearSolveCollisionReject = true`; reject an invalid raw linear-solve point instead of backtracking |
@@ -82,8 +68,7 @@ JSON 파일을 첫 번째 인수로 넘기면 `ParamCageGenerator` 설정을 덮
     "initError": 0.005,
     "errorStep": 0.005,
     "paramCollapse": {
-      "maxValence": 8,
-      "priorityMode": "hausdorff"
+      "maxValence": 8
     },
     "paramFlip": {
       "maxValence": 8
@@ -102,11 +87,6 @@ JSON 파일을 첫 번째 인수로 넘기면 `ParamCageGenerator` 설정을 덮
 | `paramCageSimplifier.initError` | 초기 Hausdorff distance 허용값 | `0.005` |
 | `paramCageSimplifier.errorStep` | 에러 완화 단계별 증가값 | `0.005` |
 | `paramCageSimplifier.paramCollapse.maxValence` | collapse 단계 최대 valence | `8` |
-| `paramCageSimplifier.paramCollapse.priorityMode` | collapse 우선순위 모드 | `"hausdorff"` |
-| `paramCageSimplifier.paramCollapse.lengthQualitySubMode` | length-quality 세부 모드 | `"weighted"` |
-| `paramCageSimplifier.paramCollapse.lengthQualityWeight` | length-quality 가중치 | `5.0` |
-| `paramCageSimplifier.paramCollapse.lengthQualityDegradationRatio` | relative reject 품질 저하 허용 비율 | `0.5` |
-| `paramCageSimplifier.paramCollapse.lengthQualityMinQuality` | absolute reject 최소 triangle quality | `0.1` |
 | `paramCageSimplifier.paramRelocate.smoothIter` | relocate smoothing 반복 횟수 | `3` |
 | `paramCageSimplifier.paramRelocate.priorityMode` | relocate 우선순위 모드 | `"hausdorff"` |
 | `paramCageSimplifier.paramFlip.maxValence` | flip 단계 최대 valence | `8` |
@@ -131,7 +111,7 @@ nested cage 생성:
 프리셋 조합 사용:
 
 ```powershell
-.\exeCageGenerator.exe collapse_length+phase2_linear_solve C:\models\bunny.obj C:\out 500
+.\exeCageGenerator.exe phase2_linear_solve+boundary_rail C:\models\bunny.obj C:\out 500
 ```
 
 JSON 설정 파일 사용:
@@ -146,8 +126,10 @@ JSON 설정 파일 사용:
 
 ```text
 <output_dir_path>\<input_name>\
-  <run_timestamp>__collapse_<mode>__flip_<mode>__relocate_<mode>\
+  <run_timestamp>__phase2_<mode>[__<mode-specific-details>]\
 ```
+
+기존 출력 경로와의 호환성을 위해 `default` 모드는 `__collapse_hausdorff__flip_<mode>__relocate_<mode>` 접미사를 유지합니다.
 
 같은 하위 폴더명이 이미 있으면 `_001`, `_002`처럼 번호를 붙여 기존 결과를 덮어쓰지 않습니다. 날짜는 실행 시점의 시스템 날짜/시간이며 `YYYYMMDD_HHMMSS` 형식입니다.
 

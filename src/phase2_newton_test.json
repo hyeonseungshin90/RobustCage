@@ -8,7 +8,6 @@
     "errorStep": 0.005,
     "paramCollapse": {
       "maxValence": 8,
-      "priorityMode": "hausdorff",
       "collapsePlacementMethod": "optimization",
       "phase2PlacementStrategy": "newton_solve",
       "newtonSolverMode": "damped",

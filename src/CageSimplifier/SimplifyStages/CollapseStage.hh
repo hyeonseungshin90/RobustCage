@@ -55,20 +55,14 @@ private:
     EdgeHandle eh;
     size_t state;
     double reward;
-    double secondary_reward = 0.0;
     Vec3d new_point;
 
     CollapseEdgeReward() = default;
-    CollapseEdgeReward(EdgeHandle _eh, size_t _state, double _reward, const Vec3d& _new_point, double _secondary_reward = 0.0) :
-      eh(_eh), state(_state), reward(_reward), secondary_reward(_secondary_reward), new_point(_new_point)
+    CollapseEdgeReward(EdgeHandle _eh, size_t _state, double _reward, const Vec3d& _new_point) :
+      eh(_eh), state(_state), reward(_reward), new_point(_new_point)
     {}
 
-    bool operator<(const CollapseEdgeReward& rhs)const
-    {
-      if (reward != rhs.reward)
-        return reward < rhs.reward;
-      return secondary_reward < rhs.secondary_reward;
-    }
+    bool operator<(const CollapseEdgeReward& rhs)const { return reward < rhs.reward; }
   };
   typedef std::priority_queue<CollapseEdgeReward> CollapseEdgeRewardQueue;
   CollapseEdgeRewardQueue edges_to_collapse;
@@ -179,14 +173,12 @@ private:
 
   std::vector<Vec3d> generate_candidate_points_for_collapse(EdgeHandle e, EdgeCollapser& edge_collapser);
   bool find_collapse_hausdorff_deviation(
-    EdgeHandle eh, double& local_hd_before, double& local_hd_after, Vec3d& new_point, double& priority_score);
+    EdgeHandle eh, double& local_hd_before, double& local_hd_after, Vec3d& new_point);
   bool refine_collapse_placement_with_newton(
     EdgeHandle eh, EdgeCollapser& edge_collapser, Vec3d& new_point, double& energy,
     const Vec3d* initial_point = nullptr);
   void initialize_collapse_edges_reward();
   void update_after_collapsing(VertexHandle collapsed_center);
-  bool try_enqueue_collapse_candidate(
-    EdgeHandle eh, size_t state, double local_hd_before, double local_hd_after, const Vec3d& new_point, double priority_score);
   bool is_optimization_collapse_placement_method() const;
   bool is_phase2_qem_based_strategy() const;
   bool is_phase2_linear_solve_strategy() const;
@@ -195,28 +187,6 @@ private:
   bool is_trust_region_solver_mode() const;
   bool is_exact_reject_robustness_mode() const;
   bool is_exact_backtracking_robustness_mode() const;
-  bool is_length_priority_mode() const;
-  bool is_length_quality_priority_mode() const;
-  bool is_length_quality_weighted_submode() const;
-  bool is_length_quality_relative_reject_submode() const;
-  bool is_length_quality_absolute_reject_submode() const;
-  bool is_length_quality_lexicographic_submode() const;
-  bool is_post_edge_length_priority_mode() const;
-  bool is_post_face_area_priority_mode() const;
-  bool is_triangle_quality_priority_mode() const;
-  bool is_post_metric_priority_mode() const;
-  bool is_hard_post_metric_priority_mode() const;
-  bool is_length_quality_allowed(double pre_quality, double post_quality) const;
-  double calc_length_quality_reward(double normalized_length_score, double quality_delta) const;
-  double calc_pre_collapse_metric(EdgeHandle eh) const;
-  double calc_post_collapse_metric_score(double pre_metric, SMeshT* local_mesh) const;
-  double calc_max_edge_length(SMeshT* mesh) const;
-  double calc_max_edge_length(SMeshT* mesh, const std::set<FaceHandle>& faces) const;
-  double calc_max_face_area(SMeshT* mesh) const;
-  double calc_max_face_area(SMeshT* mesh, const std::set<FaceHandle>& faces) const;
-  double calc_triangle_quality(SMeshT* mesh, FaceHandle fh) const;
-  double calc_min_triangle_quality(SMeshT* mesh) const;
-  double calc_min_triangle_quality(SMeshT* mesh, const std::set<FaceHandle>& faces) const;
   Phase2PlacementContext make_phase2_placement_context(EdgeHandle eh, EdgeCollapser& edge_collapser) const;
   NewtonDerivatives finite_difference_newton_derivatives(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   NewtonDerivatives approximate_newton_derivatives(const Phase2PlacementContext& ctx, const Vec3d& x) const;
@@ -224,6 +194,7 @@ private:
   double evaluate_newton_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_qem_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_qem_only_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
+  double calc_triangle_quality(SMeshT* mesh, FaceHandle fh) const;
   double evaluate_triangle_quality_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   Eigen::Matrix4d build_phase2_triangle_quality_surrogate_quadric(
     const Phase2PlacementContext& ctx) const;

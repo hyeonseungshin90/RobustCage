@@ -148,27 +148,6 @@ std::string format_timestamp(std::time_t time_value)
   return oss.str();
 }
 
-std::string collapse_mode_label(const Cage::ParamCollapseStage& param)
-{
-  std::string mode = sanitize_path_component(param.priorityMode);
-  if (mode == "length_quality")
-    mode += "_" + sanitize_path_component(param.lengthQualitySubMode);
-  if (param.collapsePlacementMethod == "optimization" ||
-    param.collapsePlacementMethod == "energy" ||
-    param.collapsePlacementMethod == "newton")
-  {
-    mode += "_optimization";
-    mode += "_" + sanitize_path_component(param.phase2PlacementStrategy);
-    mode += "_" + sanitize_path_component(param.newtonSolverMode);
-    mode += "_" + sanitize_path_component(param.robustnessMode);
-    if (param.curvatureMode != "none")
-      mode += "_curv_" + sanitize_path_component(param.curvatureMode);
-    if (param.uniformityMode != "none")
-      mode += "_uniform_" + sanitize_path_component(param.uniformityMode);
-  }
-  return "collapse_" + mode;
-}
-
 std::string phase2_mode_label(const Cage::ParamCageSimplifier& param)
 {
   return "phase2_" + sanitize_path_component(param.phase2Mode);
@@ -212,7 +191,7 @@ std::string build_run_dir_name(const Cage::ParamCageGenerator& param)
     simplifier.phase2Mode != "qem_original")
   {
     oss
-      << "__" << collapse_mode_label(simplifier.paramCollapse)
+      << "__collapse_hausdorff"
       << "__" << flip_mode_label(simplifier.paramFlip)
       << "__" << relocate_mode_label(simplifier.paramRelocate);
   }
@@ -412,71 +391,6 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
     return true;
   }
 
-  if (token == "collapse" || token == "collapse_default" || token == "collapse_hausdorff")
-  {
-    collapse.priorityMode = "hausdorff";
-    return true;
-  }
-  if (token == "collapse_length" || token == "length")
-  {
-    collapse.priorityMode = "length";
-    return true;
-  }
-  if (token == "collapse_length_quality" || token == "collapse_length_quality_weighted" ||
-    token == "length_quality" || token == "length_quality_weighted")
-  {
-    collapse.priorityMode = "length_quality";
-    collapse.lengthQualitySubMode = "weighted";
-    return true;
-  }
-  if (token == "collapse_length_quality_relative" || token == "length_quality_relative")
-  {
-    collapse.priorityMode = "length_quality";
-    collapse.lengthQualitySubMode = "relative_reject";
-    return true;
-  }
-  if (token == "collapse_length_quality_absolute" || token == "length_quality_absolute")
-  {
-    collapse.priorityMode = "length_quality";
-    collapse.lengthQualitySubMode = "absolute_reject";
-    return true;
-  }
-  if (token == "collapse_length_quality_lexicographic" || token == "length_quality_lexicographic")
-  {
-    collapse.priorityMode = "length_quality";
-    collapse.lengthQualitySubMode = "lexicographic";
-    return true;
-  }
-  if (token == "collapse_post_edge_length" || token == "post_edge_length")
-  {
-    collapse.priorityMode = "post_edge_length";
-    return true;
-  }
-  if (token == "collapse_post_edge_length_hard" || token == "post_edge_length_hard")
-  {
-    collapse.priorityMode = "post_edge_length_hard";
-    return true;
-  }
-  if (token == "collapse_post_face_area" || token == "post_face_area")
-  {
-    collapse.priorityMode = "post_face_area";
-    return true;
-  }
-  if (token == "collapse_post_face_area_hard" || token == "post_face_area_hard")
-  {
-    collapse.priorityMode = "post_face_area_hard";
-    return true;
-  }
-  if (token == "collapse_triangle_quality" || token == "triangle_quality")
-  {
-    collapse.priorityMode = "triangle_quality";
-    return true;
-  }
-  if (token == "collapse_triangle_quality_hard" || token == "triangle_quality_hard")
-  {
-    collapse.priorityMode = "triangle_quality_hard";
-    return true;
-  }
   if (token == "phase2_linear_solve" || token == "linear_solve")
   {
     enable_linear_solve_phase2_defaults(param);
@@ -556,19 +470,6 @@ int main(int argc, char* argv[])
     printf("Need args:\n");
     printf("arg[0]: parameters.\n");
     printf("input \"default\" to set default parameters\n");
-    printf("input \"collapse\" to use default collapse priority\n");
-    printf("input \"collapse_length\" to set length-based collapse priority\n");
-    printf("input \"collapse_length_quality\" to use weighted length + triangle quality priority\n");
-    printf("input \"collapse_length_quality_weighted\" to use weighted quality penalty\n");
-    printf("input \"collapse_length_quality_relative\" to reject large relative quality drops\n");
-    printf("input \"collapse_length_quality_absolute\" to reject triangles below a quality threshold\n");
-    printf("input \"collapse_length_quality_lexicographic\" to use length first and quality as tie-break\n");
-    printf("input \"collapse_post_edge_length\" to use post-collapse edge length priority\n");
-    printf("input \"collapse_post_edge_length_hard\" to require post-collapse max edge length not to increase\n");
-    printf("input \"collapse_post_face_area\" to use post-collapse face area priority\n");
-    printf("input \"collapse_post_face_area_hard\" to require post-collapse max face area not to increase\n");
-    printf("input \"collapse_triangle_quality\" to use triangle quality priority\n");
-    printf("input \"collapse_triangle_quality_hard\" to require post-collapse min triangle quality not to decrease\n");
     printf("input \"phase2_linear_solve\" to run linear-solve Phase 2 collapses with Armijo backtracking and hard intersection constraints\n");
     printf("input \"phase2_linear_solve_collision_reject\" to reject invalid raw linear-solve placements without backtracking\n");
     printf("input \"phase2_newton_solve\" to use Newton placement for every Phase 2 collapse candidate\n");
