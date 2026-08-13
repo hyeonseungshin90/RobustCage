@@ -406,6 +406,12 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   if (token.empty() || token == "default")
     return true;
 
+  if (token == "boundary_rail")
+  {
+    param.paramCageSimplifier.enableBoundaryRails = true;
+    return true;
+  }
+
   if (token == "collapse" || token == "collapse_default" || token == "collapse_hausdorff")
   {
     collapse.priorityMode = "hausdorff";
@@ -474,31 +480,23 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   if (token == "phase2_linear_solve" || token == "linear_solve")
   {
     enable_linear_solve_phase2_defaults(param);
-    if (token == "phase2_linear_solve")
-      param.paramCageSimplifier.enableBoundaryRails = true;
     return true;
   }
   if (token == "phase2_linear_solve_collision_reject" ||
     token == "linear_solve_collision_reject")
   {
     enable_linear_solve_phase2_defaults(param);
-    if (token == "phase2_linear_solve_collision_reject")
-      param.paramCageSimplifier.enableBoundaryRails = true;
     collapse.phase2LinearSolveCollisionReject = true;
     return true;
   }
   if (token == "phase2_qem_original" || token == "qem_original")
   {
     enable_qem_original_phase2_defaults(param);
-    if (token == "phase2_qem_original")
-      param.paramCageSimplifier.enableBoundaryRails = true;
     return true;
   }
   if (token == "phase2_newton_solve" || token == "newton_solve")
   {
     enable_newton_solve_phase2_defaults(param);
-    if (token == "phase2_newton_solve")
-      param.paramCageSimplifier.enableBoundaryRails = true;
     apply_qem_energy_weights(collapse, true);
     return true;
   }
@@ -508,6 +506,19 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
 
 bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator& param)
 {
+  const auto boundary_rail_mode_is_valid = [&]()
+  {
+    if (!param.paramCageSimplifier.enableBoundaryRails)
+      return true;
+    const std::string& mode = param.paramCageSimplifier.phase2Mode;
+    if (mode == "linear_solve" || mode == "newton_solve" ||
+      mode == "qem_original")
+      return true;
+    Logger::user_logger->error(
+      "boundary_rail must be combined with phase2_linear_solve, phase2_linear_solve_collision_reject, phase2_newton_solve, or phase2_qem_original.");
+    return false;
+  };
+
   bf::path json_file_path(arg_param);
   if (bf::is_regular_file(json_file_path))
   {
@@ -524,7 +535,7 @@ bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator&
     sp.write(json_str.c_str());
     param.deserialize(sp.release().as_object());
     json_file.close();
-    return true;
+    return boundary_rail_mode_is_valid();
   }
 
   std::vector<std::string> parameter_tokens;
@@ -534,7 +545,7 @@ bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator&
     if (!apply_parameter_token(token, param))
       return false;
   }
-  return true;
+  return boundary_rail_mode_is_valid();
 }
 
 int main(int argc, char* argv[])
@@ -562,7 +573,8 @@ int main(int argc, char* argv[])
     printf("input \"phase2_linear_solve_collision_reject\" to reject invalid raw linear-solve placements without backtracking\n");
     printf("input \"phase2_newton_solve\" to use Newton placement for every Phase 2 collapse candidate\n");
     printf("input \"phase2_qem_original\" to run original Garland-Heckbert QEM without collision rejection\n");
-    printf("combine presets with '+' or ',', for example \"collapse_length+phase2_linear_solve\".\n");
+    printf("input \"boundary_rail\" with a Phase 2 energy preset to build and preserve closed boundary rails\n");
+    printf("combine presets with '+' or ',', for example \"phase2_linear_solve+boundary_rail\".\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
     printf("arg[2]: output dir path.\n");

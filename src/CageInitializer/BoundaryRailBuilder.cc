@@ -774,31 +774,24 @@ bool BoundaryRailBuilder::build()
     bool valid = true;
     for (size_t i = 0; i < candidate.halfedges.size(); i++)
     {
-      const HalfedgeHandle incoming =
-        candidate.halfedges[(i + candidate.halfedges.size() - 1) % candidate.halfedges.size()];
-      const HalfedgeHandle outgoing = candidate.halfedges[i];
-      Vec3d incoming_outer;
-      Vec3d outgoing_outer;
+      const HalfedgeHandle boundary_halfedge = candidate.halfedges[i];
+      Vec3d direction;
       if (!get_boundary_edge_outer_direction(
-          *source, incoming, length_epsilon, incoming_outer) ||
-        !get_boundary_edge_outer_direction(
-          *source, outgoing, length_epsilon, outgoing_outer))
+          *source, boundary_halfedge, length_epsilon, direction))
       {
         valid = false;
         break;
       }
 
-      Vec3d direction = incoming_outer + outgoing_outer;
-      // A near-zero average direction is deliberately not given a heuristic
-      // fallback in this first implementation.
-      if (direction.length() <= length_epsilon)
-      {
-        valid = false;
-        break;
-      }
-      direction.normalize();
-      const VertexHandle source_vertex = source->from_vertex_handle(outgoing);
-      const Vec3d origin = source->point(source_vertex);
+      // One anchor corresponds to one source boundary edge.  Cast the ray
+      // from the edge midpoint along that edge's outward co-normal; no
+      // vertex-level averaging of adjacent edge directions is used.
+      const VertexHandle source_from =
+        source->from_vertex_handle(boundary_halfedge);
+      const VertexHandle source_to =
+        source->to_vertex_handle(boundary_halfedge);
+      const Vec3d origin =
+        (source->point(source_from) + source->point(source_to)) * 0.5;
       RayHit hit;
       if (!ray_tree.first_intersection(
           origin, direction, intersection_epsilon, hit) || !finite_vec(hit.point))
@@ -859,7 +852,7 @@ bool BoundaryRailBuilder::build()
     if (!valid)
     {
       Logger::user_logger->warn(
-        "boundary rail construction skipped source boundary component {} because an anchor ray was undefined or missed the cage.",
+        "boundary rail construction skipped source boundary component {} because an edge-anchor ray was undefined or missed the cage.",
         loop_index);
       continue;
     }
