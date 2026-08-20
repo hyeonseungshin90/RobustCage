@@ -82,6 +82,7 @@ void EdgeCollapser::clear()
   rail_collapse_id = -1;
   rail_neighbor0 = VertexHandle();
   rail_neighbor1 = VertexHandle();
+  rail_support_patches.clear();
 }
 
 bool EdgeCollapser::initialize_rail_constraint(EdgeHandle edge)
@@ -135,7 +136,70 @@ bool EdgeCollapser::initialize_rail_constraint(EdgeHandle edge)
   rail_collapse_id = from_rail;
   rail_segment0 = rm->point(from);
   rail_segment1 = rm->point(to);
+
+  // Each labeled source boundary edge contributes a ruled half-strip whose
+  // axes are the boundary tangent and its outward co-normal.  Projecting a
+  // rail collapse onto their union preserves a straight cylinder's opening,
+  // while a sloped source wall naturally contracts or expands the rail.
+  if (om)
+  {
+    for (EdgeHandle source_edge : om->edges())
+    {
+      if (om->data(source_edge).boundary_rail_id != rail_collapse_id)
+        continue;
+
+      HalfedgeHandle boundary_halfedge = om->halfedge_handle(source_edge, 0);
+      if (!om->is_boundary(boundary_halfedge))
+        boundary_halfedge = om->halfedge_handle(source_edge, 1);
+      if (!om->is_boundary(boundary_halfedge))
+        continue;
+
+      const Vec3d start =
+        om->point(om->from_vertex_handle(boundary_halfedge));
+      const Vec3d end =
+        om->point(om->to_vertex_handle(boundary_halfedge));
+      Vec3d tangent = end - start;
+      const double length = tangent.length();
+      if (!(length > 0.0) || !std::isfinite(length))
+        continue;
+      tangent /= length;
+
+      Vec3d outward = om->data(source_edge).boundary_rail_outer_direction;
+      // Remove numerical leakage along the boundary tangent so projection
+      // coordinates remain independent.
+      outward -= tangent * (outward | tangent);
+      const double outward_length = outward.length();
+      if (!(outward_length > 0.0) || !std::isfinite(outward_length))
+        continue;
+      outward /= outward_length;
+      rail_support_patches.push_back({ start, tangent, outward, length });
+    }
+  }
   return true;
+}
+
+bool EdgeCollapser::project_to_source_rail(
+  const Vec3d& point, Vec3d& projected)const
+{
+  double best_distance_sqr = DBL_MAX;
+  bool found = false;
+  for (const RailSupportPatch& patch : rail_support_patches)
+  {
+    const Vec3d relative = point - patch.start;
+    const double along_edge = std::max(
+      0.0, std::min(patch.length, relative | patch.tangent));
+    const double along_outward = std::max(0.0, relative | patch.outward);
+    const Vec3d candidate = patch.start +
+      patch.tangent * along_edge + patch.outward * along_outward;
+    const double distance_sqr = (candidate - point).squaredNorm();
+    if (std::isfinite(distance_sqr) && distance_sqr < best_distance_sqr)
+    {
+      best_distance_sqr = distance_sqr;
+      projected = candidate;
+      found = true;
+    }
+  }
+  return found;
 }
 
 Vec3d EdgeCollapser::constrained_target_point(const Vec3d& new_point)const
@@ -143,6 +207,13 @@ Vec3d EdgeCollapser::constrained_target_point(const Vec3d& new_point)const
   ASSERT(initialized, "edge collapser not initialized.");
   if (rail_collapse_id < 0)
     return new_point;
+
+  Vec3d source_guided_point;
+  if (project_to_source_rail(new_point, source_guided_point))
+    return source_guided_point;
+
+  // Backward-compatible fallback for meshes whose rail labels predate the
+  // source support metadata.
   const Vec3d segment = rail_segment1 - rail_segment0;
   const double segment_sqr = segment.squaredNorm();
   if (segment_sqr <= 0.0)

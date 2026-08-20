@@ -40,7 +40,7 @@ config.json
 | 토큰 | 적용 대상 | 효과 |
 |---|---|---|
 | `default` | 전체 | 기본 파라미터를 그대로 사용합니다. |
-| `boundary_rail` | phase1.5/phase2 | Build source-boundary anchors and closed cage edge loops, then preserve their labels during Phase 2. Must be combined with one of the four energy Phase 2 presets. |
+| `boundary_rail` | phase1.5/phase2 | Build source-boundary anchors and closed cage edge loops, then constrain rail collapses to the ruled half-strips defined by source boundary tangents and outward co-normals. Must be combined with one of the four energy Phase 2 presets. |
 | `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; solve the QEM/quality linear system, accept valid points directly, and otherwise use Armijo backtracking from tangential smoothing |
 | `phase2_linear_solve_collision_reject` | phase2 | Same defaults as `phase2_linear_solve` plus `phase2LinearSolveCollisionReject = true`; reject an invalid raw linear-solve point instead of backtracking |
 | `phase2_newton_solve` | phase2 | `phase2Mode = "newton_solve"`; use Newton placement for every popped collapse candidate |

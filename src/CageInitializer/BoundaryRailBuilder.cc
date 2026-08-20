@@ -296,6 +296,7 @@ struct AnchorRequest
   size_t loop_index = 0;
   size_t order_index = 0;
   Vec3d point;
+  Vec3d outer_direction;
   FaceHandle source_face;
   enum class Location { Vertex, Edge, Face } location = Location::Face;
   VertexHandle vertex;
@@ -713,6 +714,14 @@ bool BoundaryRailBuilder::build()
   if (!source || !cage || source->n_vertices() == 0 || cage->n_faces() == 0)
     return false;
 
+  // The source-edge labels and directions are consumed by EdgeCollapser in
+  // Phase 2.  Reset them in case a mesh instance is reused for another build.
+  for (EdgeHandle eh : source->edges())
+  {
+    source->data(eh).boundary_rail_id = kNoRail;
+    source->data(eh).boundary_rail_outer_direction = Vec3d(0.0, 0.0, 0.0);
+  }
+
   Box source_box;
   for (VertexHandle vh : source->vertices())
     source_box.add(source->point(vh));
@@ -805,6 +814,7 @@ bool BoundaryRailBuilder::build()
       request.loop_index = valid_loops.size();
       request.order_index = i;
       request.point = hit.point;
+      request.outer_direction = direction;
       request.source_face = triangle.face;
       const double bary_epsilon = 1e-8;
       std::vector<size_t> near_zero;
@@ -1060,10 +1070,26 @@ bool BoundaryRailBuilder::build()
   size_t built_rails = 0;
   for (BoundaryLoop& loop : valid_loops)
   {
+    const int rail_id = static_cast<int>(built_rails);
     if (construct_rail(
         *cage, loop.anchors, all_anchor_vertices,
-        static_cast<int>(built_rails)))
+        rail_id))
     {
+      // Give the source boundary component the same id as its cage rail and
+      // retain the per-edge outward co-normal.  Together with the boundary
+      // edge tangent this defines the half-strip
+      //   p(u, t) = edge(u) + t * outward, 0 <= u <= 1, t >= 0,
+      // used as the Phase 2 rail support surface.
+      for (size_t request_index : loop.request_indices)
+      {
+        const AnchorRequest& request = requests[request_index];
+        const HalfedgeHandle source_halfedge =
+          loop.halfedges[request.order_index];
+        const EdgeHandle source_edge = source->edge_handle(source_halfedge);
+        source->data(source_edge).boundary_rail_id = rail_id;
+        source->data(source_edge).boundary_rail_outer_direction =
+          request.outer_direction;
+      }
       built_rails++;
     }
     else

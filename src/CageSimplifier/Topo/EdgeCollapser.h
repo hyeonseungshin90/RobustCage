@@ -52,8 +52,8 @@ public:
   double local_Hausdorff_before_collapsing()const;
   double local_Hausdorff_after_collapsing(SMeshT* local_rm, const Vec3d& new_point, double& threshold)const;
   bool target_point_is_valid(const Vec3d& new_point, const ExactPoint* new_ep)const;
-  // Rail collapses are allowed only along the current rail segment.  For a
-  // non-rail collapse this returns new_point unchanged.
+  // Rail collapses are projected to the source-boundary ruled surface.  For
+  // a non-rail collapse this returns new_point unchanged.
   Vec3d constrained_target_point(const Vec3d& new_point)const;
 
   void predict_smooth_target(const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target)const;
@@ -93,6 +93,14 @@ private:
   VertexHandle rail_neighbor1;
   Vec3d rail_segment0;
   Vec3d rail_segment1;
+  struct RailSupportPatch
+  {
+    Vec3d start;
+    Vec3d tangent;
+    Vec3d outward;
+    double length = 0.0;
+  };
+  std::vector<RailSupportPatch> rail_support_patches;
   /// collapse edge
   HalfedgeHandle collapse_he;
   HalfedgeHandle collapse_he_opp;
@@ -105,6 +113,7 @@ private:
   bool collapse_would_cause_intersection(const Vec3d& new_point, const ExactPoint* new_ep)const;
   bool collapse_would_cause_degenerate(const Vec3d& new_point, const ExactPoint* new_ep)const;
   bool initialize_rail_constraint(EdgeHandle edge);
+  bool project_to_source_rail(const Vec3d& point, Vec3d& projected)const;
   void update_rail_after_collapse();
 
   /* only serial */
