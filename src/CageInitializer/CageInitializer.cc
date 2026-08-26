@@ -72,6 +72,30 @@ size_t countBoundaryEdges(SM::SMeshT* mesh)
   return boundary_edges;
 }
 
+void validateClosedManifoldCage(SM::SMeshT* mesh)
+{
+  const size_t boundary_edges = countBoundaryEdges(mesh);
+  size_t non_manifold_vertices = 0;
+  for (SM::VertexHandle vertex : mesh->vertices())
+  {
+    if (!mesh->is_manifold(vertex))
+      non_manifold_vertices++;
+  }
+
+  if (boundary_edges != 0 || non_manifold_vertices != 0)
+  {
+    Logger::user_logger->critical(
+      "Phase 1 topological-offset cage is not a closed 2-manifold: "
+      "{} boundary edges, {} non-manifold vertices.",
+      boundary_edges, non_manifold_vertices);
+    throw std::logic_error(
+      "Phase 1 topological-offset cage is not a closed 2-manifold");
+  }
+
+  Logger::user_logger->info(
+    "Phase 1 topological-offset manifold check passed: no boundary edges or singular vertices.");
+}
+
 void writeVolumeMeshFacesObj(VM::VMeshT* mesh, const std::string& file_name)
 {
   std::fstream fout(file_name, std::fstream::out);
@@ -129,6 +153,7 @@ CageInitializer::CageInitializer(
 void CageInitializer::generate()
 {
   Logger::user_logger->info("begin generating initial cage.");
+  Logger::user_logger->info("Phase 1 mode: {}.", param->phase1Mode);
 
   SM::pre_calculate_edge_length(SMesh);
   SM::pre_calculate_face_area(SMesh);
@@ -158,15 +183,38 @@ void CageInitializer::generate()
       input_boundary_edges);
   }
 
-  // step 2.1. trim tetrahedral mesh, including subdiving and removing tets.
-  tetMeshTrimmer = std::make_unique<TetMeshTrimmer>(outVMesh);
-  tetMeshTrimmer->trim();
-  writeVolumeMeshFacesObj(
-    outVMesh,
-    param->fileOutPath + param->fileName + "_debug_trim.obj");
+  // step 2.1. Build a regular neighborhood of the constraint.  The default
+  // path is intentionally unchanged; the topological-offset path replaces
+  // the two global 1-to-12 subdivisions with local stellar splits.
+  if (param->phase1Mode == "subdivision")
+  {
+    tetMeshTrimmer = std::make_unique<TetMeshTrimmer>(outVMesh);
+    tetMeshTrimmer->trim();
+    writeVolumeMeshFacesObj(
+      outVMesh,
+      param->fileOutPath + param->fileName + "_debug_trim.obj");
+  }
+  else if (param->phase1Mode == "topological_offset")
+  {
+    topologicalOffsetInitializer =
+      std::make_unique<TopologicalOffsetInitializer>(outVMesh);
+    topologicalOffsetInitializer->generate();
+    writeVolumeMeshFacesObj(
+      outVMesh,
+      param->fileOutPath + param->fileName +
+        "_debug_topological_offset.obj");
+  }
+  else
+  {
+    Logger::user_logger->critical(
+      "unsupported Phase 1 mode: {}", param->phase1Mode);
+    throw std::invalid_argument("unsupported Phase 1 mode");
+  }
 
   // step 2.2. retrieve cage from tetrahedral mesh.
   retrieveCage(outVMesh, outSMesh);
+  if (param->phase1Mode == "topological_offset")
+    validateClosedManifoldCage(outSMesh);
   if (hasExactNonAdjacentSelfIntersection(outSMesh))
   {
     throw std::logic_error(
@@ -178,6 +226,7 @@ void CageInitializer::generate()
   OpenMesh::IO::write_mesh(*outSMesh, retrieve_cage_path, OpenMesh::IO::Options::Default, 15);
   Logger::user_logger->info("wrote retrieved cage OBJ: {}", retrieve_cage_path);
   tetMeshTrimmer.reset();
+  topologicalOffsetInitializer.reset();
   {Logger::user_logger->info("generating initial cage done!");}
   {Logger::user_logger->info("peak memory used: {} MB", getPeakMegabytesUsed());}
 }

@@ -27,9 +27,22 @@ To generate nested cages with target numbers of vertices, run the executable fil
 
 The `default` can be substituted by a Phase 2 preset or a configure file. We provide an example at "src/config.json".
 
+Phase 1 has two modes:
+
+* `default` keeps the original two rounds of global 1-to-12 tetrahedron subdivision.
+* `phase1_topological_offset` uses the simplicial embedding and offset insertion of Zint et al., then extracts the initial-cage boundary.
+
+For example:
+
+`exeCageGenerator.exe phase1_topological_offset path-to-input path-to-out-dir target_Nv`
+
+Phase presets compose with `+`, for example:
+
+`exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve path-to-input path-to-out-dir target_Nv`
+
 Outputs are written under a unique run directory inside the input-name folder:
 
-`path-to-out-dir/input_name/<run_timestamp>__phase2_<mode>[__<mode-specific-details>]/`
+`path-to-out-dir/input_name/<run_timestamp>[__phase1_topological_offset]__phase2_<mode>[__<mode-specific-details>]/`
 
 The default mode retains its existing `__collapse_hausdorff__flip_<mode>__relocate_<mode>` suffix for output compatibility.
 

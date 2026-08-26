@@ -180,9 +180,13 @@ std::string build_run_dir_name(const Cage::ParamCageGenerator& param)
 {
   const auto& simplifier = param.paramCageSimplifier;
   std::ostringstream oss;
-  oss
-    << format_timestamp(std::time(nullptr))
-    << "__" << phase2_mode_label(simplifier);
+  oss << format_timestamp(std::time(nullptr));
+  if (param.paramCageInitializer.phase1Mode != "subdivision")
+  {
+    oss << "__phase1_" <<
+      sanitize_path_component(param.paramCageInitializer.phase1Mode);
+  }
+  oss << "__" << phase2_mode_label(simplifier);
   if (simplifier.phase2Mode == "newton_solve")
   {
     oss << "__" << newton_solve_phase2_detail_label(simplifier.paramCollapse);
@@ -385,6 +389,12 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   if (token.empty() || token == "default")
     return true;
 
+  if (token == "phase1_topological_offset" || token == "topological_offset")
+  {
+    param.paramCageInitializer.phase1Mode = "topological_offset";
+    return true;
+  }
+
   if (token == "boundary_rail")
   {
     param.paramCageSimplifier.enableBoundaryRails = true;
@@ -420,6 +430,17 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
 
 bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator& param)
 {
+  const auto phase1_mode_is_valid = [&]()
+  {
+    const std::string& mode = param.paramCageInitializer.phase1Mode;
+    if (mode == "subdivision" || mode == "topological_offset")
+      return true;
+    Logger::user_logger->error(
+      "invalid phase1Mode: {} (expected subdivision or topological_offset).",
+      mode);
+    return false;
+  };
+
   const auto boundary_rail_mode_is_valid = [&]()
   {
     if (!param.paramCageSimplifier.enableBoundaryRails)
@@ -449,7 +470,7 @@ bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator&
     sp.write(json_str.c_str());
     param.deserialize(sp.release().as_object());
     json_file.close();
-    return boundary_rail_mode_is_valid();
+    return phase1_mode_is_valid() && boundary_rail_mode_is_valid();
   }
 
   std::vector<std::string> parameter_tokens;
@@ -459,7 +480,7 @@ bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator&
     if (!apply_parameter_token(token, param))
       return false;
   }
-  return boundary_rail_mode_is_valid();
+  return phase1_mode_is_valid() && boundary_rail_mode_is_valid();
 }
 
 int main(int argc, char* argv[])
@@ -470,6 +491,7 @@ int main(int argc, char* argv[])
     printf("Need args:\n");
     printf("arg[0]: parameters.\n");
     printf("input \"default\" to set default parameters\n");
+    printf("input \"phase1_topological_offset\" to use simplicial embedding and offset insertion in Phase 1\n");
     printf("input \"phase2_linear_solve\" to run linear-solve Phase 2 collapses with Armijo backtracking and hard intersection constraints\n");
     printf("input \"phase2_linear_solve_collision_reject\" to reject invalid raw linear-solve placements without backtracking\n");
     printf("input \"phase2_newton_solve\" to use Newton placement for every Phase 2 collapse candidate\n");

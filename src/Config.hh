@@ -35,7 +35,25 @@ struct ParamCageInitializer
   std::string fileOutPath;
   std::string fileName;
 
+  // Phase 1 construction mode:
+  // "subdivision" preserves the original two-round 1-to-12 refinement;
+  // "topological_offset" uses simplicial embedding and offset insertion.
+  std::string phase1Mode = "subdivision";
+
   ParamTetrahedralizer paramTetrahedralizer;
+
+  boost::json::object serialize()const
+  {
+    boost::json::object jo;
+    jo["phase1Mode"] = phase1Mode;
+    return jo;
+  }
+  void deserialize(const boost::json::object& jo)
+  {
+    auto phase1_mode_it = jo.find("phase1Mode");
+    if (phase1_mode_it != jo.end())
+      phase1Mode = std::string(phase1_mode_it->value().as_string().c_str());
+  }
 };
 
 struct ParamFastSimplifier
@@ -395,11 +413,15 @@ struct ParamCageGenerator
   boost::json::object serialize()const
   {
     boost::json::object jo;
+    jo["paramCageInitializer"] = paramCageInitializer.serialize();
     jo["paramCageSimplifier"] = paramCageSimplifier.serialize();
     return jo;
   }
   void deserialize(const boost::json::object& jo)
   {
+    auto initializer_it = jo.find("paramCageInitializer");
+    if (initializer_it != jo.end())
+      paramCageInitializer.deserialize(initializer_it->value().as_object());
     paramCageSimplifier.deserialize(jo.at("paramCageSimplifier").as_object());
   }
 };

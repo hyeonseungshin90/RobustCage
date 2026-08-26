@@ -1,6 +1,7 @@
 #pragma once
 #include "Tetrahedralizer.hh"
 #include "TetMeshTrimmer.hh"
+#include "TopologicalOffsetInitializer.hh"
 
 namespace Cage
 {
@@ -21,6 +22,7 @@ public:
   std::unique_ptr<Tetrahedralizer> tetrahedralizer;
   std::unique_ptr<TetRemover> tetRemover;
   std::unique_ptr<TetMeshTrimmer> tetMeshTrimmer;
+  std::unique_ptr<TopologicalOffsetInitializer> topologicalOffsetInitializer;
 
   // middle results
   VM::VMeshT* outVMesh;
@@ -47,4 +49,4 @@ private:
   void retrieveCage(VM::VMeshT* vol_mesh, SM::SMeshT* boundary_mesh);
 };
 }// namespace CageInit
-}// namespace Cage 
+}// namespace Cage

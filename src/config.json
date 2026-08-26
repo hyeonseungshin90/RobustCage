@@ -1,4 +1,7 @@
 {
+  "paramCageInitializer": {
+    "phase1Mode": "subdivision"
+  },
   "paramCageSimplifier": {
     "maxIter": 50,
     "relaxErrorIterStep": 5,
