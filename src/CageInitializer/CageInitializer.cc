@@ -170,6 +170,9 @@ void CageInitializer::generate()
 
   tetrahedralizationPostProcess();
 
+  // The mesher's own output, before anything in this project touches it.
+  VertexRounder(outVMesh).checkAllTets("post-tetrahedralize");
+
   if (input_boundary_edges == 0)
   {
     Logger::user_logger->info("separating volume mesh to inside and outside.");
@@ -203,6 +206,7 @@ void CageInitializer::generate()
       outVMesh,
       param->fileOutPath + param->fileName +
         "_debug_topological_offset.obj");
+    VertexRounder(outVMesh).checkAllTets("post-topological-offset");
   }
   else
   {

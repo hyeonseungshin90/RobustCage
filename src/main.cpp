@@ -316,9 +316,14 @@ void generate_cages(
   {
     UNUSED(ae);
   }
+  catch (const std::exception& e)
+  {
+    Logger::user_logger->error("unexpected exception: {}", e.what());
+    Logger::dev_logger->error("unexpected exception: {}", e.what());
+  }
   catch (...)
   {
-    Logger::dev_logger->error("unexpected exception, check it!");
+    Logger::dev_logger->error("unexpected exception of unknown type, check it!");
   }
 
   Logger::dev_logger->flush();

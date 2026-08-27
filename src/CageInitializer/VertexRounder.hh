@@ -23,7 +23,7 @@ public:
 
   bool checkPositiveVolume(CellHandle ch, VertexHandle vh, const Point_3& approx_p);
 
-  bool checkAllTets();
+  bool checkAllTets(const char* stage);
 
 };
 }// namespace CageInit

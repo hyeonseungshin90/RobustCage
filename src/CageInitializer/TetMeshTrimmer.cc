@@ -24,23 +24,32 @@ void TetMeshTrimmer::trim()
   std::vector<std::array<VM::VertexHandle, 4>> cell_vrts;
   VMesh->updateVertexConnCells(cell_vrts);
   vertexRounder->doRounding();
+  vertexRounder->checkAllTets("post-initial-rounding");
   removeNonAdjacent2ConstraintTets();
 
   Logger::user_logger->info("subdividing all tetrahedrons and remove non-adjacent tetrahedrons.(round 1)");
   tetSubdivider->subdivideAll();
+  vertexRounder->checkAllTets("post-subdivide-1");
   vrts_left = findVrtsLeft();
   vertexRounder->doRounding(vrts_left);
+  vertexRounder->checkAllTets("post-rounding-1");
   removeNonAdjacent2ConstraintTets();
 
   Logger::user_logger->info("subdividing all tetrahedrons and remove non-adjacent tetrahedrons.(round 2)");
   tetSubdivider->subdivideAll();
   tetSubdivider.reset();
+  vertexRounder->checkAllTets("post-subdivide-2");
   vrts_left = findVrtsLeft();
   vertexRounder->doRounding(vrts_left);
   removeNonAdjacent2ConstraintTets();
 
   Logger::user_logger->info("final tetrahedral mesh has {} cells, {} faces, {} edges, {} vertices.",
     VMesh->nCells(), VMesh->nFaces(), VMesh->nEdges(), VMesh->nVertices());
+
+  // The boundary of a valid tet complex cannot cross itself, so verify no
+  // tetrahedron ended up with zero or inverted volume before the cage is
+  // extracted.  Runs outside CHECK_MANIFOLD: it needs no extra properties.
+  vertexRounder->checkAllTets("final");
 
 #ifdef CHECK_MANIFOLD
   std::vector<VM::EdgeHandle> non_manifold_edges;
@@ -52,7 +61,7 @@ void TetMeshTrimmer::trim()
   if (!non_manifold_vertices.empty())
     throw std::logic_error("error in manifold.");
 
-  vertexRounder->checkAllTets();
+  vertexRounder->checkAllTets("final");
 #endif
 }
 
