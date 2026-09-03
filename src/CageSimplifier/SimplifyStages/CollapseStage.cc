@@ -1302,7 +1302,8 @@ bool CollapseStage::choose_phase2_collapse_placement(
 {
   decision = Phase2PlacementDecision();
   const Phase2PlacementContext ctx = make_phase2_placement_context(eh, edge_collapser);
-  if (!ctx.use_qem_matrix && ctx.qem_planes.empty())
+  if (is_phase2_qem_original_strategy() &&
+    !ctx.use_qem_matrix && ctx.qem_planes.empty())
     return false;
 
   std::vector<Vec3d> candidates;
@@ -1588,7 +1589,12 @@ bool CollapseStage::refine_collapse_placement_with_newton(
 bool CollapseStage::solve_phase2_quadric_placement(
   const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const
 {
-  if (!ctx.use_qem_matrix && ctx.qem_planes.empty())
+  // An edge without QEM planes is not hopeless: Garland-Heckbert already
+  // prescribes falling back to the segment optimum and then to the midpoint,
+  // and the triangle-quality surrogate added below can still shape the solve.
+  // Only pure QEM, which has no other term to solve with, gives up here.
+  if (is_phase2_qem_original_strategy() &&
+    !ctx.use_qem_matrix && ctx.qem_planes.empty())
     return false;
 
   double curvature_multiplier = 1.0;
@@ -1641,17 +1647,16 @@ bool CollapseStage::solve_phase2_quadric_placement(
   const bool solved = quadric.solve_unregularized(new_point);
   if (!solved)
   {
-    if (!pure_qem)
-      return false;
-
-    if (quadric.solve_segment(ctx.endpoint0, ctx.endpoint1, new_point))
+    // Garland-Heckbert singular-quadric cascade (Sec. 4): first the optimum
+    // constrained to the collapsed segment, then the midpoint and endpoints.
+    // The midpoint leads the candidate list and seeds new_point so that a
+    // quadric that is identically zero keeps the midpoint rather than an
+    // arbitrary endpoint.
+    if (!quadric.solve_segment(ctx.endpoint0, ctx.endpoint1, new_point))
     {
-      // Garland-Heckbert fallback: optimal point constrained to the collapsed segment.
-    }
-    else
-    {
-      const Vec3d candidates[3] = { ctx.endpoint0, ctx.endpoint1, ctx.midpoint };
+      const Vec3d candidates[3] = { ctx.midpoint, ctx.endpoint0, ctx.endpoint1 };
       double best_energy = DBL_MAX;
+      new_point = ctx.midpoint;
       for (const Vec3d& candidate : candidates)
       {
         const double candidate_energy = quadric.evaluate(candidate);
@@ -1686,12 +1691,16 @@ bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3
   HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
   size_t valence_after_collapsing =
     (rm->valence(rm->to_vertex_handle(heh)) + rm->valence(rm->from_vertex_handle(heh))) - 3;
-  if (!is_phase2_qem_original_strategy() &&
+  // Both QEM-based strategies choose the collapsed position by solving an
+  // energy instead of keeping the mesh near-regular, so the valence cap only
+  // hides candidates they could still place. Newton placement keeps it.
+  if (!is_phase2_qem_based_strategy() &&
     valence_after_collapsing > param->maxValence)
     return false;
 
   const Phase2PlacementContext ctx = make_phase2_placement_context(eh, edge_collapser);
-  if (!ctx.use_qem_matrix && ctx.qem_planes.empty())
+  if (is_phase2_qem_original_strategy() &&
+    !ctx.use_qem_matrix && ctx.qem_planes.empty())
     return false;
 
   if (is_phase2_newton_solve_strategy())

@@ -161,10 +161,13 @@ JSON 설정 파일 사용:
 | `<input_name>_debug_retrieve_cage.obj` | Phase 1 boundary extraction 직후의 initial cage입니다. |
 | `<input_name>_cage_0.obj` | 첫 번째 cage 결과입니다. |
 | `<input_name>_cage_1.obj` | 두 번째 nested cage 결과입니다. 목표 정점 수를 여러 개 넘긴 경우 생성됩니다. |
+| `<input_name>_cage_<i>_rails.obj` | cage `<i>`의 boundary rail만 담은 파일입니다. rail edge는 OBJ line element(`l`), rail vertex는 point element(`p`)로 기록되고 rail id마다 `o rail_<id>` / `g rail_<id>` 그룹으로 나뉩니다. rail이 하나도 없으면 생성되지 않습니다. |
+| `<input_name>_cage_<i>_rails.txt` | 같은 rail을 cage OBJ의 1-based vertex index로 적은 목록입니다. `V <rail_id> <cage_vertex> <x> <y> <z>`와 `E <rail_id> <cage_vertex_a> <cage_vertex_b>` 두 종류의 줄로 구성되며, cage를 불러온 뒤 rail 정점/간선을 그 안에서 찾아 강조할 때 사용합니다. |
 
 ## Notes
 
 - `<output_dir_path>`는 실행 전에 존재해야 합니다. 프로그램은 그 아래에 입력 파일 이름의 하위 디렉터리와 실행별 결과 디렉터리를 만듭니다.
 - `<target_Nv_i>`는 정수로 파싱됩니다. 의도와 다른 결과를 피하려면 양의 정수를 사용하세요.
+- rail 파일(`*_rails.obj`, `*_rails.txt`)은 `boundary_rail` 프리셋으로 실행해 rail이 실제로 만들어졌을 때만 생성됩니다. rail은 입력 메쉬의 boundary loop에서 나오므로 watertight 입력에서는 생성되지 않습니다.
 - 입력 메쉬가 non-manifold이거나 non-watertight이면 경고를 남기고 계속 진행합니다. 단, 읽기 실패 또는 vertex/face가 없는 입력은 `invalid mesh`로 중단됩니다.
 - 현재 `main.cpp`의 도움말 출력은 인덱스 표기가 일부 어긋나 있습니다. 실제 파싱 기준은 이 문서의 명령 형식입니다.
