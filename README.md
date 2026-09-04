@@ -17,9 +17,17 @@ We also provide a binary executable file in supplementary.
 
 ## How to use
 
+Input meshes may be supplied as OBJ, OFF, PLY, OM, or STL files. Both ASCII
+and binary STL are supported, including binary STL files whose 80-byte header
+starts with `solid`.
+
 To generate a single cage with a target number of vertices, run the executable file as
 
 `exeCageGenerator.exe default path-to-input path-to-out-dir target_Nv`
+
+For example, to generate a cage directly from an STL file:
+
+`exeCageGenerator.exe default path-to-input.stl path-to-out-dir target_Nv`
 
 To generate nested cages with target numbers of vertices, run the executable file as
 

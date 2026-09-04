@@ -201,6 +201,10 @@ private:
   double evaluate_phase2_triangle_quality_surrogate(
     const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_pre_collapse_triangle_quality_penalty(const Phase2PlacementContext& ctx) const;
+  Eigen::Matrix4d build_phase2_uniformity_difference_quadric(
+    const Phase2PlacementContext& ctx) const;
+  double evaluate_phase2_uniformity_difference(
+    const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_uniformity_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_phase2_proxy_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   Phase2QueueComponents evaluate_phase2_queue_components(

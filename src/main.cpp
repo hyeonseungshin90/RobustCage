@@ -1,7 +1,10 @@
 #include "CageGenerator.hh"
 #include "boost/filesystem.hpp"
 #include "boost/algorithm/string.hpp"
+#include <array>
 #include <cctype>
+#include <chrono>
+#include <cstdint>
 #include <cfloat>
 #include <cmath>
 #include <ctime>
@@ -41,6 +44,70 @@ MeshDiagnostics analyze_mesh(Cage::SMeshT& mesh)
 bool mesh_valid(Cage::SMeshT& mesh)
 {
   return mesh.n_vertices() > 0 && mesh.n_faces() > 0;
+}
+
+// OpenMesh 8.1 identifies a .stl file as ASCII as soon as its header starts
+// with "solid".  Binary STL headers are arbitrary text and are also allowed to
+// start with that word, so use the binary STL byte layout before asking the
+// reader to parse the stream.
+bool has_binary_stl_layout(const bf::path& path)
+{
+  boost::system::error_code ec;
+  const std::uintmax_t file_size = bf::file_size(path, ec);
+  if (ec || file_size < 84)
+    return false;
+
+  std::ifstream input(path.string().c_str(), std::ios::in | std::ios::binary);
+  if (!input.is_open())
+    return false;
+
+  input.seekg(80, std::ios::beg);
+  std::array<unsigned char, 4> count_bytes{};
+  input.read(
+    reinterpret_cast<char*>(count_bytes.data()),
+    static_cast<std::streamsize>(count_bytes.size()));
+  if (!input)
+    return false;
+
+  const std::uint32_t triangle_count =
+    static_cast<std::uint32_t>(count_bytes[0]) |
+    (static_cast<std::uint32_t>(count_bytes[1]) << 8) |
+    (static_cast<std::uint32_t>(count_bytes[2]) << 16) |
+    (static_cast<std::uint32_t>(count_bytes[3]) << 24);
+  const std::uintmax_t expected_size =
+    84u + static_cast<std::uintmax_t>(triangle_count) * 50u;
+  return expected_size == file_size;
+}
+
+bool read_input_mesh(
+  Cage::SMeshT& mesh,
+  const bf::path& path,
+  std::string& format_description)
+{
+  const std::string extension =
+    boost::algorithm::to_lower_copy(path.extension().string());
+  const bool is_stl =
+    extension == ".stl" || extension == ".stla" || extension == ".stlb";
+  if (!is_stl)
+  {
+    format_description = extension.empty() ? "unknown" : extension.substr(1);
+    return OpenMesh::IO::read_mesh(mesh, path.string());
+  }
+
+  const bool is_binary = extension == ".stlb" ||
+    (extension == ".stl" && has_binary_stl_layout(path));
+  format_description = is_binary ? "binary STL" : "ASCII STL";
+
+  // The stream overload obeys Options::Binary directly and therefore avoids
+  // OpenMesh's ambiguous filename-based STL detection.
+  std::ifstream input(path.string().c_str(), std::ios::in | std::ios::binary);
+  if (!input.is_open())
+    return false;
+
+  OpenMesh::IO::Options options;
+  if (is_binary)
+    options += OpenMesh::IO::Options::Binary;
+  return OpenMesh::IO::read_mesh(mesh, input, ".stl", options);
 }
 
 double calc_triangle_quality(Cage::SM::SMeshT& mesh, Cage::SM::FaceHandle fh)
@@ -339,6 +406,11 @@ std::string build_run_dir_name(const Cage::ParamCageGenerator& param)
     oss << "__phase1_" <<
       sanitize_path_component(param.paramCageInitializer.phase1Mode);
   }
+  if (simplifier.boundaryRailAnchorMode == "compare")
+  {
+    oss << "__boundary_rail_anchor_compare";
+    return oss.str();
+  }
   oss << "__" << phase2_mode_label(simplifier);
   if (simplifier.phase2Mode == "newton_solve")
   {
@@ -370,6 +442,176 @@ bf::path create_unique_output_dir(const bf::path& parent_dir, const std::string&
       bf::create_directory(candidate);
       return candidate;
     }
+  }
+}
+
+std::string csv_cell(std::string value)
+{
+  size_t position = 0;
+  while ((position = value.find('"', position)) != std::string::npos)
+  {
+    value.insert(position, 1, '"');
+    position += 2;
+  }
+  return '"' + value + '"';
+}
+
+std::string boundary_rail_benchmark_winner(
+  const Cage::CageInit::BoundaryRailBuildStats& edge,
+  const Cage::CageInit::BoundaryRailBuildStats& vertex)
+{
+  if (edge.builtLoopCount > vertex.builtLoopCount)
+    return "edge";
+  if (vertex.builtLoopCount > edge.builtLoopCount)
+    return "vertex";
+  return "tie";
+}
+
+bool write_boundary_rail_benchmark_csv(
+  const bf::path& path,
+  const std::string& model_name,
+  const Cage::CageInit::BoundaryRailBuildStats& edge,
+  const Cage::CageInit::BoundaryRailBuildStats& vertex,
+  double phase1_seconds,
+  double edge_seconds,
+  double vertex_seconds)
+{
+  std::ofstream csv(path.string().c_str());
+  if (!csv.is_open())
+  {
+    Logger::user_logger->error(
+      "fail to open boundary-rail benchmark CSV: {}", path.string());
+    return false;
+  }
+
+  csv
+    << "model,edge_detected_loops,edge_ray_valid_loops,edge_built_loops,"
+    << "edge_anchor_requests,edge_rail_vertices,edge_rail_edges,edge_successful,"
+    << "vertex_detected_loops,vertex_ray_valid_loops,vertex_built_loops,"
+    << "vertex_anchor_requests,vertex_rail_vertices,vertex_rail_edges,"
+    << "vertex_successful,winner,phase1_seconds,edge_seconds,vertex_seconds\n";
+  csv << std::setprecision(17)
+    << csv_cell(model_name) << ','
+    << edge.detectedLoopCount << ','
+    << edge.rayValidLoopCount << ','
+    << edge.builtLoopCount << ','
+    << edge.anchorRequestCount << ','
+    << edge.railVertexCount << ','
+    << edge.railEdgeCount << ','
+    << (edge.successful ? 1 : 0) << ','
+    << vertex.detectedLoopCount << ','
+    << vertex.rayValidLoopCount << ','
+    << vertex.builtLoopCount << ','
+    << vertex.anchorRequestCount << ','
+    << vertex.railVertexCount << ','
+    << vertex.railEdgeCount << ','
+    << (vertex.successful ? 1 : 0) << ','
+    << boundary_rail_benchmark_winner(edge, vertex) << ','
+    << phase1_seconds << ','
+    << edge_seconds << ','
+    << vertex_seconds << '\n';
+  return true;
+}
+
+void write_boundary_rail_benchmark_meshes(
+  const bf::path& file_out_dir,
+  const std::string& file_name,
+  Cage::SM::SMeshT& initial_cage,
+  Cage::SM::SMeshT& edge_cage,
+  Cage::SM::SMeshT& vertex_cage)
+{
+  const auto write_cage = [&](Cage::SM::SMeshT& mesh, const std::string& suffix)
+  {
+    bf::path cage_path = file_out_dir;
+    cage_path.append(file_name + suffix + ".obj");
+    if (!OpenMesh::IO::write_mesh(
+        mesh, cage_path.string(), OpenMesh::IO::Options::Default, 15))
+    {
+      Logger::user_logger->warn(
+        "fail to write boundary-rail benchmark cage: {}", cage_path.string());
+    }
+    return cage_path;
+  };
+
+  write_cage(initial_cage, "_initial_cage");
+  const bf::path edge_cage_path = write_cage(edge_cage, "_edge_anchor_cage");
+  const bf::path vertex_cage_path =
+    write_cage(vertex_cage, "_vertex_anchor_cage");
+
+  bf::path edge_rail_obj = file_out_dir;
+  edge_rail_obj.append(file_name + "_edge_rails.obj");
+  bf::path edge_rail_txt = file_out_dir;
+  edge_rail_txt.append(file_name + "_edge_rails.txt");
+  write_boundary_rail_files(
+    edge_cage, edge_rail_obj, edge_rail_txt,
+    edge_cage_path.filename().string());
+
+  bf::path vertex_rail_obj = file_out_dir;
+  vertex_rail_obj.append(file_name + "_vertex_rails.obj");
+  bf::path vertex_rail_txt = file_out_dir;
+  vertex_rail_txt.append(file_name + "_vertex_rails.txt");
+  write_boundary_rail_files(
+    vertex_cage, vertex_rail_obj, vertex_rail_txt,
+    vertex_cage_path.filename().string());
+}
+
+void run_boundary_rail_anchor_benchmark(
+  CageGenerator& cage_generator,
+  const bf::path& file_out_dir,
+  const std::string& file_name)
+{
+  const auto phase1_start = std::chrono::steady_clock::now();
+  cage_generator.stageInitialize();
+  const double phase1_seconds = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - phase1_start).count();
+
+  // Both alternatives start from independent deep copies of exactly the same
+  // source and Phase 1 cage.  This isolates the anchor choice from Phase 1 and
+  // avoids counting initialization twice.
+  Cage::SM::SMeshT initial_cage(*cage_generator.cage);
+  Cage::SM::SMeshT edge_source(*cage_generator.originalMesh);
+  Cage::SM::SMeshT vertex_source(*cage_generator.originalMesh);
+  Cage::SM::SMeshT edge_cage(initial_cage);
+  Cage::SM::SMeshT vertex_cage(initial_cage);
+
+  const auto edge_start = std::chrono::steady_clock::now();
+  Cage::CageInit::BoundaryRailBuilder edge_builder(
+    &edge_source, &edge_cage,
+    Cage::CageInit::BoundaryRailAnchorMode::EdgeMidpoint);
+  const Cage::CageInit::BoundaryRailBuildStats edge =
+    edge_builder.build_with_stats();
+  const double edge_seconds = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - edge_start).count();
+
+  const auto vertex_start = std::chrono::steady_clock::now();
+  Cage::CageInit::BoundaryRailBuilder vertex_builder(
+    &vertex_source, &vertex_cage,
+    Cage::CageInit::BoundaryRailAnchorMode::VertexBisector);
+  const Cage::CageInit::BoundaryRailBuildStats vertex =
+    vertex_builder.build_with_stats();
+  const double vertex_seconds = std::chrono::duration<double>(
+    std::chrono::steady_clock::now() - vertex_start).count();
+
+  const std::string winner = boundary_rail_benchmark_winner(edge, vertex);
+  Logger::user_logger->info(
+    "boundary rail anchor benchmark: edge built {}/{} loops ({} ray-valid); vertex built {}/{} loops ({} ray-valid); winner {}.",
+    edge.builtLoopCount, edge.detectedLoopCount, edge.rayValidLoopCount,
+    vertex.builtLoopCount, vertex.detectedLoopCount,
+    vertex.rayValidLoopCount, winner);
+  Logger::user_logger->info(
+    "boundary rail anchor benchmark elapsed time: Phase 1 {:.6f}s, edge {:.6f}s, vertex {:.6f}s; simplification skipped.",
+    phase1_seconds, edge_seconds, vertex_seconds);
+
+  write_boundary_rail_benchmark_meshes(
+    file_out_dir, file_name, initial_cage, edge_cage, vertex_cage);
+  bf::path csv_path = file_out_dir;
+  csv_path.append("boundary_rail_anchor_benchmark.csv");
+  if (write_boundary_rail_benchmark_csv(
+      csv_path, file_name, edge, vertex,
+      phase1_seconds, edge_seconds, vertex_seconds))
+  {
+    Logger::user_logger->info(
+      "wrote boundary rail anchor benchmark CSV to {}.", csv_path.string());
   }
 }
 
@@ -410,11 +652,13 @@ void generate_cages(
     Logger::user_logger->info("processing {}", file_name);
     Logger::user_logger->info("output directory: {}", file_out_dir.string());
     // read input mesh
-    if (!OpenMesh::IO::read_mesh(*cage_generator.originalMesh, file_path))
+    std::string input_format;
+    if (!read_input_mesh(*cage_generator.originalMesh, in_model_path, input_format))
     {
       Logger::user_logger->warn("fail to read input mesh: {}", file_path);
       throw logic_error("fail to read input mesh");
     }
+    Logger::user_logger->info("input format: {}.", input_format);
     // check input
     if (!mesh_valid(*cage_generator.originalMesh))
     {
@@ -443,6 +687,22 @@ void generate_cages(
     cage_generator.param.setOutputPath(file_out_dir.string() + "/", file_name);
     // set fast simplification target for cages' construction.
     cage_generator.param.setFastTargetNumber(cage_generator.originalMesh->n_vertices() * 3);
+
+    if (cage_generator.param.paramCageSimplifier.boundaryRailAnchorMode ==
+      "compare")
+    {
+      if (target_vn.size() > 1)
+      {
+        Logger::user_logger->warn(
+          "boundary_rail_compare ignores additional nested-cage targets; the benchmark uses one shared Phase 1 cage and skips simplification.");
+      }
+      cage_generator.param.setCageLabel(0);
+      cage_generator.param.setTargetNumber(target_vn.front());
+      run_boundary_rail_anchor_benchmark(
+        cage_generator, file_out_dir, file_name);
+      Logger::dev_logger->flush();
+      return;
+    }
 
     // do cage or nested cages generation
     for (size_t it = 0;it < target_vn.size();it++)
@@ -516,7 +776,7 @@ void apply_qem_energy_weights(
 {
   collapse.qemWeight = 1.0;
   collapse.triangleQualityWeight = include_triangle_quality ? 1.0 : 0.0;
-  collapse.uniformityWeight = 10.0;
+  collapse.uniformityWeight = 1.0;
 }
 
 void enable_newton_solve_phase2_defaults(Cage::ParamCageGenerator& param)
@@ -577,6 +837,19 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   if (token == "boundary_rail")
   {
     param.paramCageSimplifier.enableBoundaryRails = true;
+    param.paramCageSimplifier.boundaryRailAnchorMode = "edge";
+    return true;
+  }
+  if (token == "boundary_rail_vertex")
+  {
+    param.paramCageSimplifier.enableBoundaryRails = true;
+    param.paramCageSimplifier.boundaryRailAnchorMode = "vertex";
+    return true;
+  }
+  if (token == "boundary_rail_compare")
+  {
+    param.paramCageSimplifier.enableBoundaryRails = true;
+    param.paramCageSimplifier.boundaryRailAnchorMode = "compare";
     return true;
   }
 
@@ -624,12 +897,24 @@ bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator&
   {
     if (!param.paramCageSimplifier.enableBoundaryRails)
       return true;
+    const std::string& anchor_mode =
+      param.paramCageSimplifier.boundaryRailAnchorMode;
+    if (anchor_mode != "edge" && anchor_mode != "vertex" &&
+      anchor_mode != "compare")
+    {
+      Logger::user_logger->error(
+        "invalid boundaryRailAnchorMode: {} (expected edge, vertex, or compare).",
+        anchor_mode);
+      return false;
+    }
+    if (anchor_mode == "compare")
+      return true;
     const std::string& mode = param.paramCageSimplifier.phase2Mode;
     if (mode == "linear_solve" || mode == "newton_solve" ||
       mode == "qem_original")
       return true;
     Logger::user_logger->error(
-      "boundary_rail must be combined with phase2_linear_solve, phase2_linear_solve_collision_reject, phase2_newton_solve, or phase2_qem_original.");
+      "boundary_rail and boundary_rail_vertex must be combined with phase2_linear_solve, phase2_linear_solve_collision_reject, phase2_newton_solve, or phase2_qem_original; boundary_rail_compare is Phase-1-only.");
     return false;
   };
 
@@ -676,9 +961,12 @@ int main(int argc, char* argv[])
     printf("input \"phase2_newton_solve\" to use Newton placement for every Phase 2 collapse candidate\n");
     printf("input \"phase2_qem_original\" to run original Garland-Heckbert QEM without collision rejection\n");
     printf("input \"boundary_rail\" with a Phase 2 energy preset to build and preserve closed boundary rails\n");
+    printf("input \"boundary_rail_vertex\" with a Phase 2 energy preset to use vertex-bisector anchor rays\n");
+    printf("input \"boundary_rail_compare\" to compare edge and vertex anchor rays on one shared Phase 1 cage and skip simplification\n");
     printf("combine presets with '+' or ',', for example \"phase2_linear_solve+boundary_rail\".\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
+    printf("ASCII and binary STL input files are supported.\n");
     printf("arg[2]: output dir path.\n");
     printf("(optional)arg[2]: vertices number of nested cage 0.\n");
     printf("(optional)arg[3]: vertices number of nested cage 1.\n");

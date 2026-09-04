@@ -4,6 +4,7 @@
 #include <array>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <numeric>
@@ -296,7 +297,10 @@ struct AnchorRequest
   size_t loop_index = 0;
   size_t order_index = 0;
   Vec3d point;
-  Vec3d outer_direction;
+  // This is always the co-normal of the corresponding source edge.  In the
+  // vertex benchmark the ray itself follows the bisector of two co-normals,
+  // so keeping the support direction separate is essential for Phase 2.
+  Vec3d support_outer_direction;
   FaceHandle source_face;
   enum class Location { Vertex, Edge, Face } location = Location::Face;
   VertexHandle vertex;
@@ -313,6 +317,90 @@ struct BoundaryLoop
   std::vector<size_t> request_indices;
   std::vector<VertexHandle> anchors;
 };
+
+constexpr uint64_t kInvalidWeldedEdge = std::numeric_limits<uint64_t>::max();
+
+// Folds the source vertices that share one position into a single index.  A
+// half-edge mesh cannot store a non-manifold vertex, so OpenMesh's importer
+// duplicates the vertices of every face it fails to attach; welding by
+// position undoes that split and recovers the connectivity of the input file.
+std::vector<int> weld_vertices_by_position(SMeshT& mesh)
+{
+  std::vector<int> welded(mesh.n_vertices(), -1);
+  std::vector<int> order;
+  order.reserve(mesh.n_vertices());
+  for (VertexHandle vh : mesh.vertices())
+    order.push_back(vh.idx());
+
+  // Exact comparison is what is wanted here: the importer copies the position
+  // of the vertex it duplicates verbatim, so the two carry identical bits.
+  const auto position_less = [&mesh](int a, int b)
+  {
+    const Vec3d& pa = mesh.point(mesh.vertex_handle(a));
+    const Vec3d& pb = mesh.point(mesh.vertex_handle(b));
+    if (pa.x() != pb.x())
+      return pa.x() < pb.x();
+    if (pa.y() != pb.y())
+      return pa.y() < pb.y();
+    return pa.z() < pb.z();
+  };
+  std::sort(order.begin(), order.end(), position_less);
+
+  int next_id = 0;
+  for (size_t i = 0; i < order.size(); i++)
+  {
+    if (i > 0 && !position_less(order[i - 1], order[i]))
+      welded[order[i]] = welded[order[i - 1]];
+    else
+      welded[order[i]] = next_id++;
+  }
+  return welded;
+}
+
+uint64_t welded_edge_key(
+  const std::vector<int>& welded, VertexHandle a, VertexHandle b)
+{
+  if (!a.is_valid() || !b.is_valid())
+    return kInvalidWeldedEdge;
+  const int ia = welded[a.idx()];
+  const int ib = welded[b.idx()];
+  if (ia < 0 || ib < 0 || ia == ib)
+    return kInvalidWeldedEdge;
+  const uint64_t lo = static_cast<uint64_t>(std::min(ia, ib));
+  const uint64_t hi = static_cast<uint64_t>(std::max(ia, ib));
+  return (lo << 32) | hi;
+}
+
+// How many faces use each welded edge.  One face means the input surface is
+// genuinely open along that edge; two or more mean it is closed there and the
+// half-edge boundary is only the seam left by a duplicated vertex.
+std::unordered_map<uint64_t, int> count_welded_edge_faces(
+  SMeshT& mesh, const std::vector<int>& welded)
+{
+  std::unordered_map<uint64_t, int> counts;
+  counts.reserve(mesh.n_edges() * 2);
+  for (FaceHandle fh : mesh.faces())
+  {
+    VertexHandle vertices[3];
+    size_t i = 0;
+    for (VertexHandle vh : mesh.fv_range(fh))
+    {
+      if (i >= 3)
+        break;
+      vertices[i++] = vh;
+    }
+    if (i != 3)
+      continue;
+    for (size_t k = 0; k < 3; k++)
+    {
+      const uint64_t key =
+        welded_edge_key(welded, vertices[k], vertices[(k + 1) % 3]);
+      if (key != kInvalidWeldedEdge)
+        counts[key]++;
+    }
+  }
+  return counts;
+}
 
 bool get_boundary_edge_outer_direction(
   SMeshT& source, HalfedgeHandle boundary_halfedge,
@@ -711,8 +799,14 @@ bool construct_rail(
 
 bool BoundaryRailBuilder::build()
 {
+  return build_with_stats().successful;
+}
+
+BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
+{
+  BoundaryRailBuildStats stats;
   if (!source || !cage || source->n_vertices() == 0 || cage->n_faces() == 0)
-    return false;
+    return stats;
 
   // The source-edge labels and directions are consumed by EdgeCollapser in
   // Phase 2.  Reset them in case a mesh instance is reused for another build.
@@ -734,7 +828,32 @@ bool BoundaryRailBuilder::build()
   const double intersection_epsilon = cage_scale * 1e-10;
   const double anchor_merge_epsilon = cage_scale * 1e-9;
 
+  // A half-edge mesh cannot represent a non-manifold vertex, so OpenMesh's
+  // importer duplicates the vertices of every face it cannot attach.  That
+  // tears a closed source surface open around the singular vertex, and to
+  // is_boundary() the tear is indistinguishable from a real hole: a watertight
+  // input with one bow-tie vertex would otherwise grow rails around nothing.
+  // Welding the source vertices back together by position separates the two.
+  // A half-edge borders a hole only when its welded edge carries one face;
+  // when it carries two or more the surface is closed there and the boundary
+  // is a seam, not a source boundary loop.
+  const std::vector<int> welded_vertices = weld_vertices_by_position(*source);
+  const std::unordered_map<uint64_t, int> welded_edge_faces =
+    count_welded_edge_faces(*source, welded_vertices);
+  const auto borders_hole = [&](HalfedgeHandle halfedge)
+  {
+    const uint64_t key = welded_edge_key(
+      welded_vertices,
+      source->from_vertex_handle(halfedge),
+      source->to_vertex_handle(halfedge));
+    if (key == kInvalidWeldedEdge)
+      return false;
+    const auto found = welded_edge_faces.find(key);
+    return found != welded_edge_faces.end() && found->second == 1;
+  };
+
   std::vector<BoundaryLoop> loops;
+  size_t seam_loops = 0;
   std::vector<bool> visited(source->n_halfedges(), false);
   for (HalfedgeHandle start : source->halfedges())
   {
@@ -760,15 +879,35 @@ bool BoundaryRailBuilder::build()
         break;
       }
     } while (current != start);
-    if (valid && current == start && loop.halfedges.size() >= 3)
-      loops.push_back(std::move(loop));
+    if (!valid || current != start || loop.halfedges.size() < 3)
+      continue;
+
+    // Every edge of the loop has to bound a hole.  A loop that mixes the two
+    // runs along a seam for part of its length and does not describe a source
+    // boundary that a rail could follow.
+    if (!std::all_of(
+        loop.halfedges.begin(), loop.halfedges.end(), borders_hole))
+    {
+      seam_loops++;
+      continue;
+    }
+    loops.push_back(std::move(loop));
+  }
+  stats.detectedLoopCount = loops.size();
+
+  if (seam_loops > 0)
+  {
+    Logger::user_logger->info(
+      "boundary rail construction ignored {} boundary loops that are seams of a non-manifold vertex rather than holes in the source surface.",
+      seam_loops);
   }
 
   if (loops.empty())
   {
     Logger::user_logger->info(
       "boundary rail construction: source mesh has no closed boundary loop.");
-    return true;
+    stats.successful = true;
+    return stats;
   }
 
   RayTriangleBvh ray_tree(*cage);
@@ -784,26 +923,58 @@ bool BoundaryRailBuilder::build()
     for (size_t i = 0; i < candidate.halfedges.size(); i++)
     {
       const HalfedgeHandle boundary_halfedge = candidate.halfedges[i];
-      Vec3d direction;
+      Vec3d support_outer_direction;
       if (!get_boundary_edge_outer_direction(
-          *source, boundary_halfedge, length_epsilon, direction))
+          *source, boundary_halfedge, length_epsilon,
+          support_outer_direction))
       {
         valid = false;
         break;
       }
 
-      // One anchor corresponds to one source boundary edge.  Cast the ray
-      // from the edge midpoint along that edge's outward co-normal; no
-      // vertex-level averaging of adjacent edge directions is used.
       const VertexHandle source_from =
         source->from_vertex_handle(boundary_halfedge);
       const VertexHandle source_to =
         source->to_vertex_handle(boundary_halfedge);
-      const Vec3d origin =
-        (source->point(source_from) + source->point(source_to)) * 0.5;
+      Vec3d origin;
+      Vec3d ray_direction;
+      if (mode == BoundaryRailAnchorMode::EdgeMidpoint)
+      {
+        // One anchor corresponds to one source boundary edge.
+        origin =
+          (source->point(source_from) + source->point(source_to)) * 0.5;
+        ray_direction = support_outer_direction;
+      }
+      else
+      {
+        // Reproduce the vertex-origin alternative from commit 759563c: one
+        // anchor starts at the current boundary vertex and follows the
+        // normalized sum of the incoming and outgoing edge co-normals.
+        const HalfedgeHandle incoming = candidate.halfedges[
+          (i + candidate.halfedges.size() - 1) % candidate.halfedges.size()];
+        Vec3d incoming_outer_direction;
+        if (!get_boundary_edge_outer_direction(
+            *source, incoming, length_epsilon,
+            incoming_outer_direction))
+        {
+          valid = false;
+          break;
+        }
+        ray_direction =
+          incoming_outer_direction + support_outer_direction;
+        if (ray_direction.length() <= length_epsilon)
+        {
+          valid = false;
+          break;
+        }
+        ray_direction.normalize();
+        origin = source->point(source_from);
+      }
+
       RayHit hit;
       if (!ray_tree.first_intersection(
-          origin, direction, intersection_epsilon, hit) || !finite_vec(hit.point))
+          origin, ray_direction, intersection_epsilon, hit) ||
+        !finite_vec(hit.point))
       {
         valid = false;
         break;
@@ -814,7 +985,7 @@ bool BoundaryRailBuilder::build()
       request.loop_index = valid_loops.size();
       request.order_index = i;
       request.point = hit.point;
-      request.outer_direction = direction;
+      request.support_outer_direction = support_outer_direction;
       request.source_face = triangle.face;
       const double bary_epsilon = 1e-8;
       std::vector<size_t> near_zero;
@@ -862,8 +1033,10 @@ bool BoundaryRailBuilder::build()
     if (!valid)
     {
       Logger::user_logger->warn(
-        "boundary rail construction skipped source boundary component {} because an edge-anchor ray was undefined or missed the cage.",
-        loop_index);
+        "boundary rail construction skipped source boundary component {} because a {} anchor ray was undefined or missed the cage.",
+        loop_index,
+        mode == BoundaryRailAnchorMode::EdgeMidpoint ?
+          "edge-midpoint" : "vertex-bisector");
       continue;
     }
     candidate.request_indices.clear();
@@ -875,8 +1048,11 @@ bool BoundaryRailBuilder::build()
     valid_loops.push_back(std::move(candidate));
   }
 
+  stats.rayValidLoopCount = valid_loops.size();
+  stats.anchorRequestCount = requests.size();
+
   if (valid_loops.empty())
-    return false;
+    return stats;
 
   OpenMesh::FPropHandleT<int> source_face_property;
   cage->add_property(source_face_property, "boundary_rail_source_face");
@@ -1051,7 +1227,7 @@ bool BoundaryRailBuilder::build()
   {
     Logger::user_logger->error(
       "boundary rail construction could not insert every anchor into the cage surface.");
-    return false;
+    return stats;
   }
 
   std::unordered_set<int> all_anchor_vertices;
@@ -1061,7 +1237,7 @@ bool BoundaryRailBuilder::build()
     {
       const VertexHandle anchor = requests[request_index].inserted_vertex;
       if (!anchor.is_valid())
-        return false;
+        return stats;
       loop.anchors.push_back(anchor);
       all_anchor_vertices.insert(anchor.idx());
     }
@@ -1088,7 +1264,7 @@ bool BoundaryRailBuilder::build()
         const EdgeHandle source_edge = source->edge_handle(source_halfedge);
         source->data(source_edge).boundary_rail_id = rail_id;
         source->data(source_edge).boundary_rail_outer_direction =
-          request.outer_direction;
+          request.support_outer_direction;
       }
       built_rails++;
     }
@@ -1106,6 +1282,9 @@ bool BoundaryRailBuilder::build()
     rail_vertices += cage->data(vh).boundary_rail_id != kNoRail;
   for (EdgeHandle eh : cage->edges())
     rail_edges += cage->data(eh).boundary_rail_id != kNoRail;
+  stats.builtLoopCount = built_rails;
+  stats.railVertexCount = rail_vertices;
+  stats.railEdgeCount = rail_edges;
   double min_quality = DBL_MAX;
   for (FaceHandle fh : cage->faces())
   {
@@ -1124,10 +1303,16 @@ bool BoundaryRailBuilder::build()
     min_quality = std::min(min_quality, quality);
   }
   Logger::user_logger->info(
-    "boundary rail construction built {} closed rails with {} anchors, {} rail vertices, and {} rail edges; cage min triangle quality {}.",
-    built_rails, requests.size(), rail_vertices, rail_edges,
+    "boundary rail construction ({}) built {} closed rails from {} detected loops ({} ray-valid), with {} anchor requests, {} rail vertices, and {} rail edges; cage min triangle quality {}.",
+    mode == BoundaryRailAnchorMode::EdgeMidpoint ?
+      "edge-midpoint" : "vertex-bisector",
+    built_rails, stats.detectedLoopCount, stats.rayValidLoopCount,
+    requests.size(), rail_vertices, rail_edges,
     min_quality == DBL_MAX ? 0.0 : min_quality);
-  return built_rails == valid_loops.size();
+  // Match the pre-benchmark return semantics: ray-invalid source loops are
+  // reported but do not make a partially successful build fail.
+  stats.successful = built_rails == valid_loops.size();
+  return stats;
 }
 
 }// namespace CageInit

@@ -18,7 +18,11 @@ void CageGenerator::stageInitialize()
 
 void CageGenerator::stageBuildBoundaryRails()
 {
-  BoundaryRailBuilder rail_builder(originalMesh.get(), cage.get());
+  const BoundaryRailAnchorMode anchor_mode =
+    param.paramCageSimplifier.boundaryRailAnchorMode == "vertex" ?
+      BoundaryRailAnchorMode::VertexBisector :
+      BoundaryRailAnchorMode::EdgeMidpoint;
+  BoundaryRailBuilder rail_builder(originalMesh.get(), cage.get(), anchor_mode);
   if (!rail_builder.build())
   {
     Logger::user_logger->warn(

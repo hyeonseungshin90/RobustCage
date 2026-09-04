@@ -32,6 +32,12 @@ constexpr bool kSquareGlobalQueueUniformityScore = true;
 // placement and queue scoring.
 constexpr bool kEnableTriangleQualityInPhase2LinearSolve = true;
 
+// Include uniformity in the linear-solve placement objective as the exactly
+// linear pairwise-difference form (see
+// build_phase2_uniformity_difference_quadric). The queue formula keeps its own
+// edge-length ratio and is unchanged.
+constexpr bool kEnableUniformityInPhase2LinearSolve = true;
+
 double sqr(double v)
 {
   return v * v;
@@ -710,6 +716,90 @@ double CollapseStage::evaluate_phase2_triangle_quality_surrogate(
   return std::max(energy, 0.0);
 }
 
+// Uniformity as an exactly linear system, so it can join the QEM and triangle
+// terms in the same single linear solve.
+//
+// The target is |x - n_i| = L_i for every one-ring neighbor n_i. Squaring it
+// gives |x|^2 - 2 n_i.x + (|n_i|^2 - L_i^2) = 0, whose only nonlinear term,
+// |x|^2, is identical in every neighbor equation. Subtracting the mean
+// equation therefore cancels it exactly and leaves
+//
+//   2 (n_mean - n_i).x = c_mean - c_i,    c_i = |n_i|^2 - L_i^2
+//
+// which is not a linearization but an algebraically equivalent restatement.
+// Differencing against the mean, rather than against one arbitrary reference
+// neighbor, keeps the rows balanced.
+//
+// The rows span {n_i - n_mean}, essentially the tangent plane of the one-ring,
+// so this term positions x tangentially and leaves the normal direction to QEM
+// instead of competing with it. In "global" mode every L_i is the same
+// constant, the target-length term cancels as well, and the rows reduce to
+// "x is equidistant from all its neighbors".
+//
+// Each row is normalized to a unit direction so its residual is a signed
+// distance, then scaled by 1/local_scale^2 like the other terms. As with the
+// triangle surrogate, the caller applies uniformityWeight.
+Eigen::Matrix4d CollapseStage::build_phase2_uniformity_difference_quadric(
+  const Phase2PlacementContext& ctx) const
+{
+  Phase2HomogeneousQuadric uniformity;
+  const size_t neighbor_count = ctx.neighbor_points.size();
+  if (neighbor_count < 2)
+    return uniformity.Q;
+
+  std::vector<double> offsets;
+  offsets.reserve(neighbor_count);
+  Vec3d mean_neighbor(0.0, 0.0, 0.0);
+  double mean_offset = 0.0;
+  for (const Vec3d& neighbor : ctx.neighbor_points)
+  {
+    const double target_length =
+      source_uniformity_target_length(ctx, (ctx.midpoint + neighbor) * 0.5);
+    const double offset = neighbor.sqrnorm() - sqr(target_length);
+    offsets.push_back(offset);
+    mean_neighbor += neighbor;
+    mean_offset += offset;
+  }
+  mean_neighbor /= static_cast<double>(neighbor_count);
+  mean_offset /= static_cast<double>(neighbor_count);
+
+  const double inv_scale_sqr = 1.0 / std::max(sqr(ctx.local_scale), 1e-24);
+  const double direction_epsilon = ctx.local_scale * 1e-8;
+  const double w = inv_scale_sqr / static_cast<double>(neighbor_count);
+  for (size_t i = 0; i < neighbor_count; i++)
+  {
+    Vec3d direction = (mean_neighbor - ctx.neighbor_points[i]) * 2.0;
+    double rhs = mean_offset - offsets[i];
+    const double direction_length = direction.length();
+    // A neighbor sitting on the one-ring centroid carries no direction.
+    if (!(direction_length > direction_epsilon) ||
+      !std::isfinite(direction_length) || !std::isfinite(rhs))
+      continue;
+    direction /= direction_length;
+    rhs /= direction_length;
+
+    uniformity.add_linear_residual(w, direction, rhs);
+  }
+
+  return uniformity.Q;
+}
+
+double CollapseStage::evaluate_phase2_uniformity_difference(
+  const Phase2PlacementContext& ctx, const Vec3d& x) const
+{
+  if (!finite_vec(x))
+    return DBL_MAX;
+
+  Eigen::Vector4d h;
+  h << to_eigen(x), 1.0;
+  const Eigen::Matrix4d uniformity =
+    build_phase2_uniformity_difference_quadric(ctx);
+  const double energy = h.dot(uniformity * h);
+  if (!std::isfinite(energy))
+    return DBL_MAX;
+  return std::max(energy, 0.0);
+}
+
 double CollapseStage::calc_triangle_quality(SMeshT* mesh, FaceHandle fh) const
 {
   Vec3d pts[3];
@@ -818,7 +908,15 @@ double CollapseStage::evaluate_newton_energy(const Phase2PlacementContext& ctx, 
   {
     energy += param->triangleQualityWeight * evaluate_triangle_quality_energy(ctx, x) / fan_count;
   }
-  if (kEnableUniformityInPhase2Solve)
+  if (kEnableUniformityInPhase2LinearSolve &&
+    is_phase2_linear_solve_strategy())
+  {
+    // The same quadratic the linear solve minimizes, so Armijo backtracking
+    // does not reject the solved point for optimizing a different objective.
+    energy += param->uniformityWeight *
+      evaluate_phase2_uniformity_difference(ctx, x);
+  }
+  else if (kEnableUniformityInPhase2Solve)
     energy += param->uniformityWeight * evaluate_uniformity_energy(ctx, x) / neighbor_count;
   return std::isfinite(energy) ? energy : DBL_MAX;
 }
@@ -1625,7 +1723,13 @@ bool CollapseStage::solve_phase2_quadric_placement(
       build_phase2_triangle_quality_surrogate_quadric(ctx);
   }
 
-  if (kEnableUniformityInPhase2Solve && !pure_qem &&
+  if (kEnableUniformityInPhase2LinearSolve && is_phase2_linear_solve_strategy() &&
+    param->uniformityWeight > 0.0 && param->uniformityMode != "none")
+  {
+    quadric.Q += param->uniformityWeight *
+      build_phase2_uniformity_difference_quadric(ctx);
+  }
+  else if (kEnableUniformityInPhase2Solve && !pure_qem &&
     param->uniformityWeight > 0.0 && param->uniformityMode != "none" &&
     !ctx.neighbor_points.empty())
   {
@@ -1933,11 +2037,14 @@ void CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
     param->curvatureMode,
     param->uniformityMode, param->uniformityWeight,
     param->robustnessMode);
-  if (!kEnableUniformityInPhase2Solve &&
-    param->uniformityWeight > 0.0 && param->uniformityMode != "none")
+  if (param->uniformityWeight > 0.0 && param->uniformityMode != "none")
   {
-    Logger::user_logger->info(
-      "phase 2 uniformity: queue-only experiment enabled; placement objectives exclude uniformity.");
+    if (kEnableUniformityInPhase2LinearSolve && is_phase2_linear_solve_strategy())
+      Logger::user_logger->info(
+        "phase 2 uniformity: linear-difference form solved together with QEM and the triangle surrogate; the queue keeps its edge-length ratio.");
+    else if (!kEnableUniformityInPhase2Solve)
+      Logger::user_logger->info(
+        "phase 2 uniformity: queue-only experiment enabled; placement objectives exclude uniformity.");
   }
   if (!kEnableTriangleQualityInPhase2LinearSolve &&
     is_phase2_linear_solve_strategy() && param->triangleQualityWeight > 0.0)

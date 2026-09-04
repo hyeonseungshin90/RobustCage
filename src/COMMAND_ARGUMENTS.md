@@ -34,6 +34,7 @@ phase2_newton_solve
 phase2_qem_original
 phase1_topological_offset+phase2_linear_solve
 phase2_linear_solve+boundary_rail
+phase1_topological_offset+boundary_rail_compare
 config.json
 ```
 
@@ -44,6 +45,8 @@ config.json
 | `default` | 전체 | 기존 Phase 1 절차를 그대로 사용합니다. 모든 tetrahedron을 1→12 subdivision하고 non-adjacent tetrahedron을 제거하는 과정을 2회 수행합니다. |
 | `phase1_topological_offset` | phase1 | Zint et al.의 simplicial embedding과 offset insertion을 수행한 뒤 기존 `retrieveCage()`로 boundary를 추출합니다. `topological_offset`도 같은 별칭으로 사용할 수 있습니다. |
 | `boundary_rail` | phase1.5/phase2 | Build source-boundary anchors and closed cage edge loops, then constrain rail collapses to the ruled half-strips defined by source boundary tangents and outward co-normals. Must be combined with one of the four energy Phase 2 presets. |
+| `boundary_rail_vertex` | phase1.5/phase2 | `boundary_rail`과 동일하지만 ray를 boundary vertex에서 인접한 두 edge co-normal의 bisector 방향으로 쏩니다. 비교 실험용이며 source-edge support에는 평균 전의 edge co-normal을 저장합니다. Energy Phase 2 preset과 조합해야 합니다. |
+| `boundary_rail_compare` | phase1/benchmark | Phase 1을 한 번만 실행한 뒤 동일 initial cage와 source의 독립 복사본에서 edge-midpoint 방식과 vertex-bisector 방식을 각각 실행합니다. simplification은 생략하고 run-local CSV와 두 결과 cage/rail을 기록합니다. |
 | `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; solve the QEM/quality linear system, accept valid points directly, and otherwise use Armijo backtracking from tangential smoothing |
 | `phase2_linear_solve_collision_reject` | phase2 | Same defaults as `phase2_linear_solve` plus `phase2LinearSolveCollisionReject = true`; reject an invalid raw linear-solve point instead of backtracking |
 | `phase2_newton_solve` | phase2 | `phase2Mode = "newton_solve"`; use Newton placement for every popped collapse candidate |
@@ -134,6 +137,16 @@ nested cage 생성:
 ```powershell
 .\exeCageGenerator.exe phase2_linear_solve+boundary_rail C:\models\bunny.obj C:\out 500
 ```
+
+동일한 Phase 1 cage에서 두 anchor 방법 비교(`target_Nv`는 CLI 형식상 필요하지만 사용하지 않음):
+
+```powershell
+.\exeCageGenerator.exe phase1_topological_offset+boundary_rail_compare C:\models\open.obj C:\out 0
+```
+
+이 모드는 `<run>/boundary_rail_anchor_benchmark.csv`에 detected, ray-valid,
+built loop 수와 model별 winner를 쓰고, `<model>_initial_cage.obj`,
+`<model>_edge_anchor_cage.obj`, `<model>_vertex_anchor_cage.obj` 및 두 rail 파일을 저장합니다.
 
 JSON 설정 파일 사용:
 

@@ -270,6 +270,11 @@ struct ParamCageSimplifier
   // Build and preserve source-boundary rails on the initial cage.  This is
   // deliberately opt-in so the original/default pipeline is unchanged.
   bool enableBoundaryRails = false;
+  // Anchor-ray origin/direction for boundary rails: "edge" is the production
+  // edge-midpoint co-normal method, "vertex" is the adjacent-edge co-normal
+  // bisector alternative, and "compare" runs both on copies of one Phase 1
+  // cage without entering simplification.
+  std::string boundaryRailAnchorMode = "edge";
   // iterations
   size_t maxIter;
   // distance error control
@@ -295,6 +300,7 @@ struct ParamCageSimplifier
     jo["maxIter"] = maxIter;
     jo["phase2Mode"] = phase2Mode;
     jo["enableBoundaryRails"] = enableBoundaryRails;
+    jo["boundaryRailAnchorMode"] = boundaryRailAnchorMode;
     jo["relaxErrorIterStep"] = relaxErrorIterStep;
     jo["maxErrorRelaxIter"] = maxErrorRelaxIter;
     jo["initError"] = initError;
@@ -312,6 +318,12 @@ struct ParamCageSimplifier
     auto boundary_rails_it = jo.find("enableBoundaryRails");
     enableBoundaryRails = boundary_rails_it != jo.end() ?
       boundary_rails_it->value().as_bool() : false;
+    auto boundary_rail_anchor_mode_it = jo.find("boundaryRailAnchorMode");
+    boundaryRailAnchorMode = boundary_rail_anchor_mode_it != jo.end() ?
+      std::string(boundary_rail_anchor_mode_it->value().as_string().c_str()) :
+      "edge";
+    if (boundaryRailAnchorMode == "compare")
+      enableBoundaryRails = true;
     relaxErrorIterStep = jo.at("relaxErrorIterStep").as_int64();
     maxErrorRelaxIter = jo.at("maxErrorRelaxIter").as_int64();
     initError = jo.at("initError").as_double();
@@ -343,6 +355,7 @@ struct ParamCageGenerator
     auto& simplifier = paramCageSimplifier;
     simplifier.phase2Mode = "fast";
     simplifier.enableBoundaryRails = false;
+    simplifier.boundaryRailAnchorMode = "edge";
     simplifier.maxIter = 30;
     simplifier.relaxErrorIterStep = 5;
     simplifier.maxErrorRelaxIter = 4;
