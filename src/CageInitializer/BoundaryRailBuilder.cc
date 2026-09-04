@@ -712,6 +712,15 @@ bool construct_rail(
     unique_anchors.insert(anchor.idx());
   if (anchors.size() < 3 || unique_anchors.size() != anchors.size())
     return false;
+  // A ray hit may reuse a cage vertex that an earlier boundary component has
+  // already claimed.  Endpoints are intentionally exempt from Dijkstra's
+  // intermediate-vertex blocking, so reject that loop here instead of letting
+  // the later rail overwrite the earlier rail id on a shared anchor.
+  for (VertexHandle anchor : anchors)
+  {
+    if (mesh.data(anchor).boundary_rail_id != kNoRail)
+      return false;
+  }
 
   std::unordered_set<int> used_vertices;
   std::unordered_set<int> used_edges;
@@ -962,7 +971,9 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
         }
         ray_direction =
           incoming_outer_direction + support_outer_direction;
-        if (ray_direction.length() <= length_epsilon)
+        // Both co-normals are unit vectors, so cancellation is an angular
+        // condition and must not depend on the source mesh's physical scale.
+        if (ray_direction.length() <= 1e-12)
         {
           valid = false;
           break;
