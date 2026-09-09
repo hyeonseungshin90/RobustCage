@@ -41,13 +41,18 @@ public:
   // Replaces legacy Phase 2 by repeatedly collapsing edges until the target
   // vertex count is reached. Each collapse chooses its new vertex position
   // before the topology change is committed.
-  void do_phase2_energy_simplification(size_t target_vertices_num);
+  // Repeated calls rebuild candidates after flip/relocation while retaining
+  // the global target edge length for the same requested vertex count.
+  // Returns the number of accepted collapses in this call.
+  size_t do_phase2_energy_simplification(size_t target_vertices_num);
   void update(size_t _candidate_points_size, bool _allow_negtive, double _max_distance_error);
 private:
   double avg_edge_length;
   double avg_source_edge_length;
   bool avg_source_edge_length_initialized;
   double phase2_target_edge_length;
+  bool phase2_target_edge_length_initialized;
+  size_t phase2_target_vertices_num;
   std::vector<size_t> update_states;
 
   struct CollapseEdgeReward

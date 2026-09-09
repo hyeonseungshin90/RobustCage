@@ -106,3 +106,19 @@ target_link_libraries(exe${PROJECT_NAME} PUBLIC
     lib${PROJECT_NAME}
     ${Boost_LIBRARIES}
 )
+
+option(CAGE_BUILD_TESTS "Build cage quality regression tests" OFF)
+if(CAGE_BUILD_TESTS)
+    enable_testing()
+    add_executable(cageQualityPolishTests tests/QualityPolishTests.cpp)
+    target_link_libraries(cageQualityPolishTests PRIVATE lib${PROJECT_NAME} ${Boost_LIBRARIES})
+    if(WIN32)
+        add_custom_command(TARGET cageQualityPolishTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/ThirdPartyLib/gmp/lib/libgmp-10.dll"
+                "${CMAKE_CURRENT_SOURCE_DIR}/ThirdPartyLib/mpfr/lib/libmpfr-4.dll"
+                "$<TARGET_FILE_DIR:cageQualityPolishTests>")
+    endif()
+    add_test(NAME quality_polish COMMAND cageQualityPolishTests)
+    set_tests_properties(quality_polish PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1")
+endif()

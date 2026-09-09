@@ -47,12 +47,54 @@ config.json
 | `boundary_rail` | phase1.5/phase2 | Build source-boundary anchors and closed cage edge loops, then constrain rail collapses to the ruled half-strips defined by source boundary tangents and outward co-normals. Must be combined with one of the four energy Phase 2 presets. |
 | `boundary_rail_vertex` | phase1.5/phase2 | `boundary_rail`과 동일하지만 ray를 boundary vertex에서 인접한 두 edge co-normal의 bisector 방향으로 쏩니다. 비교 실험용이며 source-edge support에는 평균 전의 edge co-normal을 저장합니다. Energy Phase 2 preset과 조합해야 합니다. |
 | `boundary_rail_compare` | phase1/benchmark | Phase 1을 한 번만 실행한 뒤 동일 initial cage와 source의 독립 복사본에서 edge-midpoint 방식과 vertex-bisector 방식을 각각 실행합니다. simplification은 생략하고 run-local CSV와 두 결과 cage/rail을 기록합니다. |
-| `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; solve the QEM/quality linear system, accept valid points directly, and otherwise use Armijo backtracking from tangential smoothing |
+| `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; repeat linear-solve collapses with Armijo backtracking and quality-priority flips, then run final relocation sweeps combining Voronoi tangential smoothing with source-surface attraction |
 | `phase2_linear_solve_collision_reject` | phase2 | Same defaults as `phase2_linear_solve` plus `phase2LinearSolveCollisionReject = true`; reject an invalid raw linear-solve point instead of backtracking |
 | `phase2_newton_solve` | phase2 | `phase2Mode = "newton_solve"`; use Newton placement for every popped collapse candidate |
 | `phase2_qem_original` | phase2 | `phase2Mode = "qem_original"`; pure Garland-Heckbert QEM edge-collapse cost/placement with non-QEM energies and collision rejection disabled |
 
 `phase1_topological_offset`을 명시한 경우에만 새 Phase 1을 사용합니다. `default`와 기존 `phase2_*` 토큰만 사용한 명령은 이전과 동일하게 subdivision 기반 Phase 1을 수행합니다.
+
+`linear_solve`에서는 `collapse → flip`을 기본 최대 30회 반복한 뒤,
+마지막에 relocation 단계를 한 번 실행합니다.
+Flip 이후 collapse 후보 큐를 다시 만들어 새롭게 가능한 collapse를
+재시도하며, global target edge length는 최초 값으로 유지합니다. 목표 정점 수에
+도달하면 collapse를 생략하고 flip은 계속할 수 있습니다. Collapse와 flip 모두
+수락된 후보가 없으면 반복을 조기 종료합니다. 반복 종료 후 relocation을 수행하며,
+그 뒤에는 collapse나 flip을 다시 실행하지 않습니다. Flip은 두 삼각형의 최소
+quality 증가량이 큰 순서로 수행하고, 교차가 생기는 후보는 reject합니다.
+Collapse 위치의 linear solve와 line-search energy는 QEM과 triangle-quality
+surrogate를 사용하며 uniformity는 제외합니다. Uniformity는 collapse 우선순위에만
+적용하며, `global` 모드에서는 `uniformityWeight * (edge_length / target_length)^2`를
+큐 점수에 더합니다.
+Relocation은 이웃 정점의 mixed Voronoi 면적을 가중치로 사용하는
+Botsch–Kobbelt tangential smoothing point `t`와 현재 정점에서 원본 표면의
+최근접점 `s`를 결합합니다. 두 목표점은 해당 정점의 line search 동안 고정하며,
+`E(x) = tangentialWeight * ||x-t||² + surfaceWeight * ||x-s||²`를 사용합니다.
+현재 위치에서 두 목표점의 가중 평균 방향으로
+`alpha = 1, 1/2, 1/4, ...` backtracking하고, 이 에너지가 엄격히 감소하며
+비퇴화·비반전 및 교차 검사를 모두 통과해야 수락합니다. 주변 삼각형의 최소
+quality는 작은 수치 오차 허용 범위 내에서
+`new_min_quality >= min(old_min_quality, minTriangleQuality)`를 만족해야 합니다.
+Quality 범위는 `[0, 1]`이고 기본 하한은 `0.2`입니다. 기존 quality가 하한보다
+높으면 하한까지 낮아질 수 있지만, 이미 하한보다 낮으면 더 나빠질 수 없습니다.
+마지막 relocation 단계는 전체 최대 20 sweep을 수행하며, 매 sweep에서 현재 위치를 기준으로
+Voronoi 면적·normal·원본 최근접점을 재계산합니다. 한 sweep에서 이동이 없으면 조기
+종료합니다. 정점별 line search는 각 sweep에서 최대 12회 시도합니다.
+Rail edge의 flip은 금지되며, rail 정점과 실제 mesh boundary 정점은 relocation
+중 고정됩니다. Flip과 relocation은 정점 수를 유지합니다.
+이 에너지는 전체 Hausdorff distance를 최소화하거나 그 개선을 보장하지 않습니다.
+교차 검사는 후보 위치 기준이며, 이동 경로 전체의 CCD나 양의 표면 간격을
+보장하는 검사는 아닙니다.
+이 품질 개선 단계는 기존 `paramFlip.priorityMode`, `requireRegularValence`,
+`paramRelocate.priorityMode`, `smoothIter` 대신 위의 energy·quality 기준과
+`phase2QualityPolishIterations`, `paramRelocate.qualitySweeps`,
+`paramRelocate.lineSearchMaxIter`, `paramRelocate.tangentialWeight`,
+`paramRelocate.surfaceWeight`, `paramRelocate.minTriangleQuality`를 사용합니다.
+두 가중치는 유한한 비음수여야 합니다. `surfaceWeight = 0`이면 tangential target만,
+`tangentialWeight = 0`이면 원본 최근접점 target만 사용하며, 둘 다 `0`이면 relocation을
+생략합니다. `minTriangleQuality`는 유한한 `[0, 1]` 값이어야 합니다. 기존 JSON 키 이름
+`phase2QualityPolishIterations`는 호환성을 위해 유지하며, collapse/flip 반복 한도를
+뜻합니다. `0`이면 collapse만 한 번 실행하고 flip과 마지막 relocation을 모두 생략합니다.
 
 알 수 없는 토큰이 들어오면 `unknown parameter token` 오류와 함께 실행이 중단됩니다.
 
@@ -93,13 +135,19 @@ JSON 파일을 첫 번째 인수로 넘기면 `ParamCageGenerator` 설정을 덮
 | 경로 | 설명 | 기본값 |
 |---|---|---:|
 | `paramCageInitializer.phase1Mode` | Phase 1 방식: `"subdivision"` 또는 `"topological_offset"` | `"subdivision"` |
-| `paramCageSimplifier.maxIter` | cage simplifier 최대 반복 횟수 | `30` |
+| `paramCageSimplifier.maxIter` | 기존 일반 cage simplifier 최대 반복 횟수 | `30` |
+| `paramCageSimplifier.phase2QualityPolishIterations` | linear-solve의 collapse/flip 반복 한도. `0`이면 collapse만 한 번 실행하고 flip과 마지막 relocation 생략 | `30` |
 | `paramCageSimplifier.relaxErrorIterStep` | 에러 완화 반복 간격 | `5` |
 | `paramCageSimplifier.maxErrorRelaxIter` | 최대 에러 완화 단계 | `4` |
 | `paramCageSimplifier.initError` | 초기 Hausdorff distance 허용값 | `0.005` |
 | `paramCageSimplifier.errorStep` | 에러 완화 단계별 증가값 | `0.005` |
 | `paramCageSimplifier.paramCollapse.maxValence` | collapse 단계 최대 valence | `8` |
-| `paramCageSimplifier.paramRelocate.smoothIter` | relocate smoothing 반복 횟수 | `3` |
+| `paramCageSimplifier.paramRelocate.smoothIter` | 기존 일반 relocate smoothing 반복 횟수 | `3` |
+| `paramCageSimplifier.paramRelocate.qualitySweeps` | linear-solve의 마지막 relocation 단계 전체 sweep 한도. `0`이면 relocation 생략 | `20` |
+| `paramCageSimplifier.paramRelocate.lineSearchMaxIter` | linear-solve relocation energy의 정점당 backtracking 시도 한도 | `12` |
+| `paramCageSimplifier.paramRelocate.tangentialWeight` | tangential smoothing target의 제곱거리 가중치. 유한한 비음수 | `1.0` |
+| `paramCageSimplifier.paramRelocate.surfaceWeight` | 원본 최근접점 target의 제곱거리 가중치. 유한한 비음수. 두 가중치 모두 `0`이면 relocation 생략 | `1.0` |
+| `paramCageSimplifier.paramRelocate.minTriangleQuality` | `[0, 1]`의 quality 하한. 기존 최소 quality가 이미 하한보다 낮으면 악화를 금지 | `0.2` |
 | `paramCageSimplifier.paramRelocate.priorityMode` | relocate 우선순위 모드 | `"hausdorff"` |
 | `paramCageSimplifier.paramFlip.maxValence` | flip 단계 최대 valence | `8` |
 | `paramCageSimplifier.paramFlip.priorityMode` | flip 우선순위 모드 | `"valence"` |

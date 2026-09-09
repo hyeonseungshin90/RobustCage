@@ -32,6 +32,9 @@ public:
     double _original_diagonal_length);
 
   void do_flip();
+  // Fixed-position quality polish for the linear Phase 2 path. Returns the
+  // number of accepted flips and does not require Hausdorff sampling links.
+  size_t do_quality_flip();
   void update(bool _allow_negtive, double _max_distance_error);
 private:
   std::vector<size_t> update_states;

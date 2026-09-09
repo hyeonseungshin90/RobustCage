@@ -775,8 +775,8 @@ void apply_qem_energy_weights(
   Cage::ParamCollapseStage& collapse, bool include_triangle_quality)
 {
   collapse.qemWeight = 1.0;
-  collapse.triangleQualityWeight = include_triangle_quality ? 1.0 : 0.0;
-  collapse.uniformityWeight = 1.0;
+  collapse.triangleQualityWeight = include_triangle_quality ? 2.0 : 0.0;
+  collapse.uniformityWeight = 2.0;
 }
 
 void enable_newton_solve_phase2_defaults(Cage::ParamCageGenerator& param)
@@ -956,7 +956,7 @@ int main(int argc, char* argv[])
     printf("arg[0]: parameters.\n");
     printf("input \"default\" to set default parameters\n");
     printf("input \"phase1_topological_offset\" to use simplicial embedding and offset insertion in Phase 1\n");
-    printf("input \"phase2_linear_solve\" to run linear-solve Phase 2 collapses with Armijo backtracking and hard intersection constraints\n");
+    printf("input \"phase2_linear_solve\" for repeated linear-solve collapse and quality flip, followed by final Voronoi/surface relocation sweeps\n");
     printf("input \"phase2_linear_solve_collision_reject\" to reject invalid raw linear-solve placements without backtracking\n");
     printf("input \"phase2_newton_solve\" to use Newton placement for every Phase 2 collapse candidate\n");
     printf("input \"phase2_qem_original\" to run original Garland-Heckbert QEM without collision rejection\n");

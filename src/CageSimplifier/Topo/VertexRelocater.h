@@ -58,6 +58,9 @@ public:
   Vec3d find_tangential_smooth_target()const;
   Vec3d find_weighted_smooth_target()const;
   Vec3d find_weighted_tangential_smooth_target()const;
+  // Botsch-Kobbelt target: neighbor vertex mixed Voronoi areas, projected
+  // onto the center's area-weighted tangent plane. No position is changed.
+  bool find_area_equalizing_tangential_smooth_target(Vec3d& target)const;
   Vec3d find_smooth_target_with_target_length()const;
 public:
   // input

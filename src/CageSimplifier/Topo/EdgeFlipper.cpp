@@ -9,6 +9,10 @@ bool EdgeFlipper::init(EdgeHandle e)
 {
   clear();
 
+  if (!e.is_valid() || static_cast<size_t>(e.idx()) >= rm->n_edges() ||
+    rm->status(e).deleted())
+    return false;
+
   // Flipping a rail edge would delete part of the labeled closed loop.
   if (rm->data(e).boundary_rail_id >= 0)
     return false;
@@ -264,6 +268,10 @@ bool EdgeFlipper::flip_would_cause_intersection()const
       return true;
     // check triangle va0-va1-vb1
     if (are_points_colinear(pa0, pa1, pb1, epa0, epa1, epb1))
+      return true;
+    // The replacement faces share the new diagonal. A concave coplanar
+    // quad can make those two faces overlap even without other geometry.
+    if (Geometry::triangle_do_overlap(pb0, pa1, pb1, pa0, epb0, epa1, epb1, epa0))
       return true;
   }
   // 1. check intersect with original mesh.

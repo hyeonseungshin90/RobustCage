@@ -1,6 +1,7 @@
 #include "FlipStage.hh"
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 namespace Cage
 {
@@ -270,6 +271,91 @@ void FlipStage::do_flip()
     }
   }
   Logger::user_logger->info("flipped {} edges.", flipped_edge_num);
+}
+
+size_t FlipStage::do_quality_flip()
+{
+  // Flips are discrete changes of connectivity: there is no line-search
+  // parameter. EdgeFlipper rejects a candidate if its exact intersection
+  // checks fail, and updates geometry/tree caches only after acceptance.
+  constexpr double quality_epsilon = 1e-12;
+  auto edge_flipper = new_edge_flipper();
+  edge_flipper.set_flags(/*update_links*/false, /*update_target_length*/false,
+    /*update_normals*/true);
+
+  update_states.assign(rm->n_edges(), 0);
+  edges_to_flip = FlipEdgeRewardQueue();
+  const auto valid_edge = [&](EdgeHandle eh)
+  {
+    return eh.is_valid() && static_cast<size_t>(eh.idx()) < rm->n_edges() &&
+      !rm->status(eh).deleted();
+  };
+  const auto enqueue = [&](EdgeHandle eh)
+  {
+    if (!valid_edge(eh) || !edge_flipper.init(eh) ||
+      edge_flipper.flip_will_cause_over_valence(param->maxValence))
+      return;
+
+    // Do the inexpensive quality test before any intersection queries.
+    const double reward = calc_flip_quality_delta(eh);
+    if (std::isfinite(reward) && reward > quality_epsilon)
+      edges_to_flip.emplace(eh, update_states[eh.idx()], reward);
+  };
+
+  for (EdgeHandle eh : rm->edges())
+    enqueue(eh);
+
+  size_t flipped_edge_num = 0;
+  while (!edges_to_flip.empty())
+  {
+    const auto candidate = edges_to_flip.top();
+    edges_to_flip.pop();
+    const EdgeHandle eh = candidate.eh;
+    if (!valid_edge(eh) || candidate.state != update_states[eh.idx()])
+      continue;
+    if (!edge_flipper.init(eh) ||
+      edge_flipper.flip_will_cause_over_valence(param->maxValence))
+      continue;
+
+    // Revalidate a queued reward before using its priority or committing.
+    const double reward = calc_flip_quality_delta(eh);
+    if (!std::isfinite(reward) || reward <= quality_epsilon)
+      continue;
+    if (reward != candidate.reward)
+    {
+      edges_to_flip.emplace(eh, candidate.state, reward);
+      continue;
+    }
+
+    const HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
+    const HalfedgeHandle opposite = rm->opposite_halfedge_handle(heh);
+    const VertexHandle affected_vertices[] = {
+      rm->from_vertex_handle(heh), rm->to_vertex_handle(heh),
+      rm->opposite_vh(heh), rm->opposite_vh(opposite)
+    };
+    if (!edge_flipper.try_flip_edge())
+      continue;
+    ++flipped_edge_num;
+
+    // A flip changes all four valences. Refresh every edge whose two-face
+    // quad contains any affected vertex, including edges opposite that
+    // vertex. Updating only the four sides misses newly eligible candidates.
+    std::set<EdgeHandle> affected_edges;
+    for (VertexHandle vh : affected_vertices)
+      for (FaceHandle fh : rm->vf_range(vh))
+        for (EdgeHandle local_edge : rm->fe_range(fh))
+          affected_edges.insert(local_edge);
+    for (EdgeHandle local_edge : affected_edges)
+    {
+      if (!valid_edge(local_edge))
+        continue;
+      ++update_states[local_edge.idx()];
+      enqueue(local_edge);
+    }
+  }
+
+  Logger::user_logger->info("quality flip: accepted {} edges.", flipped_edge_num);
+  return flipped_edge_num;
 }
 }// namespace CageSimp
 }// namespace Cage

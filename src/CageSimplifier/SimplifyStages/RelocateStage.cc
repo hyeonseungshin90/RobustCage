@@ -1,4 +1,5 @@
 #include "RelocateStage.hh"
+#include "CageSimplifier/Geom/TangentialSmoothing.h"
 #include <algorithm>
 #include <cmath>
 #include <random>
@@ -7,6 +8,43 @@ namespace Cage
 {
 namespace CageSimp
 {
+namespace
+{
+double max_component_magnitude(const Vec3d& vector)
+{
+  return std::max({ std::abs(vector.x()), std::abs(vector.y()), std::abs(vector.z()) });
+}
+
+double min_fan_quality(
+  SMeshT* mesh, const std::vector<HalfedgeHandle>& halfedges, const Vec3d& center)
+{
+  if (halfedges.empty() || !TangentialSmoothing::finite_point(center))
+    return 0.0;
+  double min_quality = DBL_MAX;
+  for (HalfedgeHandle h : halfedges)
+  {
+    Vec3d a = mesh->point(mesh->from_vertex_handle(h)) - center;
+    Vec3d b = mesh->point(mesh->to_vertex_handle(h)) - center;
+    if (!TangentialSmoothing::finite_point(a) || !TangentialSmoothing::finite_point(b))
+      return 0.0;
+    // Rescaling leaves quality unchanged and avoids overflow/underflow in
+    // squared lengths and cross products on differently scaled inputs.
+    const double scale = std::max({ std::abs(a.x()), std::abs(a.y()), std::abs(a.z()),
+      std::abs(b.x()), std::abs(b.y()), std::abs(b.z()) });
+    if (!std::isfinite(scale) || scale <= 0.0)
+      return 0.0;
+    a /= scale;
+    b /= scale;
+    const double denominator = a.sqrnorm() + b.sqrnorm() + (a - b).sqrnorm();
+    const double quality = 2.0 * std::sqrt(3.0) * a.cross(b).length() / denominator;
+    if (!std::isfinite(quality) || quality <= 0.0)
+      return 0.0;
+    min_quality = std::min(min_quality, quality);
+  }
+  return min_quality;
+}
+}
+
 RelocateStage::RelocateStage(
   SMeshT* original, SMeshT* cage, ParamRelocateStage* p,
   VertexTree* vertex_tree, DFaceTree* original_tree, LightDFaceTree* remeshing_tree,
@@ -254,6 +292,134 @@ void RelocateStage::do_relocate()
     }
   }
   Logger::user_logger->info("relocated {} vertices.", relocated_vertex_num);
+}
+
+size_t RelocateStage::do_quality_relocate(size_t line_search_max_iter)
+{
+  param->validate_quality_settings();
+  if (line_search_max_iter == 0 ||
+    (param->tangentialWeight == 0.0 && param->surfaceWeight == 0.0))
+    return 0;
+  // Both trees are also required by the candidate intersection checks.
+  if (!om || !rm || !ot || ot->empty() || !lrt)
+    return 0;
+
+  // A common weight scale does not change the minimizer. Normalize before
+  // adding the weights so even large finite settings cannot overflow.
+  const double weight_scale = std::max(param->tangentialWeight, param->surfaceWeight);
+  const double scaled_tangent_weight = param->tangentialWeight / weight_scale;
+  const double scaled_surface_weight = param->surfaceWeight / weight_scale;
+  const double weight_sum = scaled_tangent_weight + scaled_surface_weight;
+  const double tangent_weight = scaled_tangent_weight / weight_sum;
+  const double surface_weight = scaled_surface_weight / weight_sum;
+
+  auto relocater = new_vertex_relocater();
+  relocater.set_flags(/*update_links*/false, /*update_target_length*/false,
+    /*update_normals*/true, /*check_wrinkle*/true);
+
+  size_t relocated = 0;
+  size_t backtracked = 0;
+  size_t fixed = 0;
+  size_t quality_rejected = 0;
+  size_t geometry_rejected = 0;
+  for (VertexHandle vh : rm->vertices())
+  {
+    if (rm->status(vh).deleted())
+      continue;
+    // Rail support is generally a nonconvex union of half-strips. Keeping
+    // rail vertices fixed preserves that constraint throughout smoothing.
+    if (rm->data(vh).boundary_rail_id >= 0 || rm->is_boundary(vh))
+    {
+      ++fixed;
+      continue;
+    }
+    if (!relocater.init(vh))
+      continue;
+
+    const Vec3d old_point = rm->point(vh);
+    if (!TangentialSmoothing::finite_point(old_point))
+      continue;
+
+    Vec3d tangent_offset(0.0, 0.0, 0.0);
+    Vec3d surface_offset(0.0, 0.0, 0.0);
+    if (tangent_weight > 0.0)
+    {
+      Vec3d tangent_target;
+      if (!relocater.find_area_equalizing_tangential_smooth_target(tangent_target))
+        continue;
+      tangent_offset = tangent_target - old_point;
+    }
+    if (surface_weight > 0.0)
+    {
+      // Query once per proposal; the source is static and its search
+      // structures already exist. Keep this correspondence fixed throughout
+      // backtracking. This is a point-distance surrogate, not Hausdorff.
+      const Vec3d closest = ot->closest_point(old_point).first;
+      surface_offset = closest - old_point;
+    }
+    if (!TangentialSmoothing::finite_point(tangent_offset) ||
+      !TangentialSmoothing::finite_point(surface_offset))
+      continue;
+
+    // Evaluate the frozen quadratic in relative, scaled coordinates to
+    // avoid cancellation from translations and squared-distance overflow.
+    const double coordinate_scale = std::max(
+      max_component_magnitude(tangent_offset), max_component_magnitude(surface_offset));
+    if (coordinate_scale == 0.0)
+      continue;
+    tangent_offset /= coordinate_scale;
+    surface_offset /= coordinate_scale;
+    const Vec3d scaled_direction =
+      tangent_weight * tangent_offset + surface_weight * surface_offset;
+    const Vec3d direction = coordinate_scale * scaled_direction;
+    if (!TangentialSmoothing::finite_point(direction) || max_component_magnitude(direction) == 0.0)
+      continue;
+
+    const auto energy = [&](const Vec3d& displacement)
+    {
+      return tangent_weight * (displacement - tangent_offset).sqrnorm() +
+        surface_weight * (displacement - surface_offset).sqrnorm();
+    };
+    const double old_energy = energy(Vec3d(0.0, 0.0, 0.0));
+    const double energy_tolerance = 1e-12 * old_energy;
+    const double old_quality = min_fan_quality(rm, relocater.get_halfedges(), old_point);
+    const double quality_floor = std::min(old_quality, param->minTriangleQuality);
+    double alpha = 1.0;
+    for (size_t step = 0; step < line_search_max_iter; ++step, alpha *= 0.5)
+    {
+      const Vec3d candidate = old_point + alpha * direction;
+      if (alpha == 0.0 || candidate == old_point)
+        break;
+      if (!TangentialSmoothing::finite_point(candidate))
+        continue;
+      const double candidate_energy = energy((candidate - old_point) / coordinate_scale);
+      if (!std::isfinite(candidate_energy) || old_energy - candidate_energy <= energy_tolerance)
+        continue;
+      // Permit distance-driven improvement without requiring triangle
+      // quality to increase. Fans already below the floor cannot get worse.
+      const double candidate_quality = min_fan_quality(rm, relocater.get_halfedges(), candidate);
+      if (candidate_quality <= 0.0 || candidate_quality + 1e-12 < quality_floor)
+      {
+        ++quality_rejected;
+        continue;
+      }
+      // This checks exact degeneracy, old/new orientation, source-mesh
+      // intersection, and self-intersection at the candidate endpoint.
+      if (relocater.try_relocate_vertex(candidate))
+      {
+        ++relocated;
+        if (step > 0)
+          ++backtracked;
+        break;
+      }
+      ++geometry_rejected;
+    }
+  }
+  Logger::user_logger->info(
+    "energy relocation: moved {} vertices ({} backtracked), fixed {} boundary/rail vertices; "
+    "rejected candidates: quality {}, geometry {}",
+    relocated, backtracked, fixed, quality_rejected, geometry_rejected);
+  return relocated;
 }
 
 }// namespace CageSimp

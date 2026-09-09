@@ -1,4 +1,6 @@
 #include "VertexRelocater.h"
+#include "CageSimplifier/Geom/TangentialSmoothing.h"
+#include "Geometry/Exact/TriTriIntersect.h"
 
 namespace Cage
 {
@@ -8,13 +10,16 @@ namespace CageSimp
 bool VertexRelocater::init(VertexHandle _v)
 {
   clear();
+  if (!rm || !_v.is_valid() || _v.idx() >= static_cast<int>(rm->n_vertices()) ||
+    rm->status(_v).deleted())
+    return false;
   relocate_vh = _v;
 
   find_faces_affected();
 
-  initialized = true;
+  initialized = !halfedges.empty();
 
-  return true;
+  return initialized;
 }
 
 void VertexRelocater::clear()
@@ -42,6 +47,9 @@ void VertexRelocater::relocate(const Vec3d& new_point)
 
   // real relocating
   rm->set_point(relocate_vh, new_point);
+  // All guards evaluated this candidate as a double point. Keeping an old
+  // rational point here would make later exact predicates see its old position.
+  rm->data(relocate_vh).ep.reset();
 
   // update after relocating
   if (f_update_target_length)
@@ -57,6 +65,8 @@ void VertexRelocater::relocate(const Vec3d& new_point)
 bool VertexRelocater::try_relocate_vertex(const Vec3d& new_point)
 {
   ASSERT(initialized, "unintialized vertex relocater.");
+  if (!TangentialSmoothing::finite_point(new_point))
+    return false;
   // check and backup before relocating
   if (relocate_would_cause_degenerate(new_point))
     return false;
@@ -202,6 +212,75 @@ Vec3d VertexRelocater::find_weighted_tangential_smooth_target()const
   else return find_tangential_smooth_target();
 }
 
+bool VertexRelocater::find_area_equalizing_tangential_smooth_target(Vec3d& target)const
+{
+  ASSERT(initialized, "vertex relocater not initialized.");
+  using TangentialSmoothing::finite_point;
+  using TangentialSmoothing::mixed_voronoi_area_at_vertex;
+
+  const Vec3d& center = rm->point(relocate_vh);
+  target = center;
+  if (!finite_point(center))
+    return false;
+
+  // Sum raw face cross products, exactly as in the collapse predictor. This
+  // uses current geometry rather than a potentially stale cached normal.
+  Vec3d normal_sum(0.0, 0.0, 0.0);
+  for (HalfedgeHandle h : halfedges)
+  {
+    const Vec3d face_normal =
+      (rm->point(rm->from_vertex_handle(h)) - center).cross(
+        rm->point(rm->to_vertex_handle(h)) - center);
+    if (!finite_point(face_normal))
+      return false;
+    normal_sum += face_normal;
+  }
+  const double normal_length = normal_sum.length();
+  if (!std::isfinite(normal_length) || normal_length <= 0.0)
+    return false;
+  const Vec3d normal = normal_sum / normal_length;
+
+  Vec3d gravity_centroid(0.0, 0.0, 0.0);
+  double total_area = 0.0;
+  for (VertexHandle neighbor : rm->vv_range(relocate_vh))
+  {
+    if (!finite_point(rm->point(neighbor)))
+      return false;
+    double neighbor_area = 0.0;
+    // Each weight is the neighbor's FULL vertex area, including triangles
+    // outside the center fan. Face-centroid weighting is a different method.
+    for (FaceHandle fh : rm->vf_range(neighbor))
+    {
+      if (!fh.is_valid() || rm->status(fh).deleted())
+        continue;
+      Vec3d other_points[2];
+      size_t other_count = 0;
+      for (VertexHandle fv : rm->fv_range(fh))
+      {
+        if (fv != neighbor && other_count < 2)
+          other_points[other_count++] = rm->point(fv);
+      }
+      if (other_count == 2)
+        neighbor_area += mixed_voronoi_area_at_vertex(
+          rm->point(neighbor), other_points[0], other_points[1]);
+    }
+    if (!std::isfinite(neighbor_area))
+      return false;
+    if (neighbor_area > 0.0)
+    {
+      gravity_centroid += neighbor_area * rm->point(neighbor);
+      total_area += neighbor_area;
+    }
+  }
+  if (!std::isfinite(total_area) || total_area <= 0.0)
+    return false;
+  gravity_centroid /= total_area;
+  const Vec3d update = gravity_centroid - center;
+  const Vec3d tangential_update = update - (normal | update) * normal;
+  target = center + tangential_update;
+  return finite_point(target);
+}
+
 /// @brief tangential relaxation in "Isotropic Surface Remeshing without Large
 /// and Small Angles".
 Vec3d VertexRelocater::find_smooth_target_with_target_length()const
@@ -247,6 +326,9 @@ void VertexRelocater::find_faces_affected()
   halfedges.reserve(rm->valence(relocate_vh));
   for (HalfedgeHandle voh : rm->voh_range(relocate_vh))
   {
+    // The outer halfedge of an open mesh has no incident triangle.
+    if (rm->is_boundary(voh))
+      continue;
     halfedges.push_back(rm->next_halfedge_handle(voh));
     one_ring_faces.insert(rm->face_handle(voh));
   }
@@ -277,7 +359,49 @@ bool VertexRelocater::relocate_would_cause_wrinkle(const Vec3d& new_point)const
 
 bool VertexRelocater::relocate_would_cause_intersection(const Vec3d& new_point)const
 {
-  return check_intersection(rm, halfedges, new_point, nullptr, ot, og, lrt, one_ring_faces);
+  if (check_intersection(rm, halfedges, new_point, nullptr, ot, og, lrt, one_ring_faces))
+    return true;
+
+  // The shared checker excludes all old fan faces from its BVH queries.
+  // Compare the proposed fan triangles too, allowing only their topological
+  // common edge/vertex through the same exact predicates used by the checker.
+  for (size_t i = 0; i < halfedges.size(); ++i)
+  {
+    const VertexHandle a = rm->from_vertex_handle(halfedges[i]);
+    const VertexHandle b = rm->to_vertex_handle(halfedges[i]);
+    for (size_t j = i + 1; j < halfedges.size(); ++j)
+    {
+      const VertexHandle c = rm->from_vertex_handle(halfedges[j]);
+      const VertexHandle d = rm->to_vertex_handle(halfedges[j]);
+      VertexHandle shared, other_i, other_j;
+      if (a == c || a == d)
+      {
+        shared = a;
+        other_i = b;
+        other_j = a == c ? d : c;
+      }
+      else if (b == c || b == d)
+      {
+        shared = b;
+        other_i = a;
+        other_j = b == c ? d : c;
+      }
+      if (shared.is_valid())
+      {
+        if (Geometry::triangle_do_overlap(
+          rm->point(other_i), new_point, rm->point(shared), rm->point(other_j),
+          rm->data(other_i).ep.get(), nullptr, rm->data(shared).ep.get(),
+          rm->data(other_j).ep.get()))
+          return true;
+      }
+      else if (Geometry::triangle_do_intersect(
+        rm->point(a), rm->point(b), new_point, rm->point(c), rm->point(d),
+        rm->data(a).ep.get(), rm->data(b).ep.get(), nullptr,
+        rm->data(c).ep.get(), rm->data(d).ep.get()))
+        return true;
+    }
+  }
+  return false;
 }
 
 bool VertexRelocater::relocate_would_cause_degenerate(const Vec3d& new_point)const

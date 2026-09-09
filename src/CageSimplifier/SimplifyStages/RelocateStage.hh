@@ -35,6 +35,10 @@ public:
 
   void update(size_t _candidate_points_size, bool _allow_negtive, double _max_distance_error);
   void do_relocate();
+  // One serial energy sweep in the final stage after collapse/flip cycles.
+  // Minimize attraction to the Voronoi tangent target and source closest point,
+  // then backtrack alpha=2^-k with both targets fixed and quality/geometry guards.
+  size_t do_quality_relocate(size_t line_search_max_iter);
 private:
   /* Relocate */
   std::vector<Vec3d> generate_candidate_points_for_relocate(VertexHandle vh, VertexRelocater& vertex_relocater);

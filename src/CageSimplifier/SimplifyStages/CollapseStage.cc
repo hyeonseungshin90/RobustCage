@@ -32,11 +32,10 @@ constexpr bool kSquareGlobalQueueUniformityScore = true;
 // placement and queue scoring.
 constexpr bool kEnableTriangleQualityInPhase2LinearSolve = true;
 
-// Include uniformity in the linear-solve placement objective as the exactly
-// linear pairwise-difference form (see
-// build_phase2_uniformity_difference_quadric). The queue formula keeps its own
-// edge-length ratio and is unchanged.
-constexpr bool kEnableUniformityInPhase2LinearSolve = true;
+// Keep uniformity out of both linear-solve placement and its line-search
+// energy. The collapse queue still uses its weighted edge-length ratio.
+// Retain the difference quadric for comparisons if this is re-enabled.
+constexpr bool kEnableUniformityInPhase2LinearSolve = false;
 
 double sqr(double v)
 {
@@ -344,7 +343,9 @@ CollapseStage::CollapseStage(
   avg_edge_length(0.0),
   avg_source_edge_length(0.0),
   avg_source_edge_length_initialized(false),
-  phase2_target_edge_length(0.0)
+  phase2_target_edge_length(0.0),
+  phase2_target_edge_length_initialized(false),
+  phase2_target_vertices_num(0)
 {}
 
 CollapseStage::~CollapseStage()
@@ -1876,6 +1877,10 @@ void CollapseStage::refresh_phase2_average_lengths()
 
 void CollapseStage::initialize_phase2_target_edge_length(size_t target_vertices_num)
 {
+  if (phase2_target_edge_length_initialized &&
+    phase2_target_vertices_num == target_vertices_num)
+    return;
+
   refresh_phase2_average_lengths();
   phase2_target_edge_length = avg_edge_length;
 
@@ -1905,6 +1910,9 @@ void CollapseStage::initialize_phase2_target_edge_length(size_t target_vertices_
       "phase 2 target edge length: invalid topology/length inputs; "
       "falling back to the initial mean edge length.");
   }
+
+  phase2_target_edge_length_initialized = true;
+  phase2_target_vertices_num = target_vertices_num;
 
   Logger::user_logger->info(
     "phase 2 target edge length: initial V/E/F {}/{}/{}, Euler characteristic {}, "
@@ -2022,10 +2030,10 @@ void CollapseStage::update_phase2_after_collapsing(VertexHandle collapsed_center
 // 2. Pop one edge, choose its actual placement according to phase2PlacementStrategy.
 // 3. Commit the collapse with exact validity checks.
 // 4. Requeue only the affected one-ring edges.
-void CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
+size_t CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
 {
   if (target_vertices_num == 0 || rm->n_vertices() <= target_vertices_num)
-    return;
+    return 0;
 
   Logger::user_logger->info(
     "phase 2 energy simplification [{}]: {} -> {} vertices.",
@@ -2221,6 +2229,7 @@ void CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
     total_collapsed_edges, total_attempted_edges);
 
   Logger::user_logger->info("[{}] vertices and [{}] faces remained.", rm->n_vertices(), rm->n_faces());
+  return total_collapsed_edges;
 }
 
 bool CollapseStage::find_collapse_hausdorff_deviation(

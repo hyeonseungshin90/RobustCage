@@ -17,11 +17,6 @@ bool is_phase2_energy_mode(const std::string& mode)
     mode == "qem_original";
 }
 
-bool skips_phase2_flip_polish(const std::string& mode)
-{
-  return mode == "linear_solve" || mode == "qem_original";
-}
-
 void configure_phase2_strategy(
   ParamCollapseStage& collapse, const std::string& mode)
 {
@@ -249,10 +244,15 @@ void CageSimplifier::run_phase2_energy_simplification()
   collapse_stage = std::make_unique<CollapseStage>(
     om, rm, &param->paramCollapse,
     ot.get(), lrt.get(), og.get(), original_diagonal_length);
+  if (param->phase2Mode == "linear_solve")
+  {
+    run_phase2_linear_solve_iterations();
+    collapse_stage = nullptr;
+    return;
+  }
   collapse_stage->do_phase2_energy_simplification(param->targetVerticesNum);
   collapse_stage = nullptr;
-
-  if (skips_phase2_flip_polish(param->phase2Mode))
+  if (param->phase2Mode == "qem_original")
   {
     init_one_ring_faces(rm);
     return;
@@ -276,6 +276,85 @@ void CageSimplifier::run_phase2_energy_simplification()
   flip_stage->do_flip();
   flip_stage = nullptr;
   init_one_ring_faces(rm);
+}
+
+void CageSimplifier::run_phase2_linear_solve_iterations()
+{
+  init_one_ring_faces(rm);
+  if (param->phase2QualityPolishIterations == 0)
+  {
+    // Preserve the existing zero setting as a collapse-only comparison.
+    collapse_stage->do_phase2_energy_simplification(param->targetVerticesNum);
+    init_one_ring_faces(rm);
+    return;
+  }
+
+  Logger::user_logger->info(
+    "running phase 2 linear-solve iterations: up to {} collapse/flip cycles, then up to {} final relocation sweeps with {} backtracking attempts per vertex; rail vertices fixed during relocation.",
+    param->phase2QualityPolishIterations, param->paramRelocate.qualitySweeps,
+    param->paramRelocate.lineSearchMaxIter);
+
+  flip_stage = std::make_unique<FlipStage>(
+    om, rm, &param->paramFlip,
+    ot.get(), lrt.get(), og.get(), original_diagonal_length);
+  for (size_t iteration = 0; iteration < param->phase2QualityPolishIterations; ++iteration)
+  {
+    // Rebuild collapse candidates after the previous cycle's flips.
+    // Keep this stage alive so its initial uniformity target is fixed.
+    // The collapse stage skips its work once the target vertex count is met.
+    const size_t collapsed = collapse_stage->do_phase2_energy_simplification(
+      param->targetVerticesNum);
+
+    // Degeneration removal and energy collapse do not update all normals.
+    rm->update_normals();
+    pre_calculate_edge_length(rm);
+    pre_calculate_face_area(rm);
+    const size_t flipped = flip_stage->do_quality_flip();
+    Logger::user_logger->info(
+      "phase 2 linear-solve cycle {}: collapsed {}, flipped {}, vertices {}, min triangle quality {}.",
+      iteration + 1, collapsed, flipped,
+      rm->n_vertices(), calc_min_triangle_quality());
+    if (param->enableBoundaryRails &&
+      !validate_and_log_boundary_rails(rm, "after linear-solve cycle"))
+      throw std::logic_error("boundary rail topology became invalid during linear-solve iteration");
+    if (collapsed == 0 && flipped == 0)
+    {
+      Logger::user_logger->info("phase 2 linear-solve iterations stopped: no accepted collapses or flips.");
+      break;
+    }
+    if (iteration + 1 == param->phase2QualityPolishIterations)
+      Logger::user_logger->info("phase 2 linear-solve iterations stopped: cycle limit reached.");
+  }
+  flip_stage = nullptr;
+
+  // Relocation changes positions only after the final topology is selected.
+  // Do not resume collapse or flip after this stage, even if a move would
+  // make further topology changes possible.
+  relocate_stage = std::make_unique<RelocateStage>(
+    om, rm, &param->paramRelocate,
+    vt.get(), ot.get(), lrt.get(), og.get(), original_diagonal_length);
+  size_t relocated = 0;
+  size_t sweeps = 0;
+  if (param->paramRelocate.lineSearchMaxIter > 0)
+  {
+    for (; sweeps < param->paramRelocate.qualitySweeps;)
+    {
+      // Each sweep recomputes both targets from the latest positions.
+      const size_t moved = relocate_stage->do_quality_relocate(
+        param->paramRelocate.lineSearchMaxIter);
+      ++sweeps;
+      relocated += moved;
+      if (moved == 0)
+        break;
+    }
+  }
+  Logger::user_logger->info(
+    "phase 2 linear-solve final relocation: moves {} in {} sweeps, vertices {}, min triangle quality {}.",
+    relocated, sweeps, rm->n_vertices(), calc_min_triangle_quality());
+  if (param->enableBoundaryRails &&
+    !validate_and_log_boundary_rails(rm, "after final linear-solve relocation"))
+    throw std::logic_error("boundary rail topology became invalid during final linear-solve relocation");
+  relocate_stage = nullptr;
 }
 
 void CageSimplifier::update_strategy()

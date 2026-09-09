@@ -1,4 +1,8 @@
 #pragma once
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <stdexcept>
 #include <vector>
 #include <string>
 #include "boost/json.hpp"
@@ -201,6 +205,17 @@ struct ParamRelocateStage
 {
   // simplification parameter
   size_t smoothIter;
+  // Full-mesh sweeps in the final relocation stage after collapse/flip cycles.
+  // Stop earlier when a sweep accepts no moves. Separate from legacy smoothIter.
+  size_t qualitySweeps = 20;
+  // Backtracking attempts for the Phase 2 relocation energy decrease.
+  size_t lineSearchMaxIter = 12;
+  // Squared-distance energy weights for the tangential smoothing target and
+  // closest source-surface point, frozen during each vertex's line search.
+  double tangentialWeight = 1.0;
+  double surfaceWeight = 1.0;
+  // Normalized triangle-quality floor. A fan already below it cannot worsen.
+  double minTriangleQuality = 0.2;
   // Supported modes: "hausdorff", "triangle_quality_hard".
   std::string priorityMode;
 
@@ -208,6 +223,11 @@ struct ParamRelocateStage
   {
     boost::json::object jo;
     jo["smoothIter"] = smoothIter;
+    jo["qualitySweeps"] = qualitySweeps;
+    jo["lineSearchMaxIter"] = lineSearchMaxIter;
+    jo["tangentialWeight"] = tangentialWeight;
+    jo["surfaceWeight"] = surfaceWeight;
+    jo["minTriangleQuality"] = minTriangleQuality;
     jo["priorityMode"] = priorityMode;
     return jo;
   }
@@ -217,11 +237,43 @@ struct ParamRelocateStage
     if (smooth_iter_it != jo.end())
       smoothIter = smooth_iter_it->value().as_int64();
 
+    auto quality_sweeps_it = jo.find("qualitySweeps");
+    if (quality_sweeps_it != jo.end())
+      qualitySweeps = static_cast<size_t>(std::max<std::int64_t>(0, quality_sweeps_it->value().as_int64()));
+
+    auto line_search_it = jo.find("lineSearchMaxIter");
+    if (line_search_it != jo.end())
+      lineSearchMaxIter = static_cast<size_t>(std::max<std::int64_t>(0, line_search_it->value().as_int64()));
+
+    auto tangential_weight_it = jo.find("tangentialWeight");
+    if (tangential_weight_it != jo.end())
+      tangentialWeight = boost::json::value_to<double>(tangential_weight_it->value());
+
+    auto surface_weight_it = jo.find("surfaceWeight");
+    if (surface_weight_it != jo.end())
+      surfaceWeight = boost::json::value_to<double>(surface_weight_it->value());
+
+    auto min_quality_it = jo.find("minTriangleQuality");
+    if (min_quality_it != jo.end())
+      minTriangleQuality = boost::json::value_to<double>(min_quality_it->value());
+
+    validate_quality_settings();
+
     auto priority_mode_it = jo.find("priorityMode");
     if (priority_mode_it != jo.end())
       priorityMode = std::string(priority_mode_it->value().as_string().c_str());
     else
       priorityMode = "hausdorff";
+  }
+
+  void validate_quality_settings() const
+  {
+    if (!std::isfinite(tangentialWeight) || tangentialWeight < 0.0)
+      throw std::invalid_argument("paramRelocate.tangentialWeight must be finite and nonnegative");
+    if (!std::isfinite(surfaceWeight) || surfaceWeight < 0.0)
+      throw std::invalid_argument("paramRelocate.surfaceWeight must be finite and nonnegative");
+    if (!std::isfinite(minTriangleQuality) || minTriangleQuality < 0.0 || minTriangleQuality > 1.0)
+      throw std::invalid_argument("paramRelocate.minTriangleQuality must be finite and in [0, 1]");
   }
 };
 
@@ -267,6 +319,10 @@ struct ParamCageSimplifier
   // Newton placement for every collapse, and "qem_original" uses pure
   // Garland-Heckbert QEM cost/placement only.
   std::string phase2Mode;
+  // Linear-solve collapse/flip cycle cap; final relocation runs after the loop.
+  // Keep the existing setting name; zero runs collapse once and skips both
+  // quality flips and final relocation.
+  size_t phase2QualityPolishIterations = 30;
   // Build and preserve source-boundary rails on the initial cage.  This is
   // deliberately opt-in so the original/default pipeline is unchanged.
   bool enableBoundaryRails = false;
@@ -299,6 +355,7 @@ struct ParamCageSimplifier
     boost::json::object jo;
     jo["maxIter"] = maxIter;
     jo["phase2Mode"] = phase2Mode;
+    jo["phase2QualityPolishIterations"] = phase2QualityPolishIterations;
     jo["enableBoundaryRails"] = enableBoundaryRails;
     jo["boundaryRailAnchorMode"] = boundaryRailAnchorMode;
     jo["relaxErrorIterStep"] = relaxErrorIterStep;
@@ -315,6 +372,9 @@ struct ParamCageSimplifier
     maxIter = jo.at("maxIter").as_int64();
     auto phase2_mode_it = jo.find("phase2Mode");
     phase2Mode = phase2_mode_it != jo.end() ? std::string(phase2_mode_it->value().as_string().c_str()) : "fast";
+    auto quality_polish_it = jo.find("phase2QualityPolishIterations");
+    if (quality_polish_it != jo.end())
+      phase2QualityPolishIterations = static_cast<size_t>(std::max<std::int64_t>(0, quality_polish_it->value().as_int64()));
     auto boundary_rails_it = jo.find("enableBoundaryRails");
     enableBoundaryRails = boundary_rails_it != jo.end() ?
       boundary_rails_it->value().as_bool() : false;

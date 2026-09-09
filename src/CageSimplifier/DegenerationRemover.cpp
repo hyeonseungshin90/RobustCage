@@ -110,7 +110,8 @@ size_t DegenerationRemover::eliminate_almost_degeneration()
       else if (COS(max_angle) < -GeomThr::cos_de_thr)
       {
         // case (2): Has a large angle but no short edge, try to flip loggest edge.
-        edge_flipper.init(e_opp_max_angle);
+        if (!edge_flipper.init(e_opp_max_angle))
+          continue;
         if (!edge_flipper.flip_will_cause_small_large_angle())
         {
           if (edge_flipper.try_flip_edge(e_opp_max_angle))
