@@ -71,9 +71,13 @@ pass the degeneracy, orientation and intersection checks, and preserve
 `new_min_quality >= min(old_min_quality, minTriangleQuality)` within roundoff
 tolerance. Quality is normalized to `[0, 1]`; its default floor is `0.2`.
 A fan above the floor may decrease to the floor; a fan below it cannot worsen.
-With `+boundary_rail`, rail edges cannot flip. Rail vertices and actual mesh
-boundary vertices remain fixed during relocation. Flips and relocation preserve
-vertex count.
+With `+boundary_rail`, a mixed rail/nonrail edge may collapse only from the
+nonrail vertex into the existing rail vertex at its unchanged position. This
+preserves the rail label and loop connectivity and must pass the existing
+collapse validity checks. Actual rail-edge collapses still project their new
+position onto the source-boundary support half-strips. Rail edges cannot flip.
+Rail vertices and actual mesh boundary vertices remain fixed during relocation.
+Flips and relocation preserve vertex count.
 
 The final relocation stage performs up to 20 full-mesh sweeps, recomputing the
 Voronoi areas, normals and source closest points from current positions. A sweep

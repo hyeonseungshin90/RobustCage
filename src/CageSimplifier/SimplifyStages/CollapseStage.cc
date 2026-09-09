@@ -1401,6 +1401,16 @@ bool CollapseStage::choose_phase2_collapse_placement(
 {
   decision = Phase2PlacementDecision();
   const Phase2PlacementContext ctx = make_phase2_placement_context(eh, edge_collapser);
+  // A mixed edge has exactly one placement: the existing rail vertex.
+  // Evaluate that point directly, without a solve, line search or projection.
+  if (edge_collapser.has_fixed_rail_target())
+  {
+    decision.point = edge_collapser.constrained_target_point(ctx.midpoint);
+    if (!phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, decision.point))
+      return false;
+    decision.priority_energy = evaluate_phase2_proxy_energy(ctx, decision.point);
+    return std::isfinite(decision.priority_energy);
+  }
   if (is_phase2_qem_original_strategy() &&
     !ctx.use_qem_matrix && ctx.qem_planes.empty())
     return false;
@@ -1804,6 +1814,14 @@ bool CollapseStage::compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3
     return false;
 
   const Phase2PlacementContext ctx = make_phase2_placement_context(eh, edge_collapser);
+  if (edge_collapser.has_fixed_rail_target())
+  {
+    new_point = edge_collapser.constrained_target_point(ctx.midpoint);
+    if (!phase2_placement_satisfies_hard_constraints(ctx, edge_collapser, new_point))
+      return false;
+    energy = evaluate_phase2_proxy_energy(ctx, new_point);
+    return std::isfinite(energy);
+  }
   if (is_phase2_qem_original_strategy() &&
     !ctx.use_qem_matrix && ctx.qem_planes.empty())
     return false;
@@ -2254,11 +2272,20 @@ bool CollapseStage::find_collapse_hausdorff_deviation(
 
   local_hd_before = edge_collapser.local_Hausdorff_before_collapsing();
 
-  if (is_optimization_collapse_placement_method())
+  if (edge_collapser.has_fixed_rail_target() || is_optimization_collapse_placement_method())
   {
-    double optimized_energy = DBL_MAX;
-    if (!refine_collapse_placement_with_newton(eh, edge_collapser, new_point, optimized_energy))
-      return false;
+    if (edge_collapser.has_fixed_rail_target())
+    {
+      new_point = edge_collapser.constrained_target_point(rm->calc_edge_midpoint(heh));
+      if (!edge_collapser.target_point_is_valid(new_point, nullptr))
+        return false;
+    }
+    else
+    {
+      double optimized_energy = DBL_MAX;
+      if (!refine_collapse_placement_with_newton(eh, edge_collapser, new_point, optimized_energy))
+        return false;
+    }
 
     VertexHandle local_center_v;
     auto local_mesh = construct_local_mesh(rm, edge_collapser.get_halfedges(), new_point, local_center_v);

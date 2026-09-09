@@ -80,6 +80,11 @@ Quality 범위는 `[0, 1]`이고 기본 하한은 `0.2`입니다. 기존 quality
 마지막 relocation 단계는 전체 최대 20 sweep을 수행하며, 매 sweep에서 현재 위치를 기준으로
 Voronoi 면적·normal·원본 최근접점을 재계산합니다. 한 sweep에서 이동이 없으면 조기
 종료합니다. 정점별 line search는 각 sweep에서 최대 12회 시도합니다.
+`+boundary_rail`에서 한 끝점만 rail에 속하는 mixed edge는 일반 정점을 기존 rail
+정점으로 합치는 방향으로만 collapse할 수 있습니다. 새 위치는 기존 rail 정점의
+위치로 고정하고 rail ID와 loop 연결을 유지하며, 기존 collapse 유효성 검사를
+통과해야 합니다. 실제 rail edge의 collapse는 계속 source-boundary support
+half-strip에 새 위치를 투영합니다.
 Rail edge의 flip은 금지되며, rail 정점과 실제 mesh boundary 정점은 relocation
 중 고정됩니다. Flip과 relocation은 정점 수를 유지합니다.
 이 에너지는 전체 Hausdorff distance를 최소화하거나 그 개선을 보장하지 않습니다.

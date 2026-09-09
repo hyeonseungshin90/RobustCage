@@ -1,6 +1,8 @@
 #include "CageGenerator.hh"
 #include "CageSimplifier/SimplifyStages/FlipStage.hh"
 #include "CageSimplifier/SimplifyStages/RelocateStage.hh"
+#include "CageSimplifier/SimplifyStages/CollapseStage.hh"
+#include "CageSimplifier/Topo/EdgeCollapser.h"
 #include "CageSimplifier/Topo/VertexRelocater.h"
 #include "CageSimplifier/CageSimplifier.hh"
 #include "Geometry/Exact/TriTriIntersect.h"
@@ -783,6 +785,217 @@ size_t require_closed_rail_cycles(SMeshT& mesh)
   return rail_vertices.size();
 }
 
+std::array<VertexHandle, 6> add_collapse_octahedron(SMeshT& mesh, bool rail_first = false,
+  bool subdivide_top_face = false)
+{
+  std::array<VertexHandle, 6> v = {
+    mesh.add_vertex(Vec3d(0.0, 0.0, 1.0)),
+    mesh.add_vertex(Vec3d(1.0, 0.0, 0.0)),
+    mesh.add_vertex(Vec3d(0.0, 1.0, 0.0)),
+    mesh.add_vertex(Vec3d(-1.0, 0.0, 0.0)),
+    mesh.add_vertex(Vec3d(0.0, -1.0, 0.0)),
+    mesh.add_vertex(Vec3d(0.0, 0.0, -1.0))
+  };
+  // Rotating face insertion makes halfedge 0 of top/south point either
+  // rail -> ordinary or ordinary -> rail without changing the surface.
+  for (size_t j = 0; j < 4; ++j)
+  {
+    const size_t i = (j + (rail_first ? 3 : 0)) % 4 + 1;
+    const size_t next = i == 4 ? 1 : i + 1;
+    if (subdivide_top_face && i == 1)
+    {
+      const auto center = mesh.add_vertex((mesh.point(v[0]) + mesh.point(v[1]) +
+        mesh.point(v[2])) / 3.0);
+      add_face(mesh, v[0], v[1], center);
+      add_face(mesh, v[1], v[2], center);
+      add_face(mesh, v[2], v[0], center);
+    }
+    else
+      add_face(mesh, v[0], v[i], v[next]);
+  }
+  for (size_t i = 1; i <= 4; ++i)
+    add_face(mesh, v[5], v[i == 4 ? 1 : i + 1], v[i]);
+  return v;
+}
+
+void label_rail_cycle(SMeshT& mesh, const std::vector<VertexHandle>& vertices, int rail)
+{
+  for (size_t i = 0; i < vertices.size(); ++i)
+  {
+    mesh.data(vertices[i]).boundary_rail_id = rail;
+    const auto halfedge = mesh.find_halfedge(vertices[i], vertices[(i + 1) % vertices.size()]);
+    require(halfedge.is_valid(), "fixture rail cycle must follow mesh edges");
+    mesh.data(mesh.edge_handle(halfedge)).boundary_rail_id = rail;
+  }
+}
+
+EdgeCollapser collapse_operator(Fixture& fixture)
+{
+  EdgeCollapser collapser(&fixture.original, &fixture.cage, fixture.source_tree.get(),
+    fixture.cage_tree.get(), fixture.source_grid.get());
+  collapser.set_flags(false, false, true, true, true, true);
+  return collapser;
+}
+
+void mixed_collapse_keeps_rail_vertex(bool rail_first, bool with_chord = false)
+{
+  Fixture fixture;
+  const auto v = add_collapse_octahedron(fixture.cage, rail_first);
+  const std::vector<VertexHandle> rail = with_chord ?
+    std::vector<VertexHandle>{v[0], v[1], v[2], v[3]} :
+    std::vector<VertexHandle>{v[0], v[1], v[2]};
+  label_rail_cycle(fixture.cage, rail, 3);
+
+  // An actual rail-edge collapse would be projected onto these remote
+  // source support patches at z = 20. A mixed collapse must ignore them.
+  add_triangle(fixture.original, Vec3d(20.0, 20.0, 20.0),
+    Vec3d(22.0, 20.0, 20.0), Vec3d(20.0, 22.0, 20.0));
+  for (EdgeHandle edge : fixture.original.edges())
+    if (fixture.original.is_boundary(edge))
+    {
+      fixture.original.data(edge).boundary_rail_id = 3;
+      fixture.original.data(edge).boundary_rail_outer_direction = Vec3d(0.0, 1.0, 0.0);
+    }
+  std::vector<Vec3d> before_points;
+  for (VertexHandle vertex : v)
+    before_points.push_back(fixture.cage.point(vertex));
+  const ExactPoint original_exact(before_points[0]);
+  fixture.cage.data(v[0]).ep = std::make_unique<ExactPoint>(original_exact);
+  fixture.initialize();
+  fixture.require_source_clear();
+  require(require_closed_rail_cycles(fixture.cage) == 1, "fixture must have one closed rail");
+
+  const auto edge = fixture.cage.edge_handle(fixture.cage.find_halfedge(v[4], v[0]));
+  const auto halfedge0 = fixture.cage.halfedge_handle(edge, 0);
+  require((fixture.cage.from_vertex_handle(halfedge0) == v[0]) == rail_first,
+    "fixture must exercise the requested halfedge-0 direction");
+  auto collapser = collapse_operator(fixture);
+  require(collapser.init(edge), "mixed edge must initialize even on a three-vertex rail");
+  require(collapser.has_fixed_rail_target(), "mixed edge must select a fixed rail target");
+  const Vec3d proposed(0.3, -0.2, 0.4);
+  const ExactPoint unrelated_exact(proposed);
+  require(collapser.constrained_target_point(proposed) == before_points[0],
+    "mixed target must be the original rail point, independent of proposal and source support");
+  require(collapser.target_point_is_valid(proposed, &unrelated_exact),
+    "validity checks must evaluate the fixed rail position");
+  require(collapser.try_collapse_edge(proposed, &unrelated_exact),
+    "valid mixed edge must collapse into its existing rail vertex");
+  require(collapser.get_collapsed_center() == v[0] && !fixture.cage.status(v[0]).deleted() &&
+    fixture.cage.status(v[4]).deleted(), "collapse must retain the rail handle and delete the ordinary handle");
+  require(fixture.cage.data(v[0]).ep && fixture.cage.data(v[0]).ep->exact() == original_exact.exact(),
+    "mixed collapse must preserve the rail's exact coordinate, ignoring the proposal's exact point");
+  for (VertexHandle vertex : fixture.cage.vertices())
+    require(fixture.cage.point(vertex) == before_points[vertex.idx()],
+      "mixed collapse must leave every surviving vertex at its original position");
+  for (size_t i = 0; i < rail.size(); ++i)
+  {
+    const auto halfedge = fixture.cage.find_halfedge(rail[i], rail[(i + 1) % rail.size()]);
+    require(fixture.cage.data(rail[i]).boundary_rail_id == 3 && halfedge.is_valid() &&
+      fixture.cage.data(fixture.cage.edge_handle(halfedge)).boundary_rail_id == 3,
+      "mixed collapse must preserve the rail ID and each original cycle connection");
+  }
+  if (with_chord)
+  {
+    const auto chord = fixture.cage.edge_handle(fixture.cage.find_halfedge(v[0], v[2]));
+    require(fixture.cage.data(chord).boundary_rail_id < 0,
+      "a same-rail chord must not become a rail edge after mixed collapse");
+  }
+  require(require_closed_rail_cycles(fixture.cage) == 1, "mixed collapse must preserve a closed rail cycle");
+  fixture.require_source_clear();
+  fixture.cage.garbage_collection();
+  require(fixture.cage.n_vertices() == 5 && fixture.cage.n_faces() == 6,
+    "mixed collapse must remove exactly one vertex and two faces");
+}
+
+void prohibited_rail_collapses_stay_rejected()
+{
+  for (int kind = 0; kind < 3; ++kind)
+  {
+    Fixture fixture;
+    const auto v = add_collapse_octahedron(fixture.cage);
+    EdgeHandle edge;
+    if (kind == 0)
+    {
+      label_rail_cycle(fixture.cage, {v[0], v[1], v[2]}, 3);
+      edge = fixture.cage.edge_handle(fixture.cage.find_halfedge(v[0], v[1]));
+    }
+    else if (kind == 1)
+    {
+      label_rail_cycle(fixture.cage, {v[0], v[1], v[2], v[3]}, 3);
+      edge = fixture.cage.edge_handle(fixture.cage.find_halfedge(v[0], v[2]));
+    }
+    else
+    {
+      label_rail_cycle(fixture.cage, {v[0], v[1], v[2]}, 3);
+      label_rail_cycle(fixture.cage, {v[5], v[3], v[4]}, 4);
+      edge = fixture.cage.edge_handle(fixture.cage.find_halfedge(v[0], v[4]));
+    }
+    fixture.initialize();
+    require(fixture.cage.is_collapse_ok(fixture.cage.halfedge_handle(edge, 0)),
+      "forbidden fixture edge must be otherwise topologically collapsible");
+    auto collapser = collapse_operator(fixture);
+    require(!collapser.init(edge),
+      "three-vertex rail edges, same-rail chords, and different-rail edges must remain forbidden");
+    require(require_closed_rail_cycles(fixture.cage) == (kind == 2 ? 2 : 1),
+      "rejected rail collapse must retain its original cycles");
+  }
+}
+
+void mixed_collapse_collision_is_rejected()
+{
+  Fixture fixture;
+  const auto v = add_collapse_octahedron(fixture.cage);
+  label_rail_cycle(fixture.cage, {v[0], v[1], v[2]}, 3);
+  // The fixed collapse creates triangle top/east/bottom in y = 0. This
+  // small source triangle is strictly inside the original octahedron.
+  const Vec3d obstacle(1.0 / 3.0, 0.0, 0.0);
+  add_triangle(fixture.original, obstacle + Vec3d(0.0, -0.01, 0.0),
+    obstacle + Vec3d(0.0, 0.01, 0.0), obstacle + Vec3d(0.01, 0.0, 0.0));
+  fixture.initialize();
+  fixture.require_source_clear();
+  const auto edge = fixture.cage.edge_handle(fixture.cage.find_halfedge(v[4], v[0]));
+  auto collapser = collapse_operator(fixture);
+  require(collapser.init(edge) && collapser.has_fixed_rail_target(),
+    "colliding mixed edge must first pass topology and rail checks");
+  require(!collapser.target_point_is_valid(fixture.cage.point(v[4]), nullptr) &&
+    !collapser.try_collapse_edge(fixture.cage.point(v[4]), nullptr),
+    "fixed rail placement must still reject source intersection");
+  require(!fixture.cage.status(v[0]).deleted() && !fixture.cage.status(v[4]).deleted() &&
+    require_closed_rail_cycles(fixture.cage) == 1, "collision rejection must preserve both endpoints and the rail");
+}
+
+void linear_solve_collapses_only_mixed_edges()
+{
+  Fixture fixture;
+  const auto v = add_collapse_octahedron(fixture.cage, false, true);
+  label_rail_cycle(fixture.cage, {v[0], v[1], v[2]}, 3);
+  label_rail_cycle(fixture.cage, {v[5], v[3], v[4]}, 4);
+  std::array<Vec3d, 6> before;
+  for (size_t i = 0; i < v.size(); ++i)
+    before[i] = fixture.cage.point(v[i]);
+  fixture.initialize();
+  // Every old vertex belongs to one of two three-vertex rails. Their edges
+  // and cross-rail connections are forbidden; only the face subdivision's
+  // ordinary vertex can collapse. The zero proxy has no unique solve.
+  auto& parameters = fixture.parameters.paramCageSimplifier.paramCollapse;
+  parameters.phase2PlacementStrategy = "linear_solve";
+  parameters.qemWeight = 0.0;
+  parameters.triangleQualityWeight = 0.0;
+  parameters.uniformityWeight = 0.0;
+  parameters.phase2LinearSolveCollisionReject = true;
+  parameters.lineSearchMaxIter = 0;
+  CollapseStage stage(&fixture.original, &fixture.cage, &parameters, fixture.source_tree.get(),
+    fixture.cage_tree.get(), fixture.source_grid.get(), 1.0);
+  require(stage.do_phase2_energy_simplification(6) == 1,
+    "linear Phase 2 must queue and commit a mixed edge even with a singular zero-weight proxy");
+  require(fixture.cage.n_vertices() == 6 && fixture.cage.n_faces() == 8 &&
+    require_closed_rail_cycles(fixture.cage) == 2,
+    "mixed-only Phase 2 must remove the free vertex while retaining both minimal rail cycles");
+  for (size_t i = 0; i < v.size(); ++i)
+    require(fixture.cage.point(v[i]) == before[i], "linear mixed collapse must keep all six rail positions exactly");
+  fixture.require_source_clear();
+}
+
 void require_clear_closed_mesh(SMeshT& mesh, SMeshT& original)
 {
   DFaceTree source_tree(original);
@@ -1033,6 +1246,12 @@ int main()
     {"concave flip cannot overlap replacement faces", overlapping_flip_rejected},
     {"source-intersecting flip is rejected", [] { intersecting_flip_rejected(true); }},
     {"self-intersecting flip is rejected", [] { intersecting_flip_rejected(false); }},
+    {"mixed collapse keeps the rail endpoint when halfedge 0 removes the ordinary vertex", [] { mixed_collapse_keeps_rail_vertex(false); }},
+    {"mixed collapse reverses halfedge 0 to retain the rail endpoint", [] { mixed_collapse_keeps_rail_vertex(true); }},
+    {"mixed collapse preserves rail cycles without promoting chords", [] { mixed_collapse_keeps_rail_vertex(true, true); }},
+    {"minimal rail edges, chords, and cross-rail edges remain forbidden", prohibited_rail_collapses_stay_rejected},
+    {"mixed collapse still rejects collisions at the fixed rail point", mixed_collapse_collision_is_rejected},
+    {"linear solve queues and commits mixed edges with fixed rail positions", linear_solve_collapses_only_mixed_edges},
     {"Voronoi smoothing includes neighbors' exterior faces", voronoi_target_uses_neighbor_faces},
     {"tangential relocation improves quality and fixes rail vertices", improving_relocation},
     {"symmetric smoothing is a no-op", symmetric_relocation_is_noop},

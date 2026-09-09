@@ -52,9 +52,11 @@ public:
   double local_Hausdorff_before_collapsing()const;
   double local_Hausdorff_after_collapsing(SMeshT* local_rm, const Vec3d& new_point, double& threshold)const;
   bool target_point_is_valid(const Vec3d& new_point, const ExactPoint* new_ep)const;
-  // Rail collapses are projected to the source-boundary ruled surface.  For
-  // a non-rail collapse this returns new_point unchanged.
+  // Mixed collapses keep the existing rail vertex fixed. Rail-edge collapses
+  // are projected to the source-boundary ruled surface; ordinary collapses
+  // return new_point unchanged.
   Vec3d constrained_target_point(const Vec3d& new_point)const;
+  bool has_fixed_rail_target()const { return rail_fixed_vertex.is_valid(); }
 
   void predict_smooth_target(const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target)const;
   void predict_tangential_smooth_target(const Vec3d& new_point, Vec3d& vertex_normal, Vec3d& target)const;
@@ -89,6 +91,7 @@ private:
 
   bool initialized;
   int rail_collapse_id = -1;
+  VertexHandle rail_fixed_vertex;
   VertexHandle rail_neighbor0;
   VertexHandle rail_neighbor1;
   Vec3d rail_segment0;

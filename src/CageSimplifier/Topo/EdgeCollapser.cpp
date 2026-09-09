@@ -20,6 +20,12 @@ bool EdgeCollapser::init(EdgeHandle _e)
   collapse_he = rm->halfedge_handle(_e, 0);
   collapse_he_opp = rm->halfedge_handle(_e, 1);
 
+  // A mixed collapse removes the ordinary vertex and keeps the rail vertex.
+  // Select that direction before the directed topology check.
+  if (rm->data(rm->from_vertex_handle(collapse_he)).boundary_rail_id >= 0 &&
+    rm->data(rm->to_vertex_handle(collapse_he)).boundary_rail_id < 0)
+    std::swap(collapse_he, collapse_he_opp);
+
   // can't collapse
   if (!rm->is_collapse_ok(collapse_he))
     return false;
@@ -39,6 +45,7 @@ void EdgeCollapser::clear()
   faces_in_links.clear();
   initialized = false;
   rail_collapse_id = -1;
+  rail_fixed_vertex = VertexHandle();
   rail_neighbor0 = VertexHandle();
   rail_neighbor1 = VertexHandle();
   rail_support_patches.clear();
@@ -53,9 +60,42 @@ bool EdgeCollapser::initialize_rail_constraint(EdgeHandle edge)
   const bool from_is_rail = from_rail >= 0;
   const bool to_is_rail = to_rail >= 0;
 
-  // A rail vertex may never disappear into an unconstrained vertex.
+  // Absorb an ordinary vertex at the unchanged rail endpoint. Unlike a rail
+  // edge collapse, this preserves the rail's vertex count, including a
+  // three-vertex rail. Keep exactly its two existing labeled connections.
   if (from_is_rail != to_is_rail)
-    return false;
+  {
+    if (from_is_rail || rm->data(edge).boundary_rail_id >= 0)
+      return false;
+    for (HalfedgeHandle outgoing : rm->voh_range(from))
+      if (rm->data(rm->edge_handle(outgoing)).boundary_rail_id >= 0)
+        return false;
+
+    size_t rail_degree = 0;
+    for (HalfedgeHandle outgoing : rm->voh_range(to))
+    {
+      const int incident_rail =
+        rm->data(rm->edge_handle(outgoing)).boundary_rail_id;
+      if (incident_rail < 0)
+        continue;
+      const VertexHandle neighbor = rm->to_vertex_handle(outgoing);
+      if (incident_rail != to_rail ||
+        rm->data(neighbor).boundary_rail_id != to_rail || rail_degree >= 2)
+        return false;
+      if (rail_degree == 0)
+        rail_neighbor0 = neighbor;
+      else
+        rail_neighbor1 = neighbor;
+      rail_degree++;
+    }
+    if (rail_degree != 2 || rail_neighbor0 == rail_neighbor1)
+      return false;
+
+    rail_collapse_id = to_rail;
+    rail_fixed_vertex = to;
+    rail_segment0 = rail_segment1 = rm->point(to);
+    return true;
+  }
   if (!from_is_rail)
     return rm->data(edge).boundary_rail_id < 0;
 
@@ -166,6 +206,8 @@ Vec3d EdgeCollapser::constrained_target_point(const Vec3d& new_point)const
   ASSERT(initialized, "edge collapser not initialized.");
   if (rail_collapse_id < 0)
     return new_point;
+  if (has_fixed_rail_target())
+    return rail_segment0;
 
   Vec3d source_guided_point;
   if (project_to_source_rail(new_point, source_guided_point))
@@ -207,8 +249,9 @@ bool EdgeCollapser::try_collapse_edge(const Vec3d& new_point, const ExactPoint* 
   const Vec3d effective_point = constrained_target_point(new_point);
   const double point_tolerance = rail_collapse_id >= 0 ? std::max(
     (rail_segment1 - rail_segment0).length() * 1e-12, 1e-15) : 1e-15;
-  const ExactPoint* effective_ep =
-    (effective_point - new_point).length() <= point_tolerance ? new_ep : nullptr;
+  const ExactPoint* effective_ep = has_fixed_rail_target() ?
+    rm->data(rail_fixed_vertex).ep.get() :
+    ((effective_point - new_point).length() <= point_tolerance ? new_ep : nullptr);
 
   // check and backup before collapsing
   if (f_check_wrinkle && collapse_would_cause_wrinkle(effective_point))
@@ -543,8 +586,9 @@ bool EdgeCollapser::target_point_is_valid(const Vec3d& new_point, const ExactPoi
   ASSERT(initialized, "collapser not initialized.");
 
   const Vec3d effective_point = constrained_target_point(new_point);
-  const ExactPoint* effective_ep =
-    (effective_point - new_point).length() <= 1e-15 ? new_ep : nullptr;
+  const ExactPoint* effective_ep = has_fixed_rail_target() ?
+    rm->data(rail_fixed_vertex).ep.get() :
+    ((effective_point - new_point).length() <= 1e-15 ? new_ep : nullptr);
 
   if (f_check_wrinkle && collapse_would_cause_wrinkle(effective_point))
     return false;
@@ -619,6 +663,8 @@ void EdgeCollapser::generate_links()
 
 VertexHandle EdgeCollapser::find_closer_end_point()const
 {
+  if (has_fixed_rail_target())
+    return rail_fixed_vertex;
   if (rm->data(rm->to_vertex_handle(collapse_he)).out_error <
     rm->data(rm->from_vertex_handle(collapse_he)).out_error)
     return rm->to_vertex_handle(collapse_he);
