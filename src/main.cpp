@@ -188,155 +188,6 @@ void log_triangle_quality_stats(Cage::SM::SMeshT& mesh, const std::string& label
     stats.face_count);
 }
 
-struct BoundaryRailExport
-{
-  size_t rail_count = 0;
-  size_t vertex_count = 0;
-  size_t edge_count = 0;
-};
-
-// Write the boundary rails of a finished cage into their own files so that the
-// rails can be visualized separately from the cage surface.
-//   <cage>_rails.obj : rail vertices as OBJ points and rail edges as OBJ line
-//                      elements, one object/group per rail id.
-//   <cage>_rails.txt : the same rails listed with the 1-based vertex indices of
-//                      the cage OBJ, for cross referencing inside the cage.
-BoundaryRailExport write_boundary_rail_files(
-  Cage::SM::SMeshT& mesh,
-  const bf::path& rail_obj_path,
-  const bf::path& rail_txt_path,
-  const std::string& cage_obj_name)
-{
-  typedef std::pair<Cage::SM::VertexHandle, Cage::SM::VertexHandle> RailEdge;
-
-  BoundaryRailExport summary;
-  std::map<int, std::vector<Cage::SM::VertexHandle>> rail_vertices;
-  std::map<int, std::vector<RailEdge>> rail_edges;
-
-  for (Cage::SM::VertexHandle vh : mesh.vertices())
-  {
-    const int rail_id = mesh.data(vh).boundary_rail_id;
-    if (rail_id >= 0)
-      rail_vertices[rail_id].push_back(vh);
-  }
-  for (Cage::SM::EdgeHandle eh : mesh.edges())
-  {
-    const int rail_id = mesh.data(eh).boundary_rail_id;
-    if (rail_id < 0)
-      continue;
-    const Cage::SM::HalfedgeHandle hh = mesh.halfedge_handle(eh, 0);
-    rail_edges[rail_id].push_back(
-      RailEdge(mesh.from_vertex_handle(hh), mesh.to_vertex_handle(hh)));
-  }
-
-  if (rail_vertices.empty() && rail_edges.empty())
-    return summary;
-
-  // Local 1-based numbering of the rail OBJ, keyed by cage vertex index.  Edge
-  // endpoints are registered too so that an edge is never dropped even if one
-  // of its vertices lost its own rail id.
-  std::map<int, size_t> local_index;
-  std::vector<Cage::SM::VertexHandle> ordered_vertices;
-  const auto register_vertex = [&](Cage::SM::VertexHandle vh)
-  {
-    if (local_index.emplace(vh.idx(), ordered_vertices.size() + 1).second)
-      ordered_vertices.push_back(vh);
-  };
-  for (const auto& entry : rail_vertices)
-  {
-    for (Cage::SM::VertexHandle vh : entry.second)
-      register_vertex(vh);
-  }
-  for (const auto& entry : rail_edges)
-  {
-    for (const RailEdge& edge : entry.second)
-    {
-      register_vertex(edge.first);
-      register_vertex(edge.second);
-    }
-  }
-
-  std::ofstream rail_obj(rail_obj_path.string().c_str());
-  if (!rail_obj.is_open())
-  {
-    Logger::user_logger->warn(
-      "fail to open boundary rail OBJ for writing: {}", rail_obj_path.string());
-    return summary;
-  }
-  rail_obj << std::setprecision(15);
-  rail_obj << "# boundary rails extracted from " << cage_obj_name << "\n";
-  rail_obj << "# rail edges are OBJ line elements, rail vertices are OBJ points\n";
-  rail_obj << "# vertices keep the order of " << rail_txt_path.filename().string() << "\n";
-  for (Cage::SM::VertexHandle vh : ordered_vertices)
-  {
-    const Cage::SM::Vec3d& p = mesh.point(vh);
-    rail_obj << "v " << p[0] << " " << p[1] << " " << p[2] << "\n";
-  }
-  for (const auto& entry : rail_edges)
-  {
-    const int rail_id = entry.first;
-    rail_obj << "o rail_" << rail_id << "\n";
-    rail_obj << "g rail_" << rail_id << "\n";
-    for (const RailEdge& edge : entry.second)
-    {
-      rail_obj
-        << "l " << local_index[edge.first.idx()]
-        << " " << local_index[edge.second.idx()] << "\n";
-    }
-    const auto vertex_it = rail_vertices.find(rail_id);
-    if (vertex_it != rail_vertices.end())
-    {
-      for (Cage::SM::VertexHandle vh : vertex_it->second)
-        rail_obj << "p " << local_index[vh.idx()] << "\n";
-    }
-  }
-  rail_obj.close();
-
-  std::ofstream rail_txt(rail_txt_path.string().c_str());
-  if (!rail_txt.is_open())
-  {
-    Logger::user_logger->warn(
-      "fail to open boundary rail index file for writing: {}", rail_txt_path.string());
-    return summary;
-  }
-  rail_txt << std::setprecision(15);
-  rail_txt << "# boundary rails extracted from " << cage_obj_name << "\n";
-  rail_txt << "# cage_vertex is the 1-based OBJ vertex index inside " << cage_obj_name << "\n";
-  rail_txt << "# V <rail_id> <cage_vertex> <x> <y> <z>\n";
-  rail_txt << "# E <rail_id> <cage_vertex_a> <cage_vertex_b>\n";
-  for (const auto& entry : rail_vertices)
-  {
-    for (Cage::SM::VertexHandle vh : entry.second)
-    {
-      const Cage::SM::Vec3d& p = mesh.point(vh);
-      rail_txt
-        << "V " << entry.first << " " << (vh.idx() + 1)
-        << " " << p[0] << " " << p[1] << " " << p[2] << "\n";
-    }
-    summary.vertex_count += entry.second.size();
-  }
-  for (const auto& entry : rail_edges)
-  {
-    for (const RailEdge& edge : entry.second)
-    {
-      rail_txt
-        << "E " << entry.first
-        << " " << (edge.first.idx() + 1)
-        << " " << (edge.second.idx() + 1) << "\n";
-    }
-    summary.edge_count += entry.second.size();
-  }
-  rail_txt.close();
-
-  std::set<int> rail_ids;
-  for (const auto& entry : rail_vertices)
-    rail_ids.insert(entry.first);
-  for (const auto& entry : rail_edges)
-    rail_ids.insert(entry.first);
-  summary.rail_count = rail_ids.size();
-  return summary;
-}
-
 std::string sanitize_path_component(std::string value)
 {
   if (value.empty())
@@ -543,7 +394,7 @@ void write_boundary_rail_benchmark_meshes(
   bf::path edge_rail_txt = file_out_dir;
   edge_rail_txt.append(file_name + "_edge_rails.txt");
   write_boundary_rail_files(
-    edge_cage, edge_rail_obj, edge_rail_txt,
+    edge_cage, edge_rail_obj.string(), edge_rail_txt.string(),
     edge_cage_path.filename().string());
 
   bf::path vertex_rail_obj = file_out_dir;
@@ -551,7 +402,7 @@ void write_boundary_rail_benchmark_meshes(
   bf::path vertex_rail_txt = file_out_dir;
   vertex_rail_txt.append(file_name + "_vertex_rails.txt");
   write_boundary_rail_files(
-    vertex_cage, vertex_rail_obj, vertex_rail_txt,
+    vertex_cage, vertex_rail_obj.string(), vertex_rail_txt.string(),
     vertex_cage_path.filename().string());
 }
 
@@ -718,14 +569,17 @@ void generate_cages(
       mesh_out_file.append(file_name + "_cage_" + std::to_string(it) + ".obj");
       OpenMesh::IO::write_mesh(*cage_generator.cage, mesh_out_file.string(), OpenMesh::IO::Options::Default, 15);
 
-      // export the boundary rails on their own for separate visualization.
+      // export the final boundary rails on their own for separate
+      // visualization; the rails Phase 1 handed to Phase 2 were already written
+      // as <file>_cage_<label>_initial_rails.obj/.txt.
       bf::path rail_obj_file = file_out_dir;
       rail_obj_file.append(file_name + "_cage_" + std::to_string(it) + "_rails.obj");
       bf::path rail_txt_file = file_out_dir;
       rail_txt_file.append(file_name + "_cage_" + std::to_string(it) + "_rails.txt");
-      const BoundaryRailExport rail_export = write_boundary_rail_files(
-        *cage_generator.cage, rail_obj_file, rail_txt_file,
-        mesh_out_file.filename().string());
+      const Cage::CageInit::BoundaryRailExport rail_export =
+        write_boundary_rail_files(
+          *cage_generator.cage, rail_obj_file.string(), rail_txt_file.string(),
+          mesh_out_file.filename().string());
       if (rail_export.rail_count > 0)
       {
         Logger::user_logger->info(

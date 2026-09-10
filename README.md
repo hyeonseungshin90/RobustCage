@@ -115,6 +115,20 @@ The default mode retains its existing `__collapse_hausdorff__flip_<mode>__reloca
 
 If that directory already exists, the program appends `_001`, `_002`, and so on to avoid overwriting previous results.
 
+With `+boundary_rail`, the rails are exported next to each cage OBJ in two
+states:
+
+* `input_name_cage_<label>_initial_rails.obj` / `.txt`: the rails as Phase 1
+  built them, written before Phase 2 starts.
+* `input_name_cage_<label>_rails.obj` / `.txt`: the rails carried by the final
+  cage.
+
+Each OBJ holds the rail vertices as OBJ points and the rail edges as OBJ line
+elements, one object/group per rail id. Each TXT lists the same rails with the
+1-based vertex indices of the mesh named in its header: the final rails index
+`input_name_cage_<label>.obj`, while the initial rails index the Phase 1 cage,
+so the two index spaces differ. Rail ids are shared between both states.
+
 The focused quality regression tests can be built and run with:
 
 ```powershell

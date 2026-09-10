@@ -1,6 +1,7 @@
 #pragma once
 #include "CageInitializer/CageInitializer.hh"
 #include "CageInitializer/BoundaryRailBuilder.hh"
+#include "CageInitializer/BoundaryRailExporter.hh"
 #include "CageSimplifier/CageSimplifier.hh"
 
 namespace Cage
@@ -31,6 +32,7 @@ public:
 public:
   void stageInitialize();
   void stageBuildBoundaryRails();
+  void stageExportInitialBoundaryRails();
   void stageSimplify();
 
   void generate();
