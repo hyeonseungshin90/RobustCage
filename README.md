@@ -6,6 +6,8 @@ This is the reference implementation of "Robust Coarse Cage Construction with Sm
 
 * Boost 1.79 (The only library you need to install on your computer)
 * Other libraries are contained src/ThirdPartyLib
+* The bundled Geometry Central v1.1.0 supplies intrinsic flip geodesics for
+  initial boundary-rail construction.
 
 ## How to build
 
@@ -58,8 +60,9 @@ the loop ends; no collapse or flip follows it.
 Collapse placement and its line-search energy use QEM and the triangle-quality
 surrogate. Uniformity contributes only to collapse queue priority: the global
 mode adds `uniformityWeight * (edge_length / target_length)^2` to the score.
-Flips prioritize improvement in the minimum quality of their two triangles and reject
-intersections. Relocation combines a tangential smoothing target `t`, computed
+Flips prioritize improvement in the minimum quality of their two triangles
+and reject intersections, as described below.
+Relocation combines a tangential smoothing target `t`, computed
 from neighboring vertices' mixed Voronoi areas (Botsch-Kobbelt area-equalizing
 smoothing), with the source surface's closest point `s` to the current vertex.
 Both targets remain fixed during that vertex's line search. The target is their
@@ -78,6 +81,55 @@ collapse validity checks. Actual rail-edge collapses still project their new
 position onto the source-boundary support half-strips. Rail edges cannot flip.
 Rail vertices and actual mesh boundary vertices remain fixed during relocation.
 Flips and relocation preserve vertex count.
+
+The production linear-solve flip stage uses triangle quality only for its
+priority and improvement test: every accepted flip requires a finite increase
+greater than `1e-12` in the minimum quality of its two triangles. It neither
+prioritizes removing rail chords nor forbids creating them. All candidates
+retain the existing topology, valence, degeneracy and source/cage intersection
+checks; there is no additional flip quality floor. Changed neighborhoods are
+requeued and candidates are rechecked before acceptance. Flips preserve rail
+labels, rail vertex positions, rail edges and rail perimeter, but may change
+the cage surface. Actual rail-edge collapse, its projection and line search
+remain unchanged.
+
+The chord-aware implementation remains available through the C++ call
+`do_quality_flip(true)`; the production call uses the default `false`.
+There is no CLI or JSON switch for this choice. In the optional mode, a rail
+chord is an unlabeled edge whose endpoints share the same nonnegative rail ID.
+Chord-to-non-chord flips take priority and may have equal or lower minimum
+triangle quality, non-chord-to-chord flips are forbidden, and all other flips
+require the usual quality improvement. Edges joining different rail IDs are
+not classified as chords. The same validity checks apply in both modes.
+
+Initial boundary rails are constructed before Phase 2 with
+`Dijkstra -> intrinsic flip geodesics -> actual mesh splitting`.
+After inserting the source-boundary anchors, the builder finds closed, simple
+edge paths with Dijkstra and its existing path validation. Geometry Central
+then shortens the rail network intrinsically, keeping every anchor fixed.
+The shortened paths are traced onto the cage surface; crossing points become
+actual cage vertices, and crossed edges and faces are split so each rail is a
+chain of real mesh edges usable by the existing collapse implementation.
+Embedding keeps existing vertex positions and the cage surface fixed, but
+can add vertices and triangles. It does not replace a path across folded faces
+with a straight 3D chord.
+
+This construction runs for both `boundary_rail` and `boundary_rail_vertex`,
+including the independent builds in `boundary_rail_compare`, without a new
+command-line option. If intrinsic shortening or embedding fails, the builder
+keeps the cage and rails from the completed Dijkstra construction and records
+a warning and failure statistics; that result has not received the geodesic
+update. Flip geodesics seek locally shortest paths, not a global optimum, and
+fixed anchors can leave a path unchanged. This step is performed only during
+initial rail construction. Later collapses do not preserve a geodesic
+guarantee or trigger another intrinsic shortening pass.
+
+The triangle-based `update_boundary_rails()` implementation and its tests are
+retained for explicit future use, but the generation pipeline does not call it.
+That standalone helper repeatedly replaces a labeled path `A-B-C` with `A-C`
+across a cage triangle and releases `B`, preserving a simple loop of at least
+three vertices. It changes labels only and has no source-distance or opening-size
+error bound.
 
 The final relocation stage performs up to 20 full-mesh sweeps, recomputing the
 Voronoi areas, normals and source closest points from current positions. A sweep
@@ -118,21 +170,22 @@ If that directory already exists, the program appends `_001`, `_002`, and so on 
 With `+boundary_rail`, the rails are exported next to each cage OBJ in two
 states:
 
-* `input_name_cage_<label>_initial_rails.obj` / `.txt`: the rails as Phase 1
-  built them, written before Phase 2 starts.
+* `input_name_cage_<label>_initial_rails.obj` / `.txt`: the constructed rails,
+  including successful geodesic embedding, written before Phase 2 starts.
 * `input_name_cage_<label>_rails.obj` / `.txt`: the rails carried by the final
   cage.
 
 Each OBJ holds the rail vertices as OBJ points and the rail edges as OBJ line
 elements, one object/group per rail id. Each TXT lists the same rails with the
 1-based vertex indices of the mesh named in its header: the final rails index
-`input_name_cage_<label>.obj`, while the initial rails index the Phase 1 cage,
-so the two index spaces differ. Rail ids are shared between both states.
+`input_name_cage_<label>.obj`, while the initial rails index the cage after
+rail construction and before Phase 2, so the two index spaces differ.
+Rail ids are shared between both states.
 
-The focused quality regression tests can be built and run with:
+The quality and boundary-rail geodesic regression tests can be built and run with:
 
 ```powershell
 cmake -S src -B src/build -DCAGE_BUILD_TESTS=ON "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
-cmake --build src/build --config Release --target exeCageGenerator cageQualityPolishTests
+cmake --build src/build --config Release --target exeCageGenerator cageQualityPolishTests cageBoundaryRailGeodesicTests
 ctest --test-dir src/build -C Release --output-on-failure
 ```

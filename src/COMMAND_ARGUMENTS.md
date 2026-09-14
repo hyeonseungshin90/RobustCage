@@ -44,7 +44,7 @@ config.json
 |---|---|---|
 | `default` | 전체 | 기존 Phase 1 절차를 그대로 사용합니다. 모든 tetrahedron을 1→12 subdivision하고 non-adjacent tetrahedron을 제거하는 과정을 2회 수행합니다. |
 | `phase1_topological_offset` | phase1 | Zint et al.의 simplicial embedding과 offset insertion을 수행한 뒤 기존 `retrieveCage()`로 boundary를 추출합니다. `topological_offset`도 같은 별칭으로 사용할 수 있습니다. |
-| `boundary_rail` | phase1.5/phase2 | Build source-boundary anchors and closed cage edge loops, then constrain rail collapses to the ruled half-strips defined by source boundary tangents and outward co-normals. Must be combined with one of the four energy Phase 2 presets. |
+| `boundary_rail` | phase1.5/phase2 | Source-boundary anchor를 삽입하고 Dijkstra로 초기 loop를 구성한 뒤, anchor를 고정한 intrinsic flip geodesics와 실제 mesh split으로 rail 경로를 단축합니다. 이후 rail collapse는 source boundary tangent와 outward co-normal의 ruled half-strip으로 제약합니다. 네 가지 energy Phase 2 preset 중 하나와 조합해야 합니다. |
 | `boundary_rail_vertex` | phase1.5/phase2 | `boundary_rail`과 동일하지만 ray를 boundary vertex에서 인접한 두 edge co-normal의 bisector 방향으로 쏩니다. 비교 실험용이며 source-edge support에는 평균 전의 edge co-normal을 저장합니다. Energy Phase 2 preset과 조합해야 합니다. |
 | `boundary_rail_compare` | phase1/benchmark | Phase 1을 한 번만 실행한 뒤 동일 initial cage와 source의 독립 복사본에서 edge-midpoint 방식과 vertex-bisector 방식을 각각 실행합니다. simplification은 생략하고 run-local CSV와 두 결과 cage/rail을 기록합니다. |
 | `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; repeat linear-solve collapses with Armijo backtracking and quality-priority flips, then run final relocation sweeps combining Voronoi tangential smoothing with source-surface attraction |
@@ -58,10 +58,11 @@ config.json
 마지막에 relocation 단계를 한 번 실행합니다.
 Flip 이후 collapse 후보 큐를 다시 만들어 새롭게 가능한 collapse를
 재시도하며, global target edge length는 최초 값으로 유지합니다. 목표 정점 수에
-도달하면 collapse를 생략하고 flip은 계속할 수 있습니다. Collapse와 flip 모두
-수락된 후보가 없으면 반복을 조기 종료합니다. 반복 종료 후 relocation을 수행하며,
+도달하면 collapse를 생략하고 flip은 계속할 수 있습니다. Collapse와 flip이
+모두 없으면 반복을 조기 종료합니다. 반복 종료 후 relocation을 수행하며,
 그 뒤에는 collapse나 flip을 다시 실행하지 않습니다. Flip은 두 삼각형의 최소
-quality 증가량이 큰 순서로 수행하고, 교차가 생기는 후보는 reject합니다.
+quality 증가량이 큰 순서로 수행하며, 기본 실행에서는 rail chord를 고려하지 않습니다.
+교차가 생기는 후보는 reject합니다.
 Collapse 위치의 linear solve와 line-search energy는 QEM과 triangle-quality
 surrogate를 사용하며 uniformity는 제외합니다. Uniformity는 collapse 우선순위에만
 적용하며, `global` 모드에서는 `uniformityWeight * (edge_length / target_length)^2`를
@@ -87,6 +88,48 @@ Voronoi 면적·normal·원본 최근접점을 재계산합니다. 한 sweep에�
 half-strip에 새 위치를 투영합니다.
 Rail edge의 flip은 금지되며, rail 정점과 실제 mesh boundary 정점은 relocation
 중 고정됩니다. Flip과 relocation은 정점 수를 유지합니다.
+
+기본 linear-solve flip의 우선순위와 개선 여부는 triangle quality만 사용합니다.
+모든 flip은 두 삼각형의 유한한 최소 quality 증가량이 `1e-12`보다 클 때만 허용합니다.
+Rail chord 제거를 우선하지 않으며, chord가 새로 생긴다는 이유로 거부하지도 않습니다.
+모든 후보에 기존 위상·valence·퇴화·source/cage 교차 검사를 적용하며,
+별도의 flip quality 하한은 추가하지 않습니다. 갱신된 주변 후보는 다시 큐에 넣고
+수락 직전에 재검사합니다. Flip은 rail 라벨·정점 위치·edge·둘레를 보존하지만
+cage 표면은 바뀔 수 있습니다.
+실제 rail edge collapse와 기존 projection 및 line search는 유지합니다.
+
+Chord를 고려하는 구현은 C++에서 `do_quality_flip(true)`를 호출하면 다시 사용할 수
+있도록 남겨 두었습니다. 생성 파이프라인은 기본 인수 `false`를 사용하며, 이 선택에
+대한 CLI나 JSON 옵션은 없습니다. 선택적으로 활성화하면 양 끝점이 같은 비음수
+rail ID를 가진 unlabeled edge를 chord로 분류하고, chord→non-chord flip을 우선하며
+quality가 같거나 낮아져도 허용합니다. Non-chord→chord flip은 금지하고 나머지는
+기존 quality 개선 조건을 적용합니다. 서로 다른 rail ID를 잇는 edge는 chord가
+아닙니다. 두 모드 모두 동일한 유효성 검사를 통과해야 합니다.
+
+초기 rail 구성은 Phase 2 이전에 `Dijkstra → intrinsic flip geodesics → 실제 mesh split`
+순서로 수행합니다. Source-boundary anchor를 cage에 삽입한 뒤 기존 Dijkstra 경로
+탐색과 검증으로 단일 폐곡선들을 구성합니다. 이어서 Geometry Central의 flip geodesics로
+전체 rail network를 단축하며 모든 anchor를 고정합니다. 단축된 경로를 원래 cage 표면에
+trace하고, edge 교차점에 실제 정점을 삽입하고 주변 edge와 face를 분할하여 경로를
+실제 rail edge들의 연결로 만듭니다. 이때 기존 정점 위치와 cage 표면은 유지되지만
+정점과 삼각형 수는 증가할 수 있습니다. 접힌 면을 가로지르는 경로를 양 끝점 사이의
+직선 3D edge로 대체하지 않습니다. 이후에는 기존 rail edge collapse를 적용합니다.
+
+이 과정은 새 CLI 옵션 없이 `boundary_rail`과 `boundary_rail_vertex` 모두에 적용하며,
+`boundary_rail_compare`의 두 독립 구성에도 적용합니다. Intrinsic 단축이나 실제 mesh
+반영에 실패하면 Dijkstra 구성을 마친 시점의 cage와 rail을 유지하고 warning과 실패
+통계를 기록합니다. 이 경우 결과에는 geodesic 갱신이 적용되지 않은 것입니다.
+Flip geodesics는 locally shortest path를 구하며 전역 최단 경로를 보장하지 않습니다.
+고정된 anchor 때문에 경로가 바뀌지 않을 수도 있습니다. 초기 rail 구성에서만 실행하며,
+Phase 2 중 rail을 다시 geodesic으로 단축하지 않습니다. 이후 collapse가 초기 경로의
+geodesic 성질을 유지한다는 보장도 없습니다.
+
+삼각형 단위 `update_boundary_rails()` 구현과 테스트는 나중에 명시적으로 사용할 수
+있도록 남겨 두지만, cage 생성 파이프라인에서는 호출하지 않습니다.
+이 독립 함수는 삼각형의 rail 경로 `A-B-C`를 `A-C`로 반복 교체하고 `B`의 라벨을
+해제하며, 최소 3정점의 단일 폐곡선을 보존합니다. 라벨만 변경하는 함수이고
+source 거리나 opening 크기에 대한 별도 오차 제한은 없습니다.
+
 이 에너지는 전체 Hausdorff distance를 최소화하거나 그 개선을 보장하지 않습니다.
 교차 검사는 후보 위치 기준이며, 이동 경로 전체의 CCD나 양의 표면 간격을
 보장하는 검사는 아닙니다.

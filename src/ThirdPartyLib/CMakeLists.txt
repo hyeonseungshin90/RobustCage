@@ -4,6 +4,16 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/spdlog)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/OpenMesh)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/autodiff)
 
+# Flip geodesics uses the same vendored Eigen as the cage solver. No configure-
+# time network download or optional SuiteSparse installation is required.
+if(NOT TARGET Eigen3::Eigen)
+  add_library(Eigen3::Eigen INTERFACE IMPORTED)
+  set_target_properties(Eigen3::Eigen PROPERTIES
+    INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}")
+endif()
+set(SUITESPARSE OFF CACHE BOOL "Enable SuiteSparse in Geometry Central")
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/geometry-central)
+
 set(AUTODIFF_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR} PARENT_SCOPE)
 set(EIGEN3_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/Eigen PARENT_SCOPE)
 set(OpenMesh_INCLUDE_DIR ${OPENMESH_INCLUDE_DIR} PARENT_SCOPE)

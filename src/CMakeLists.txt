@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.9)
+cmake_minimum_required(VERSION 3.14)
 # Add .cmake files in directory 'cmake'
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 cmake_policy(SET CMP0074 NEW)
@@ -76,6 +76,7 @@ target_link_libraries(lib${PROJECT_NAME} PUBLIC
     spdlog::spdlog
     autodiff::autodiff
     indirectPredicates
+    geometry-central
     ${OpenMesh_LIBRARIES}
     CGAL::CGAL
     OpenMP::OpenMP_CXX
@@ -121,4 +122,15 @@ if(CAGE_BUILD_TESTS)
     endif()
     add_test(NAME quality_polish COMMAND cageQualityPolishTests)
     set_tests_properties(quality_polish PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1")
+    add_executable(cageBoundaryRailGeodesicTests tests/BoundaryRailGeodesicTests.cpp)
+    target_link_libraries(cageBoundaryRailGeodesicTests PRIVATE lib${PROJECT_NAME} ${Boost_LIBRARIES})
+    if(WIN32)
+        add_custom_command(TARGET cageBoundaryRailGeodesicTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/ThirdPartyLib/gmp/lib/libgmp-10.dll"
+                "${CMAKE_CURRENT_SOURCE_DIR}/ThirdPartyLib/mpfr/lib/libmpfr-4.dll"
+                "$<TARGET_FILE_DIR:cageBoundaryRailGeodesicTests>")
+    endif()
+    add_test(NAME boundary_rail_geodesics COMMAND cageBoundaryRailGeodesicTests)
+    set_tests_properties(boundary_rail_geodesics PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1")
 endif()

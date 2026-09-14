@@ -696,7 +696,7 @@ bool validate_cycle(
 bool construct_rail(
   SMeshT& mesh, const std::vector<VertexHandle>& input_anchors,
   const std::unordered_set<int>& all_anchor_vertices,
-  int rail_id)
+  int rail_id, BoundaryRailLoop& result)
 {
   std::vector<VertexHandle> anchors;
   anchors.reserve(input_anchors.size());
@@ -802,6 +802,9 @@ bool construct_rail(
     mesh.data(vh).boundary_rail_id = rail_id;
   for (EdgeHandle eh : cycle_edges)
     mesh.data(eh).boundary_rail_id = rail_id;
+  result.railId = rail_id;
+  result.vertices = std::move(cycle_vertices);
+  result.anchors = std::move(anchors);
   return true;
 }
 }// namespace
@@ -1255,13 +1258,16 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
   }
 
   size_t built_rails = 0;
+  std::vector<BoundaryRailLoop> rail_loops;
   for (BoundaryLoop& loop : valid_loops)
   {
     const int rail_id = static_cast<int>(built_rails);
+    BoundaryRailLoop rail_loop;
     if (construct_rail(
         *cage, loop.anchors, all_anchor_vertices,
-        rail_id))
+        rail_id, rail_loop))
     {
+      rail_loops.push_back(std::move(rail_loop));
       // Give the source boundary component the same id as its cage rail and
       // retain the per-edge outward co-normal.  Together with the boundary
       // edge tangent this defines the half-strip
@@ -1284,6 +1290,27 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
       Logger::user_logger->warn(
         "boundary rail construction could not form a simple closed cage edge loop for source boundary component {}.",
         built_rails);
+    }
+  }
+
+  // Keep all rails in one network so shortening respects the other loops.
+  // The embedding routine commits only after checking the split mesh and
+  // ordered closed rails; failure leaves these valid Dijkstra labels intact.
+  if (!rail_loops.empty())
+  {
+    if (refine_boundary_rails_with_flip_geodesics(*cage, rail_loops, stats.geodesic))
+    {
+      Logger::user_logger->info(
+        "boundary rail flip geodesics: refined {} loops, {} intrinsic flips, {} shorten iterations, length {} -> {}, inserted {} cage vertices.",
+        rail_loops.size(), stats.geodesic.intrinsicFlipCount,
+        stats.geodesic.shortenIterationCount, stats.geodesic.lengthBefore,
+        stats.geodesic.lengthAfter, stats.geodesic.insertedVertexCount);
+    }
+    else
+    {
+      Logger::user_logger->warn(
+        "boundary rail flip geodesics was not applied; keeping the Dijkstra rails and cage unchanged: {}.",
+        stats.geodesic.failureReason);
     }
   }
 

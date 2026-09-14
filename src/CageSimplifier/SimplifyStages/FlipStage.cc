@@ -273,7 +273,7 @@ void FlipStage::do_flip()
   Logger::user_logger->info("flipped {} edges.", flipped_edge_num);
 }
 
-size_t FlipStage::do_quality_flip()
+size_t FlipStage::do_quality_flip(bool prioritize_rail_chords)
 {
   // Flips are discrete changes of connectivity: there is no line-search
   // parameter. EdgeFlipper rejects a candidate if its exact intersection
@@ -290,22 +290,55 @@ size_t FlipStage::do_quality_flip()
     return eh.is_valid() && static_cast<size_t>(eh.idx()) < rm->n_edges() &&
       !rm->status(eh).deleted();
   };
+  const auto evaluate_candidate = [&](EdgeHandle eh, double& reward,
+    bool& removes_rail_chord)
+  {
+    reward = calc_flip_quality_delta(eh);
+    removes_rail_chord = false;
+    if (!std::isfinite(reward))
+      return false;
+    if (!prioritize_rail_chords)
+      return reward > quality_epsilon;
+
+    // EdgeFlipper::init has already excluded labeled rail edges. Classify
+    // both diagonals without changing any vertex position or rail label.
+    const HalfedgeHandle heh = rm->halfedge_handle(eh, 0);
+    const HalfedgeHandle opposite = rm->opposite_halfedge_handle(heh);
+    const auto same_rail = [&](VertexHandle first, VertexHandle second)
+    {
+      const int id = rm->data(first).boundary_rail_id;
+      return id >= 0 && rm->data(second).boundary_rail_id == id;
+    };
+    const bool old_chord = same_rail(
+      rm->from_vertex_handle(heh), rm->to_vertex_handle(heh));
+    const bool new_chord = same_rail(
+      rm->opposite_vh(heh), rm->opposite_vh(opposite));
+    if (!old_chord && new_chord)
+      return false;
+
+    removes_rail_chord = old_chord && !new_chord;
+    // A strict chord reduction takes precedence over triangle quality. All
+    // other flips retain the existing positive quality-improvement test.
+    return removes_rail_chord || reward > quality_epsilon;
+  };
   const auto enqueue = [&](EdgeHandle eh)
   {
     if (!valid_edge(eh) || !edge_flipper.init(eh) ||
       edge_flipper.flip_will_cause_over_valence(param->maxValence))
       return;
 
-    // Do the inexpensive quality test before any intersection queries.
-    const double reward = calc_flip_quality_delta(eh);
-    if (std::isfinite(reward) && reward > quality_epsilon)
-      edges_to_flip.emplace(eh, update_states[eh.idx()], reward);
+    // Do label and quality tests before any intersection queries.
+    double reward = 0.0;
+    bool removes_rail_chord = false;
+    if (evaluate_candidate(eh, reward, removes_rail_chord))
+      edges_to_flip.emplace(eh, update_states[eh.idx()], reward, removes_rail_chord);
   };
 
   for (EdgeHandle eh : rm->edges())
     enqueue(eh);
 
   size_t flipped_edge_num = 0;
+  size_t removed_rail_chord_num = 0;
   while (!edges_to_flip.empty())
   {
     const auto candidate = edges_to_flip.top();
@@ -317,13 +350,15 @@ size_t FlipStage::do_quality_flip()
       edge_flipper.flip_will_cause_over_valence(param->maxValence))
       continue;
 
-    // Revalidate a queued reward before using its priority or committing.
-    const double reward = calc_flip_quality_delta(eh);
-    if (!std::isfinite(reward) || reward <= quality_epsilon)
+    // Neighboring flips can change either diagonal's endpoints. Revalidate
+    // both the chord transition and its quality before using the priority.
+    double reward = 0.0;
+    bool removes_rail_chord = false;
+    if (!evaluate_candidate(eh, reward, removes_rail_chord))
       continue;
-    if (reward != candidate.reward)
+    if (reward != candidate.reward || removes_rail_chord != candidate.removes_rail_chord)
     {
-      edges_to_flip.emplace(eh, candidate.state, reward);
+      edges_to_flip.emplace(eh, candidate.state, reward, removes_rail_chord);
       continue;
     }
 
@@ -336,6 +371,8 @@ size_t FlipStage::do_quality_flip()
     if (!edge_flipper.try_flip_edge())
       continue;
     ++flipped_edge_num;
+    if (removes_rail_chord)
+      ++removed_rail_chord_num;
 
     // A flip changes all four valences. Refresh every edge whose two-face
     // quad contains any affected vertex, including edges opposite that
@@ -354,7 +391,12 @@ size_t FlipStage::do_quality_flip()
     }
   }
 
-  Logger::user_logger->info("quality flip: accepted {} edges.", flipped_edge_num);
+  if (prioritize_rail_chords)
+    Logger::user_logger->info(
+      "quality flip: accepted {} edges, removed {} rail chords.",
+      flipped_edge_num, removed_rail_chord_num);
+  else
+    Logger::user_logger->info("quality flip: accepted {} edges.", flipped_edge_num);
   return flipped_edge_num;
 }
 }// namespace CageSimp

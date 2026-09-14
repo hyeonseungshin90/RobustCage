@@ -310,6 +310,7 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
     pre_calculate_edge_length(rm);
     pre_calculate_face_area(rm);
     const size_t flipped = flip_stage->do_quality_flip();
+    // Keep the standalone rail relabeling pass out of this production loop.
     Logger::user_logger->info(
       "phase 2 linear-solve cycle {}: collapsed {}, flipped {}, vertices {}, min triangle quality {}.",
       iteration + 1, collapsed, flipped,

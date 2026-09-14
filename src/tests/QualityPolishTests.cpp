@@ -3,6 +3,7 @@
 #include "CageSimplifier/SimplifyStages/RelocateStage.hh"
 #include "CageSimplifier/SimplifyStages/CollapseStage.hh"
 #include "CageSimplifier/Topo/EdgeCollapser.h"
+#include "CageSimplifier/Topo/BoundaryRailUpdater.h"
 #include "CageSimplifier/Topo/VertexRelocater.h"
 #include "CageSimplifier/CageSimplifier.hh"
 #include "Geometry/Exact/TriTriIntersect.h"
@@ -232,10 +233,15 @@ void overlapping_flip_rejected()
   require(fixture.cage.find_halfedge(a, c).is_valid(), "overlap rejection must keep original diagonal");
 }
 
-void intersecting_flip_rejected(bool source_obstacle)
+void intersecting_flip_rejected(bool source_obstacle, bool remove_chord = false)
 {
   Fixture fixture;
   const auto v = add_flip_quad(fixture.cage);
+  if (remove_chord)
+  {
+    fixture.cage.data(v[1]).boundary_rail_id = 3;
+    fixture.cage.data(v[3]).boundary_rail_id = 3;
+  }
   const Vec3d p(3.5 / 3.0, 1.0 / 3.0, 0.2 / 3.0);
   SMeshT& obstacle_mesh = source_obstacle ? fixture.original : fixture.cage;
   add_triangle(obstacle_mesh, p + Vec3d(0.0, 0.0, -0.005),
@@ -248,7 +254,7 @@ void intersecting_flip_rejected(bool source_obstacle)
   require(flipper.local_Hausdorff_after_flipping() == DBL_MAX,
     "fixture must intersect only after proposed flip");
   const size_t before_vertices = fixture.cage.n_vertices();
-  require(fixture.flips().do_quality_flip() == 0,
+  require(fixture.flips().do_quality_flip(/*prioritize_rail_chords*/remove_chord) == 0,
     "quality-improving flip must reject source or self-intersection");
   require(fixture.cage.find_halfedge(v[1], v[3]).is_valid(), "rejected flip must retain old diagonal");
   require(fixture.cage.n_vertices() == before_vertices, "rejected flip must preserve vertex count");
@@ -829,6 +835,412 @@ void label_rail_cycle(SMeshT& mesh, const std::vector<VertexHandle>& vertices, i
   }
 }
 
+struct RailUpdateSnapshot
+{
+  size_t vertices, edges, faces;
+  std::vector<Vec3d> points;
+  std::vector<const ExactPoint*> exact_points;
+  std::vector<std::array<int, 6>> halfedges;
+  std::vector<std::array<int, 4>> rail_edge_connections;
+  std::vector<int> vertex_labels, edge_labels;
+
+  explicit RailUpdateSnapshot(const SMeshT& mesh) :
+    vertices(mesh.n_vertices()), edges(mesh.n_edges()), faces(mesh.n_faces())
+  {
+    for (VertexHandle vertex : mesh.vertices())
+    {
+      points.push_back(mesh.point(vertex));
+      exact_points.push_back(mesh.data(vertex).ep.get());
+      vertex_labels.push_back(mesh.data(vertex).boundary_rail_id);
+    }
+    for (const auto halfedge : mesh.halfedges())
+      halfedges.push_back({halfedge.idx(), mesh.from_vertex_handle(halfedge).idx(),
+        mesh.to_vertex_handle(halfedge).idx(), mesh.next_halfedge_handle(halfedge).idx(),
+        mesh.prev_halfedge_handle(halfedge).idx(), mesh.face_handle(halfedge).idx()});
+    for (EdgeHandle edge : mesh.edges())
+    {
+      edge_labels.push_back(mesh.data(edge).boundary_rail_id);
+      if (mesh.data(edge).boundary_rail_id >= 0)
+      {
+        const auto halfedge = mesh.halfedge_handle(edge, 0);
+        rail_edge_connections.push_back({edge.idx(), mesh.from_vertex_handle(halfedge).idx(),
+          mesh.to_vertex_handle(halfedge).idx(), mesh.data(edge).boundary_rail_id});
+      }
+    }
+  }
+
+  void require_geometry_unchanged(const SMeshT& mesh) const
+  {
+    const RailUpdateSnapshot after(mesh);
+    require(vertices == after.vertices && edges == after.edges && faces == after.faces &&
+      halfedges == after.halfedges, "rail updates must preserve every mesh halfedge connection and count");
+    require(points.size() == after.points.size() && exact_points == after.exact_points,
+      "rail updates must retain vertex handles and exact point objects");
+    for (size_t i = 0; i < points.size(); ++i)
+      for (size_t axis = 0; axis < 3; ++axis)
+        require(points[i][axis] == after.points[i][axis] ||
+          (std::isnan(points[i][axis]) && std::isnan(after.points[i][axis])),
+          "rail updates must leave every coordinate exactly unchanged");
+  }
+
+  void require_labels_unchanged(const SMeshT& mesh) const
+  {
+    const RailUpdateSnapshot after(mesh);
+    require(vertex_labels == after.vertex_labels && edge_labels == after.edge_labels,
+      "rejected or repeated rail updates must not change any vertex or edge label");
+  }
+
+  void require_flip_constraints_unchanged(const SMeshT& mesh) const
+  {
+    const RailUpdateSnapshot after(mesh);
+    require(vertices == after.vertices && edges == after.edges && faces == after.faces &&
+      points == after.points && exact_points == after.exact_points,
+      "rail-aware flips must preserve mesh counts and every floating/exact vertex position");
+    require(vertex_labels == after.vertex_labels && edge_labels == after.edge_labels &&
+      rail_edge_connections == after.rail_edge_connections,
+      "rail-aware flips must retain every original rail edge and vertex label");
+  }
+};
+
+std::array<VertexHandle, 6> add_chained_rail_ears(SMeshT& mesh)
+{
+  std::array<VertexHandle, 6> v = {
+    mesh.add_vertex(Vec3d(0.0, 0.0, 0.0)),
+    mesh.add_vertex(Vec3d(1.0, -0.5, 0.0)),
+    mesh.add_vertex(Vec3d(2.0, 0.0, 0.0)),
+    mesh.add_vertex(Vec3d(2.0, 2.0, 0.0)),
+    mesh.add_vertex(Vec3d(0.0, 2.0, 0.0)),
+    mesh.add_vertex(Vec3d(0.6, 1.2, 0.0))
+  };
+  // ACD is visited before ABC, but becomes an ear only after ABC removes B.
+  // The interior vertex F prevents a separate ear at the opposite end.
+  add_face(mesh, v[0], v[2], v[3]);
+  add_face(mesh, v[0], v[1], v[2]);
+  add_face(mesh, v[0], v[3], v[5]);
+  add_face(mesh, v[3], v[4], v[5]);
+  add_face(mesh, v[4], v[0], v[5]);
+  label_rail_cycle(mesh, {v[0], v[1], v[2], v[3], v[4]}, 3);
+  return v;
+}
+
+void chained_rail_updates_preserve_geometry()
+{
+  SMeshT mesh;
+  const auto v = add_chained_rail_ears(mesh);
+  // A non-null exact point also detects unintended position reinitialization.
+  mesh.data(v[1]).ep = std::make_unique<ExactPoint>(mesh.point(v[1]));
+  const RailUpdateSnapshot before(mesh);
+  require(update_boundary_rails(mesh) == 2,
+    "one rail update invocation must process the newly created earlier-face ear");
+  before.require_geometry_unchanged(mesh);
+  require(require_closed_rail_cycles(mesh) == 1,
+    "chained updates must retain a single closed rail with at least three vertices");
+  for (VertexHandle vertex : mesh.vertices())
+    require(mesh.data(vertex).boundary_rail_id ==
+      (vertex == v[0] || vertex == v[3] || vertex == v[4] ? 3 : -1),
+      "both removed apex vertices must lose their rail labels");
+  for (EdgeHandle edge : mesh.edges())
+  {
+    const auto halfedge = mesh.halfedge_handle(edge, 0);
+    const auto a = mesh.from_vertex_handle(halfedge), b = mesh.to_vertex_handle(halfedge);
+    const bool final_rail = mesh.data(a).boundary_rail_id == 3 &&
+      mesh.data(b).boundary_rail_id == 3;
+    require(mesh.data(edge).boundary_rail_id == (final_rail ? 3 : -1),
+      "old rail edges must be cleared and only the final three cycle edges labeled");
+  }
+  const RailUpdateSnapshot updated(mesh);
+  require(update_boundary_rails(mesh) == 0, "fixed-point rail update must be idempotent");
+  updated.require_geometry_unchanged(mesh);
+  updated.require_labels_unchanged(mesh);
+}
+
+void minimal_and_distinct_rail_cycles_are_preserved()
+{
+  SMeshT mesh;
+  std::array<VertexHandle, 8> v;
+  for (size_t ring = 0; ring < 2; ++ring)
+  {
+    v[ring * 4] = mesh.add_vertex(Vec3d(0.0, 0.0, double(ring)));
+    v[ring * 4 + 1] = mesh.add_vertex(Vec3d(1.0, 0.0, double(ring)));
+    v[ring * 4 + 2] = mesh.add_vertex(Vec3d(1.0, 1.0, double(ring)));
+    v[ring * 4 + 3] = mesh.add_vertex(Vec3d(0.0, 1.0, double(ring)));
+  }
+  add_face(mesh, v[0], v[2], v[1]);
+  add_face(mesh, v[0], v[3], v[2]);
+  add_face(mesh, v[4], v[5], v[6]);
+  add_face(mesh, v[4], v[6], v[7]);
+  for (size_t i = 0; i < 4; ++i)
+  {
+    const size_t next = (i + 1) % 4;
+    add_face(mesh, v[i], v[next], v[next + 4]);
+    add_face(mesh, v[i], v[next + 4], v[i + 4]);
+  }
+  label_rail_cycle(mesh, {v[0], v[1], v[2], v[3]}, 3);
+  label_rail_cycle(mesh, {v[4], v[5], v[6], v[7]}, 4);
+  const RailUpdateSnapshot before(mesh);
+  require(update_boundary_rails(mesh) == 2,
+    "each four-vertex rail must shorten once despite unlabeled cross-rail mesh edges");
+  before.require_geometry_unchanged(mesh);
+  require(require_closed_rail_cycles(mesh) == 2, "rail updates must never merge distinct IDs");
+  std::map<int, size_t> counts;
+  for (VertexHandle vertex : mesh.vertices())
+  {
+    const int rail = mesh.data(vertex).boundary_rail_id;
+    if (rail >= 0)
+    {
+      require(rail == before.vertex_labels[vertex.idx()], "a vertex must never move to another rail ID");
+      ++counts[rail];
+    }
+  }
+  require(counts[3] == 3 && counts[4] == 3, "both rail IDs must stop at three vertices");
+  const RailUpdateSnapshot minimal(mesh);
+  require(update_boundary_rails(mesh) == 0, "minimal three-vertex rails must not shrink further");
+  minimal.require_labels_unchanged(mesh);
+}
+
+void malformed_rail_labels_are_rejected()
+{
+  for (int kind = 0; kind < 4; ++kind)
+  {
+    SMeshT mesh;
+    const auto v = add_chained_rail_ears(mesh);
+    const auto chord = mesh.edge_handle(mesh.find_halfedge(v[0], v[2]));
+    if (kind == 0)
+      mesh.data(chord).boundary_rail_id = 3; // Branches at A and C.
+    else if (kind == 1)
+    {
+      const auto a = mesh.add_vertex(Vec3d(4.0, 0.0, 0.0));
+      const auto b = mesh.add_vertex(Vec3d(5.0, 0.0, 0.0));
+      const auto c = mesh.add_vertex(Vec3d(4.0, 1.0, 0.0));
+      add_face(mesh, a, b, c);
+      label_rail_cycle(mesh, {a, b, c}, 3); // A disconnected cycle with the same ID.
+    }
+    else if (kind == 2)
+      mesh.data(v[1]).boundary_rail_id = 4; // Disagrees with its labeled incident edges.
+    else
+      mesh.data(chord).boundary_rail_id = -2; // Only -1 means an unlabeled chord.
+    const RailUpdateSnapshot before(mesh);
+    require(update_boundary_rails(mesh) == 0,
+      "branched, disconnected, mismatched, or invalid negative rail labels must be rejected");
+    before.require_geometry_unchanged(mesh);
+    before.require_labels_unchanged(mesh);
+  }
+}
+
+void invalid_rail_triangle_geometry_is_rejected()
+{
+  for (double height : {0.0, std::numeric_limits<double>::infinity(),
+    std::numeric_limits<double>::quiet_NaN()})
+  {
+    SMeshT mesh;
+    const auto v = add_chained_rail_ears(mesh);
+    mesh.set_point(v[1], Vec3d(1.0, height, 0.0));
+    const RailUpdateSnapshot before(mesh);
+    require(update_boundary_rails(mesh) == 0,
+      "the initial degenerate or nonfinite ear must be rejected without unlocking the later ear");
+    before.require_geometry_unchanged(mesh);
+    before.require_labels_unchanged(mesh);
+  }
+}
+
+enum class QuadQuality { Improving, Equal, Worsening };
+
+void set_quad_quality(SMeshT& mesh, const std::array<VertexHandle, 4>& v, QuadQuality quality)
+{
+  if (quality == QuadQuality::Worsening)
+  {
+    std::array<Vec3d, 4> old;
+    for (size_t i = 0; i < 4; ++i)
+      old[i] = mesh.point(v[i]);
+    // A cyclic rotation exchanges the good AC and poor BD diagonals.
+    for (size_t i = 0; i < 4; ++i)
+      mesh.set_point(v[i], old[(i + 1) % 4]);
+  }
+  else if (quality == QuadQuality::Equal)
+  {
+    mesh.set_point(v[0], Vec3d(0.0, 0.0, 0.0));
+    mesh.set_point(v[1], Vec3d(1.0, 0.0, 0.0));
+    mesh.set_point(v[2], Vec3d(1.0, 1.0, 0.0));
+    mesh.set_point(v[3], Vec3d(0.0, 1.0, 0.0));
+  }
+}
+
+template<size_t N>
+double quad_diagonal_quality(const SMeshT& mesh,
+  const std::array<VertexHandle, N>& v, bool diagonal_bd)
+{
+  const auto q = [&](size_t a, size_t b, size_t c)
+  {
+    return triangle_quality(mesh.point(v[a]), mesh.point(v[b]), mesh.point(v[c]));
+  };
+  return diagonal_bd ? std::min(q(0, 1, 3), q(1, 2, 3)) :
+    std::min(q(0, 1, 2), q(0, 2, 3));
+}
+
+std::array<VertexHandle, 5> add_rail_chord_quad(SMeshT& mesh, QuadQuality quality)
+{
+  const auto quad = add_flip_quad(mesh);
+  set_quad_quality(mesh, quad, quality);
+  // C is interior to triangle BDE. The actual closed rail A-B-E-D-A has
+  // just one chord, BD. Every other interior edge joins C to a rail vertex,
+  // and flipping any such edge would create a chord between rail vertices.
+  const auto extra = mesh.add_vertex(mesh.point(quad[2]) * 3.0 -
+    mesh.point(quad[1]) - mesh.point(quad[3]));
+  add_face(mesh, quad[3], quad[2], extra);
+  add_face(mesh, quad[2], quad[1], extra);
+  label_rail_cycle(mesh, {quad[0], quad[1], extra, quad[3]}, 3);
+  return {quad[0], quad[1], quad[2], quad[3], extra};
+}
+
+void default_quality_flip_does_not_prioritize_chords()
+{
+  for (QuadQuality quality : {QuadQuality::Equal, QuadQuality::Worsening})
+  {
+    Fixture fixture;
+    const auto v = add_rail_chord_quad(fixture.cage, quality);
+    fixture.initialize();
+    const RailUpdateSnapshot before(fixture.cage);
+    require(fixture.flips().do_quality_flip() == 0,
+      "default quality-only mode must reject equal or worse quality even if a rail chord would disappear");
+    require(fixture.cage.find_halfedge(v[1], v[3]).is_valid(),
+      "default quality-only mode must retain the non-improving rail chord");
+    before.require_geometry_unchanged(fixture.cage);
+    before.require_labels_unchanged(fixture.cage);
+    require(require_closed_rail_cycles(fixture.cage) == 1,
+      "default quality-only mode must retain the complete rail cycle");
+  }
+}
+
+void default_quality_flip_can_create_a_chord()
+{
+  Fixture fixture;
+  const auto v = add_rail_chord_quad(fixture.cage, QuadQuality::Worsening);
+  const auto bd = fixture.cage.edge_handle(fixture.cage.find_halfedge(v[1], v[3]));
+  fixture.cage.flip(bd);
+  fixture.initialize();
+  const RailUpdateSnapshot before(fixture.cage);
+  const double before_quality = min_quality(fixture.cage);
+  require(!fixture.cage.find_halfedge(v[1], v[3]).is_valid(),
+    "default chord-creation fixture must start without the same-rail diagonal");
+  require(fixture.flips().do_quality_flip() > 0,
+    "default mode must allow an improving flip even when it creates a rail chord");
+  require(fixture.cage.find_halfedge(v[1], v[3]).is_valid(),
+    "quality-only mode must recreate the better same-rail diagonal");
+  require(min_quality(fixture.cage) >= before_quality,
+    "default quality-only flips must not reduce the mesh minimum quality");
+  before.require_flip_constraints_unchanged(fixture.cage);
+  require(require_closed_rail_cycles(fixture.cage) == 1,
+    "creating an unlabeled chord must preserve the labeled rail cycle");
+  fixture.require_source_clear();
+}
+
+void chord_removal_overrides_quality_without_relabeling()
+{
+  for (QuadQuality quality : {QuadQuality::Equal, QuadQuality::Worsening})
+  {
+    Fixture fixture;
+    const auto v = add_rail_chord_quad(fixture.cage, quality);
+    fixture.initialize();
+    const double old_quality = quad_diagonal_quality(fixture.cage, v, true);
+    const double new_quality = quad_diagonal_quality(fixture.cage, v, false);
+    require(quality == QuadQuality::Equal ? std::abs(new_quality - old_quality) < 1e-12 :
+      new_quality < old_quality - 0.1,
+      "chord-removing fixture must have equal or materially worse replacement quality");
+    const RailUpdateSnapshot before(fixture.cage);
+    require(require_closed_rail_cycles(fixture.cage) == 1, "chord fixture must carry an actual closed rail");
+    require(fixture.flips().do_quality_flip(/*prioritize_rail_chords*/true) == 1,
+      "removing the sole rail chord must take precedence over equal or worse quality");
+    require(!fixture.cage.find_halfedge(v[1], v[3]).is_valid() &&
+      fixture.cage.find_halfedge(v[0], v[2]).is_valid(),
+      "the rail chord BD must be replaced by the ordinary edge AC");
+    before.require_flip_constraints_unchanged(fixture.cage);
+    require(require_closed_rail_cycles(fixture.cage) == 1, "chord removal must preserve the original rail cycle");
+    const RailUpdateSnapshot after(fixture.cage);
+    require(fixture.flips().do_quality_flip(/*prioritize_rail_chords*/true) == 0,
+      "a repeated pass must not recreate the rail chord, even when the inverse improves quality");
+    after.require_geometry_unchanged(fixture.cage);
+    after.require_labels_unchanged(fixture.cage);
+    fixture.require_source_clear();
+  }
+}
+
+void improved_quality_cannot_create_a_rail_chord()
+{
+  Fixture fixture;
+  const auto v = add_rail_chord_quad(fixture.cage, QuadQuality::Worsening);
+  const auto bd = fixture.cage.edge_handle(fixture.cage.find_halfedge(v[1], v[3]));
+  // Start with the lower-quality, chord-free triangulation. A quality-only
+  // pass would prefer BD, which would introduce a new same-rail chord.
+  fixture.cage.flip(bd);
+  fixture.initialize();
+  require(quad_diagonal_quality(fixture.cage, v, true) >
+    quad_diagonal_quality(fixture.cage, v, false) + 0.1,
+    "chord-creating inverse must offer a real quality improvement");
+  const RailUpdateSnapshot before(fixture.cage);
+  require(fixture.flips().do_quality_flip(/*prioritize_rail_chords*/true) == 0,
+    "a zero-to-one rail chord transition must be rejected despite improved quality");
+  before.require_geometry_unchanged(fixture.cage);
+  before.require_labels_unchanged(fixture.cage);
+}
+
+void replacing_a_chord_with_a_chord_uses_quality_gate()
+{
+  for (QuadQuality quality : {QuadQuality::Improving, QuadQuality::Equal, QuadQuality::Worsening})
+  {
+    Fixture fixture;
+    const auto v = add_flip_quad(fixture.cage);
+    set_quad_quality(fixture.cage, v, quality);
+    label_rail_cycle(fixture.cage, {v[0], v[1], v[2], v[3]}, 3);
+    fixture.initialize();
+    const RailUpdateSnapshot before(fixture.cage);
+    require(fixture.flips().do_quality_flip(/*prioritize_rail_chords*/true) == (quality == QuadQuality::Improving ? 1 : 0),
+      "one-to-one chord transitions must use the ordinary strict quality improvement gate");
+    before.require_flip_constraints_unchanged(fixture.cage);
+    if (quality != QuadQuality::Improving)
+      before.require_geometry_unchanged(fixture.cage);
+    require(require_closed_rail_cycles(fixture.cage) == 1, "one-to-one flips must retain the full boundary cycle");
+    require(fixture.flips().do_quality_flip(/*prioritize_rail_chords*/true) == 0, "one-to-one quality improvement must not oscillate");
+  }
+}
+
+void different_rail_ids_do_not_form_a_chord()
+{
+  for (bool old_edge_has_labels : {false, true})
+  {
+    Fixture fixture;
+    const auto v = add_flip_quad(fixture.cage);
+    set_quad_quality(fixture.cage, v,
+      old_edge_has_labels ? QuadQuality::Worsening : QuadQuality::Improving);
+    fixture.cage.data(v[old_edge_has_labels ? 1 : 0]).boundary_rail_id = 3;
+    fixture.cage.data(v[old_edge_has_labels ? 3 : 2]).boundary_rail_id = 4;
+    fixture.initialize();
+    const RailUpdateSnapshot before(fixture.cage);
+    require(fixture.flips().do_quality_flip(/*prioritize_rail_chords*/true) == (old_edge_has_labels ? 0 : 1),
+      "different rail IDs must neither grant chord-removal priority nor block a quality-improving new edge");
+    before.require_flip_constraints_unchanged(fixture.cage);
+    if (old_edge_has_labels)
+      before.require_geometry_unchanged(fixture.cage);
+  }
+}
+
+void chord_removal_respects_maximum_valence()
+{
+  Fixture fixture;
+  const auto v = add_rail_chord_quad(fixture.cage, QuadQuality::Worsening);
+  fixture.initialize();
+  const size_t maximum = fixture.cage.valence(v[2]);
+  fixture.parameters.paramCageSimplifier.paramFlip.maxValence = maximum;
+  EdgeFlipper flipper(&fixture.original, &fixture.cage, fixture.source_tree.get(),
+    fixture.cage_tree.get(), fixture.source_grid.get());
+  const auto bd = fixture.cage.edge_handle(fixture.cage.find_halfedge(v[1], v[3]));
+  require(flipper.init(bd) && flipper.flip_will_cause_over_valence(maximum),
+    "chord-removing proposal must exceed the configured new endpoint valence");
+  const RailUpdateSnapshot before(fixture.cage);
+  require(fixture.flips().do_quality_flip(/*prioritize_rail_chords*/true) == 0, "chord removal must retain the maximum-valence guard");
+  before.require_geometry_unchanged(fixture.cage);
+  before.require_labels_unchanged(fixture.cage);
+}
+
 EdgeCollapser collapse_operator(Fixture& fixture)
 {
   EdgeCollapser collapser(&fixture.original, &fixture.cage, fixture.source_tree.get(),
@@ -1078,6 +1490,112 @@ public:
   std::string text() const { return output.str(); }
 };
 
+void at_target_default_flips_use_quality_only()
+{
+  for (bool enable_flips : {false, true})
+  {
+    Fixture fixture;
+    const auto v = add_rail_chord_quad(fixture.cage, QuadQuality::Equal);
+    const auto bottom = fixture.cage.add_vertex(Vec3d(0.75, 0.75, -2.0));
+    const std::array<VertexHandle, 4> ring = {v[0], v[1], v[4], v[3]};
+    for (size_t i = 0; i < ring.size(); ++i)
+      add_face(fixture.cage, bottom, ring[(i + 1) % ring.size()], ring[i]);
+    for (VertexHandle vertex : fixture.original.vertices())
+      fixture.original.set_point(vertex,
+        (fixture.original.point(vertex) - Vec3d(10.25, 10.25, 10.25)) * 0.1 +
+        Vec3d(0.75, 0.75, -0.75));
+    const RailUpdateSnapshot before(fixture.cage);
+    const std::filesystem::path output_directory = std::filesystem::path("quality_polish_test_output") /
+      (enable_flips ? "at_target_quality_only_flip" : "at_target_quality_only_flip_disabled");
+    std::filesystem::create_directories(output_directory);
+    fixture.parameters.setOutputPath(output_directory.generic_string() + "/", "octahedron");
+    fixture.parameters.setCageLabel(0);
+    auto& parameters = fixture.parameters.paramCageSimplifier;
+    parameters.phase2Mode = "linear_solve";
+    parameters.targetVerticesNum = 6;
+    parameters.enableBoundaryRails = true;
+    parameters.phase2QualityPolishIterations = enable_flips ? 3 : 0;
+    parameters.paramRelocate.qualitySweeps = 0;
+    // Isolate the equal-quality BD -> AC candidate. Opposite vertices A,C
+    // would reach valence four; other new diagonals exceed that limit or
+    // already exist. Default production must not give this chord priority.
+    parameters.paramFlip.maxValence = 4;
+    ScopedUserLogCapture captured_log;
+    CageSimplifier simplifier(&fixture.original, &fixture.cage, &parameters);
+    simplifier.simplify();
+    const RailUpdateSnapshot after(fixture.cage);
+    require(before.vertices == after.vertices && before.edges == after.edges &&
+      before.faces == after.faces && before.points == after.points &&
+      before.vertex_labels == after.vertex_labels && before.edge_labels == after.edge_labels &&
+      before.rail_edge_connections == after.rail_edge_connections,
+      "at-target quality-only flips must preserve all positions, labels, rail edges, and mesh counts");
+    require(require_closed_rail_cycles(fixture.cage) == 1,
+      "at-target quality-only flip integration must preserve one valid rail cycle");
+    const std::string log = captured_log.text();
+    if (!enable_flips)
+    {
+      before.require_labels_unchanged(fixture.cage);
+      require(before.halfedges == after.halfedges, "zero outer cycles must also retain every non-rail edge");
+      require(log.find("phase 2 linear-solve cycle ") == std::string::npos &&
+        log.find("quality flip:") == std::string::npos &&
+        log.find("energy relocation:") == std::string::npos,
+        "zero outer cycles must bypass quality flips and relocation");
+      continue;
+    }
+    require(log.find("phase 2 linear-solve cycle 1: collapsed 0, flipped 0, vertices 6") != std::string::npos &&
+      log.find("quality flip: accepted 0 edges.") != std::string::npos &&
+      log.find("phase 2 linear-solve cycle 2:") == std::string::npos &&
+      log.find("no accepted collapses or flips.") != std::string::npos,
+      "production must stop after the equal-quality chord fails the ordinary quality gate");
+    require(fixture.cage.find_halfedge(v[1], v[3]).is_valid() &&
+      !fixture.cage.find_halfedge(v[0], v[2]).is_valid(),
+      "default production must retain the equal-quality chord and the original rail loop");
+    require(before.halfedges == after.halfedges,
+      "quality-only production must leave the isolated non-improving mesh untouched");
+  }
+}
+
+void production_does_not_call_the_retained_rail_updater()
+{
+  Fixture fixture;
+  for (VertexHandle vertex : fixture.original.vertices())
+    fixture.original.set_point(vertex,
+      (fixture.original.point(vertex) - Vec3d(10.25, 10.25, 10.25)) * 0.2);
+  const auto v = add_collapse_octahedron(fixture.cage);
+  label_rail_cycle(fixture.cage, {v[0], v[1], v[2], v[3]}, 3);
+  // This rail has a removable triangle ear. Its diagonal flip is instead
+  // a quality-worsening 1 -> 1 chord transition, so production must keep it.
+  SMeshT helper_copy = fixture.cage;
+  require(update_boundary_rails(helper_copy) == 1, "retained helper must be capable of relabeling this fixture");
+  const RailUpdateSnapshot before(fixture.cage);
+  const std::filesystem::path output_directory = std::filesystem::path("quality_polish_test_output") /
+    "at_target_no_automatic_rail_relabel";
+  std::filesystem::create_directories(output_directory);
+  fixture.parameters.setOutputPath(output_directory.generic_string() + "/", "octahedron");
+  fixture.parameters.setCageLabel(0);
+  auto& parameters = fixture.parameters.paramCageSimplifier;
+  parameters.phase2Mode = "linear_solve";
+  parameters.targetVerticesNum = 6;
+  parameters.enableBoundaryRails = true;
+  parameters.phase2QualityPolishIterations = 3;
+  parameters.paramRelocate.qualitySweeps = 0;
+  ScopedUserLogCapture captured_log;
+  CageSimplifier simplifier(&fixture.original, &fixture.cage, &parameters);
+  simplifier.simplify();
+  const RailUpdateSnapshot after(fixture.cage);
+  require(before.points == after.points && before.halfedges == after.halfedges,
+    "the non-improving at-target fixture must retain its entire mesh");
+  before.require_labels_unchanged(fixture.cage);
+  require(before.rail_edge_connections == after.rail_edge_connections &&
+    require_closed_rail_cycles(fixture.cage) == 1,
+    "production must retain the original four-vertex loop despite its removable ear");
+  const std::string log = captured_log.text();
+  require(log.find("phase 2 linear-solve cycle 1: collapsed 0, flipped 0, vertices 6") != std::string::npos &&
+    log.find("phase 2 linear-solve cycle 2:") == std::string::npos &&
+    log.find("no accepted collapses or flips.") != std::string::npos,
+    "retained standalone rail updater must not participate in the production iteration");
+}
+
 size_t full_topological_offset_rail_pipeline(size_t outer_cycles = 3,
   size_t target_vertices = 40, double surface_weight = 1.0, size_t relocation_sweeps = 20,
   PipelineSnapshot* snapshot = nullptr)
@@ -1246,6 +1764,19 @@ int main()
     {"concave flip cannot overlap replacement faces", overlapping_flip_rejected},
     {"source-intersecting flip is rejected", [] { intersecting_flip_rejected(true); }},
     {"self-intersecting flip is rejected", [] { intersecting_flip_rejected(false); }},
+    {"default quality flips do not prioritize equal or worse rail chord removals", default_quality_flip_does_not_prioritize_chords},
+    {"default quality flips may create rail chords to improve triangles", default_quality_flip_can_create_a_chord},
+    {"rail chord removal accepts equal or worse quality and preserves all rail constraints", chord_removal_overrides_quality_without_relabeling},
+    {"quality improvement cannot introduce a new rail chord", improved_quality_cannot_create_a_rail_chord},
+    {"one-to-one rail chord transitions retain the ordinary quality gate", replacing_a_chord_with_a_chord_uses_quality_gate},
+    {"different rail IDs do not form a chord", different_rail_ids_do_not_form_a_chord},
+    {"rail chord removal still rejects source intersections", [] { intersecting_flip_rejected(true, true); }},
+    {"rail chord removal still rejects cage intersections", [] { intersecting_flip_rejected(false, true); }},
+    {"rail chord removal still obeys maximum valence", chord_removal_respects_maximum_valence},
+    {"rail rewrites process newly created earlier-face ears without changing geometry", chained_rail_updates_preserve_geometry},
+    {"rail rewrites retain separate IDs and at least three vertices per cycle", minimal_and_distinct_rail_cycles_are_preserved},
+    {"rail rewrites reject malformed branched, disconnected, or inconsistent labels", malformed_rail_labels_are_rejected},
+    {"rail rewrites reject degenerate and nonfinite candidate triangles", invalid_rail_triangle_geometry_is_rejected},
     {"mixed collapse keeps the rail endpoint when halfedge 0 removes the ordinary vertex", [] { mixed_collapse_keeps_rail_vertex(false); }},
     {"mixed collapse reverses halfedge 0 to retain the rail endpoint", [] { mixed_collapse_keeps_rail_vertex(true); }},
     {"mixed collapse preserves rail cycles without promoting chords", [] { mixed_collapse_keeps_rail_vertex(true, true); }},
@@ -1267,6 +1798,8 @@ int main()
     {"linear mode polishes an already-at-target closed rail cage", [] { linear_solve_integration(true); }},
     {"zero polish rounds disable integrated quality operations", [] { linear_solve_integration(false); }},
     {"relocation sweep limits control repeated improvement at target", repeated_relocation_sweeps_improve_quality},
+    {"at-target production uses quality-only flips without moving or relabeling the rail", at_target_default_flips_use_quality_only},
+    {"production leaves the retained rail relabeling helper inactive", production_does_not_call_the_retained_rail_updater},
     {"topological offset, linear solve, and generated rails complete together", [] { full_topological_offset_rail_pipeline(); }},
     {"relocation runs once after topology selection and cannot affect its result", relocation_runs_only_after_topology_selection}
   };
