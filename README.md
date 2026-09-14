@@ -50,13 +50,14 @@ Phase presets compose with `+`, for example:
 
 `exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve path-to-input path-to-out-dir target_Nv`
 
-Linear-solve Phase 2 repeats `collapse -> flip` for up to 30 cycles, then runs
+Linear-solve Phase 2 repeats `collapse -> flip -> rail update` for up to 30 cycles, then runs
 one final relocation stage. Each collapse stage rebuilds its candidates after
-the previous cycle's flips, so newly feasible collapses can be accepted.
+the previous cycle's flips and rail relabeling, so newly feasible collapses can be accepted.
 The global target edge length remains fixed across cycles. Once the vertex
-target is reached, collapse is skipped while flips can continue. A cycle with
-no accepted collapses or flips ends this loop early. Relocation starts after
-the loop ends; no collapse or flip follows it.
+target is reached, collapse is skipped while flips and rail updates can continue.
+Rail updates run only when boundary rails are enabled. A cycle with no accepted
+collapses, flips, or rail updates ends this loop early. Relocation starts after
+the loop ends; no collapse, flip, or rail update follows it.
 Collapse placement and its line-search energy use QEM and the triangle-quality
 surrogate. Uniformity contributes only to collapse queue priority: the global
 mode adds `uniformityWeight * (edge_length / target_length)^2` to the score.
@@ -82,10 +83,10 @@ position onto the source-boundary support half-strips. Rail edges cannot flip.
 Rail vertices and actual mesh boundary vertices remain fixed during relocation.
 Flips and relocation preserve vertex count.
 
-The production linear-solve flip stage uses triangle quality only for its
-priority and improvement test: every accepted flip requires a finite increase
-greater than `1e-12` in the minimum quality of its two triangles. It neither
-prioritizes removing rail chords nor forbids creating them. All candidates
+The linear-solve flip stage uses triangle quality for priority and acceptance,
+including when boundary rails are enabled. Every accepted flip requires a
+finite increase greater than `1e-12` in the minimum quality of its two triangles.
+Rail chord counts do not affect priority or block a flip. All candidates
 retain the existing topology, valence, degeneracy and source/cage intersection
 checks; there is no additional flip quality floor. Changed neighborhoods are
 requeued and candidates are rechecked before acceptance. Flips preserve rail
@@ -93,14 +94,9 @@ labels, rail vertex positions, rail edges and rail perimeter, but may change
 the cage surface. Actual rail-edge collapse, its projection and line search
 remain unchanged.
 
-The chord-aware implementation remains available through the C++ call
-`do_quality_flip(true)`; the production call uses the default `false`.
-There is no CLI or JSON switch for this choice. In the optional mode, a rail
-chord is an unlabeled edge whose endpoints share the same nonnegative rail ID.
-Chord-to-non-chord flips take priority and may have equal or lower minimum
-triangle quality, non-chord-to-chord flips are forbidden, and all other flips
-require the usual quality improvement. Edges joining different rail IDs are
-not classified as chords. The same validity checks apply in both modes.
+The C++ entry point is `do_quality_flip()`, with no chord-policy argument or
+optional chord-aware mode. The triangle-based rail update runs after flipping
+when boundary rails are enabled.
 
 Initial boundary rails are constructed before Phase 2 with
 `Dijkstra -> intrinsic flip geodesics -> actual mesh splitting`.
@@ -124,21 +120,22 @@ fixed anchors can leave a path unchanged. This step is performed only during
 initial rail construction. Later collapses do not preserve a geodesic
 guarantee or trigger another intrinsic shortening pass.
 
-The triangle-based `update_boundary_rails()` implementation and its tests are
-retained for explicit future use, but the generation pipeline does not call it.
-That standalone helper repeatedly replaces a labeled path `A-B-C` with `A-C`
-across a cage triangle and releases `B`, preserving a simple loop of at least
-three vertices. It changes labels only and has no source-distance or opening-size
-error bound.
+With boundary rails enabled, linear-solve Phase 2 calls the triangle-based
+`update_boundary_rails()` after each quality-flip pass. Each call repeatedly
+replaces a labeled path `A-B-C` with `A-C` across a cage triangle and releases
+`B`, until no eligible shortcut remains. It preserves a simple loop of at least
+three vertices, changes labels only, and has no source-distance or opening-size
+error bound. Relabeling alone counts as progress, so the next cycle can use the
+new rail constraints even when the preceding collapse and flip counts were zero.
 
 The final relocation stage performs up to 20 full-mesh sweeps, recomputing the
 Voronoi areas, normals and source closest points from current positions. A sweep
 accepting no moves ends relocation early. JSON settings control these three
 separate limits:
 
-* `paramCageSimplifier.phase2QualityPolishIterations`: collapse/flip cycles,
+* `paramCageSimplifier.phase2QualityPolishIterations`: collapse/flip/rail-update cycles,
   default `30`. The existing key name is retained; `0` runs collapse once and
-  disables both flips and final relocation.
+  disables flips, rail updates, and final relocation.
 * `paramCageSimplifier.paramRelocate.qualitySweeps`: final relocation sweep limit,
   default `20`; `0` disables relocation.
 * `paramCageSimplifier.paramRelocate.lineSearchMaxIter`: backtracking attempts

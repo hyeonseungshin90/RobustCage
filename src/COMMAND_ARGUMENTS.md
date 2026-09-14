@@ -54,14 +54,15 @@ config.json
 
 `phase1_topological_offset`을 명시한 경우에만 새 Phase 1을 사용합니다. `default`와 기존 `phase2_*` 토큰만 사용한 명령은 이전과 동일하게 subdivision 기반 Phase 1을 수행합니다.
 
-`linear_solve`에서는 `collapse → flip`을 기본 최대 30회 반복한 뒤,
+`linear_solve`에서는 `collapse → flip → rail update`를 기본 최대 30회 반복한 뒤,
 마지막에 relocation 단계를 한 번 실행합니다.
-Flip 이후 collapse 후보 큐를 다시 만들어 새롭게 가능한 collapse를
+Flip과 rail 라벨 갱신 이후 collapse 후보 큐를 다시 만들어 새롭게 가능한 collapse를
 재시도하며, global target edge length는 최초 값으로 유지합니다. 목표 정점 수에
-도달하면 collapse를 생략하고 flip은 계속할 수 있습니다. Collapse와 flip이
-모두 없으면 반복을 조기 종료합니다. 반복 종료 후 relocation을 수행하며,
-그 뒤에는 collapse나 flip을 다시 실행하지 않습니다. Flip은 두 삼각형의 최소
-quality 증가량이 큰 순서로 수행하며, 기본 실행에서는 rail chord를 고려하지 않습니다.
+도달하면 collapse를 생략하고 flip과 rail update는 계속할 수 있습니다.
+Rail update는 boundary rail이 활성화된 경우에만 실행합니다. Collapse, flip,
+rail update가 모두 없으면 반복을 조기 종료합니다. 반복 종료 후 relocation을 수행하며,
+그 뒤에는 collapse, flip, rail update를 다시 실행하지 않습니다. Flip은 boundary rail
+활성화 여부와 관계없이 두 삼각형의 최소 quality 증가량이 큰 순서로 수행합니다.
 교차가 생기는 후보는 reject합니다.
 Collapse 위치의 linear solve와 line-search energy는 QEM과 triangle-quality
 surrogate를 사용하며 uniformity는 제외합니다. Uniformity는 collapse 우선순위에만
@@ -89,22 +90,18 @@ half-strip에 새 위치를 투영합니다.
 Rail edge의 flip은 금지되며, rail 정점과 실제 mesh boundary 정점은 relocation
 중 고정됩니다. Flip과 relocation은 정점 수를 유지합니다.
 
-기본 linear-solve flip의 우선순위와 개선 여부는 triangle quality만 사용합니다.
+Linear-solve flip은 triangle quality로 우선순위와 개선 여부를 판단합니다.
 모든 flip은 두 삼각형의 유한한 최소 quality 증가량이 `1e-12`보다 클 때만 허용합니다.
-Rail chord 제거를 우선하지 않으며, chord가 새로 생긴다는 이유로 거부하지도 않습니다.
+Rail chord 개수는 우선순위나 수락 여부에 영향을 주지 않습니다.
 모든 후보에 기존 위상·valence·퇴화·source/cage 교차 검사를 적용하며,
 별도의 flip quality 하한은 추가하지 않습니다. 갱신된 주변 후보는 다시 큐에 넣고
 수락 직전에 재검사합니다. Flip은 rail 라벨·정점 위치·edge·둘레를 보존하지만
 cage 표면은 바뀔 수 있습니다.
 실제 rail edge collapse와 기존 projection 및 line search는 유지합니다.
 
-Chord를 고려하는 구현은 C++에서 `do_quality_flip(true)`를 호출하면 다시 사용할 수
-있도록 남겨 두었습니다. 생성 파이프라인은 기본 인수 `false`를 사용하며, 이 선택에
-대한 CLI나 JSON 옵션은 없습니다. 선택적으로 활성화하면 양 끝점이 같은 비음수
-rail ID를 가진 unlabeled edge를 chord로 분류하고, chord→non-chord flip을 우선하며
-quality가 같거나 낮아져도 허용합니다. Non-chord→chord flip은 금지하고 나머지는
-기존 quality 개선 조건을 적용합니다. 서로 다른 rail ID를 잇는 edge는 chord가
-아닙니다. 두 모드 모두 동일한 유효성 검사를 통과해야 합니다.
+C++ 진입점은 `do_quality_flip()`이며, chord 정책을 선택하는 인수나 별도의
+chord-aware 모드는 없습니다. Boundary rail을 활성화하면 flip 뒤의 삼각형 단위
+rail update를 실행합니다.
 
 초기 rail 구성은 Phase 2 이전에 `Dijkstra → intrinsic flip geodesics → 실제 mesh split`
 순서로 수행합니다. Source-boundary anchor를 cage에 삽입한 뒤 기존 Dijkstra 경로
@@ -124,11 +121,14 @@ Flip geodesics는 locally shortest path를 구하며 전역 최단 경로를 보
 Phase 2 중 rail을 다시 geodesic으로 단축하지 않습니다. 이후 collapse가 초기 경로의
 geodesic 성질을 유지한다는 보장도 없습니다.
 
-삼각형 단위 `update_boundary_rails()` 구현과 테스트는 나중에 명시적으로 사용할 수
-있도록 남겨 두지만, cage 생성 파이프라인에서는 호출하지 않습니다.
-이 독립 함수는 삼각형의 rail 경로 `A-B-C`를 `A-C`로 반복 교체하고 `B`의 라벨을
+Boundary rail을 활성화한 `linear_solve`에서는 매 quality-flip 단계 뒤에
+삼각형 단위 `update_boundary_rails()`를 호출합니다. 이 함수는 더 이상 가능한
+갱신이 없을 때까지 삼각형의 rail 경로 `A-B-C`를 `A-C`로 반복 교체하고 `B`의 라벨을
 해제하며, 최소 3정점의 단일 폐곡선을 보존합니다. 라벨만 변경하는 함수이고
 source 거리나 opening 크기에 대한 별도 오차 제한은 없습니다.
+Rail update만 발생한 cycle도 진행으로 간주하므로, 다음 cycle에서 갱신된 제약으로
+collapse와 flip을 다시 시도합니다. `phase2QualityPolishIterations = 0`은 기존
+collapse-only 동작을 유지하여 flip, rail update, 최종 relocation을 생략합니다.
 
 이 에너지는 전체 Hausdorff distance를 최소화하거나 그 개선을 보장하지 않습니다.
 교차 검사는 후보 위치 기준이며, 이동 경로 전체의 CCD나 양의 표면 간격을
@@ -141,8 +141,8 @@ source 거리나 opening 크기에 대한 별도 오차 제한은 없습니다.
 두 가중치는 유한한 비음수여야 합니다. `surfaceWeight = 0`이면 tangential target만,
 `tangentialWeight = 0`이면 원본 최근접점 target만 사용하며, 둘 다 `0`이면 relocation을
 생략합니다. `minTriangleQuality`는 유한한 `[0, 1]` 값이어야 합니다. 기존 JSON 키 이름
-`phase2QualityPolishIterations`는 호환성을 위해 유지하며, collapse/flip 반복 한도를
-뜻합니다. `0`이면 collapse만 한 번 실행하고 flip과 마지막 relocation을 모두 생략합니다.
+`phase2QualityPolishIterations`는 호환성을 위해 유지하며, collapse/flip/rail-update 반복 한도를
+뜻합니다. `0`이면 collapse만 한 번 실행하고 flip, rail update, 마지막 relocation을 모두 생략합니다.
 
 알 수 없는 토큰이 들어오면 `unknown parameter token` 오류와 함께 실행이 중단됩니다.
 
@@ -184,7 +184,7 @@ JSON 파일을 첫 번째 인수로 넘기면 `ParamCageGenerator` 설정을 덮
 |---|---|---:|
 | `paramCageInitializer.phase1Mode` | Phase 1 방식: `"subdivision"` 또는 `"topological_offset"` | `"subdivision"` |
 | `paramCageSimplifier.maxIter` | 기존 일반 cage simplifier 최대 반복 횟수 | `30` |
-| `paramCageSimplifier.phase2QualityPolishIterations` | linear-solve의 collapse/flip 반복 한도. `0`이면 collapse만 한 번 실행하고 flip과 마지막 relocation 생략 | `30` |
+| `paramCageSimplifier.phase2QualityPolishIterations` | linear-solve의 collapse/flip/rail-update 반복 한도. `0`이면 collapse만 한 번 실행하고 flip, rail update, 마지막 relocation 생략 | `30` |
 | `paramCageSimplifier.relaxErrorIterStep` | 에러 완화 반복 간격 | `5` |
 | `paramCageSimplifier.maxErrorRelaxIter` | 최대 에러 완화 단계 | `4` |
 | `paramCageSimplifier.initError` | 초기 Hausdorff distance 허용값 | `0.005` |

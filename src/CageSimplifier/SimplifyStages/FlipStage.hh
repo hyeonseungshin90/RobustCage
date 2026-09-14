@@ -32,10 +32,10 @@ public:
     double _original_diagonal_length);
 
   void do_flip();
-  // Fixed-position quality polish for the linear Phase 2 path. The optional
-  // chord-aware mode prioritizes rail-chord removal and forbids creating
-  // chords. Returns accepted flips; no Hausdorff sampling links are needed.
-  size_t do_quality_flip(bool prioritize_rail_chords = false);
+  // Fixed-position quality polish for the linear Phase 2 path. Accepts only
+  // strict improvements to the two triangles' minimum quality. Returns
+  // accepted flips; no Hausdorff sampling links are needed.
+  size_t do_quality_flip();
   void update(bool _allow_negtive, double _max_distance_error);
 private:
   std::vector<size_t> update_states;
@@ -45,19 +45,13 @@ private:
     EdgeHandle eh;
     size_t state;
     double reward;
-    bool removes_rail_chord = false;
-
     FlipEdgeReward() = default;
-    FlipEdgeReward(EdgeHandle _eh, size_t _state, double _reward,
-      bool _removes_rail_chord = false) :
-      eh(_eh), state(_state), reward(_reward),
-      removes_rail_chord(_removes_rail_chord)
+    FlipEdgeReward(EdgeHandle _eh, size_t _state, double _reward) :
+      eh(_eh), state(_state), reward(_reward)
     {}
 
     bool operator<(const FlipEdgeReward& rhs)const
     {
-      if (removes_rail_chord != rhs.removes_rail_chord)
-        return removes_rail_chord < rhs.removes_rail_chord;
       return reward < rhs.reward;
     }
   };

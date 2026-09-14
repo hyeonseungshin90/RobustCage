@@ -1,4 +1,5 @@
 #include "CageSimplifier.hh"
+#include "CageSimplifier/Topo/BoundaryRailUpdater.h"
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -290,7 +291,7 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
   }
 
   Logger::user_logger->info(
-    "running phase 2 linear-solve iterations: up to {} collapse/flip cycles, then up to {} final relocation sweeps with {} backtracking attempts per vertex; rail vertices fixed during relocation.",
+    "running phase 2 linear-solve iterations: up to {} collapse/flip/rail-update cycles, then up to {} final relocation sweeps with {} backtracking attempts per vertex; rail vertices fixed during relocation.",
     param->phase2QualityPolishIterations, param->paramRelocate.qualitySweeps,
     param->paramRelocate.lineSearchMaxIter);
 
@@ -299,7 +300,8 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
     ot.get(), lrt.get(), og.get(), original_diagonal_length);
   for (size_t iteration = 0; iteration < param->phase2QualityPolishIterations; ++iteration)
   {
-    // Rebuild collapse candidates after the previous cycle's flips.
+    // Rebuild collapse candidates after the previous cycle's flips and rail
+    // relabeling, which can make previously constrained edges collapsible.
     // Keep this stage alive so its initial uniformity target is fixed.
     // The collapse stage skips its work once the target vertex count is met.
     const size_t collapsed = collapse_stage->do_phase2_energy_simplification(
@@ -310,17 +312,21 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
     pre_calculate_edge_length(rm);
     pre_calculate_face_area(rm);
     const size_t flipped = flip_stage->do_quality_flip();
-    // Keep the standalone rail relabeling pass out of this production loop.
+    // Each call processes triangle shortcuts until no more are possible.
+    // Labels change only; newly released vertices are reconsidered by the
+    // next cycle's collapse/flip stages and by the final relocation stage.
+    const size_t rail_updates = param->enableBoundaryRails ?
+      update_boundary_rails(*rm) : 0;
     Logger::user_logger->info(
-      "phase 2 linear-solve cycle {}: collapsed {}, flipped {}, vertices {}, min triangle quality {}.",
-      iteration + 1, collapsed, flipped,
+      "phase 2 linear-solve cycle {}: collapsed {}, flipped {}, rail updates {}, vertices {}, min triangle quality {}.",
+      iteration + 1, collapsed, flipped, rail_updates,
       rm->n_vertices(), calc_min_triangle_quality());
     if (param->enableBoundaryRails &&
       !validate_and_log_boundary_rails(rm, "after linear-solve cycle"))
       throw std::logic_error("boundary rail topology became invalid during linear-solve iteration");
-    if (collapsed == 0 && flipped == 0)
+    if (collapsed == 0 && flipped == 0 && rail_updates == 0)
     {
-      Logger::user_logger->info("phase 2 linear-solve iterations stopped: no accepted collapses or flips.");
+      Logger::user_logger->info("phase 2 linear-solve iterations stopped: no accepted collapses, flips, or rail updates.");
       break;
     }
     if (iteration + 1 == param->phase2QualityPolishIterations)
