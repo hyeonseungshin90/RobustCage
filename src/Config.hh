@@ -115,6 +115,11 @@ struct ParamCollapseStage
   size_t lineSearchMaxIter;
   double planeWeight;
   double triangleQualityWeight;
+  // Directional shape residual weights, independent of triangleQualityWeight.
+  // Zero disables a residual; negative or nonfinite values are rejected.
+  double triangleShapeTangentWeight = 1.0;
+  double triangleShapeHeightWeight = 1.0;
+  double triangleShapeNormalWeight = 0.25;
   double uniformityWeight;
 
   boost::json::object serialize()const
@@ -136,6 +141,9 @@ struct ParamCollapseStage
     jo["lineSearchMaxIter"] = lineSearchMaxIter;
     jo["planeWeight"] = planeWeight;
     jo["triangleQualityWeight"] = triangleQualityWeight;
+    jo["triangleShapeTangentWeight"] = triangleShapeTangentWeight;
+    jo["triangleShapeHeightWeight"] = triangleShapeHeightWeight;
+    jo["triangleShapeNormalWeight"] = triangleShapeNormalWeight;
     jo["uniformityWeight"] = uniformityWeight;
     return jo;
   }
@@ -201,8 +209,31 @@ struct ParamCollapseStage
     auto triangle_quality_weight_it = jo.find("triangleQualityWeight");
     triangleQualityWeight = triangle_quality_weight_it != jo.end() ? triangle_quality_weight_it->value().as_double() : 2.0;
 
+    auto triangle_shape_tangent_weight_it = jo.find("triangleShapeTangentWeight");
+    triangleShapeTangentWeight =
+      triangle_shape_tangent_weight_it != jo.end() ? boost::json::value_to<double>(triangle_shape_tangent_weight_it->value()) : 1.0;
+
+    auto triangle_shape_height_weight_it = jo.find("triangleShapeHeightWeight");
+    triangleShapeHeightWeight =
+      triangle_shape_height_weight_it != jo.end() ? boost::json::value_to<double>(triangle_shape_height_weight_it->value()) : 1.0;
+
+    auto triangle_shape_normal_weight_it = jo.find("triangleShapeNormalWeight");
+    triangleShapeNormalWeight =
+      triangle_shape_normal_weight_it != jo.end() ? boost::json::value_to<double>(triangle_shape_normal_weight_it->value()) : 0.25;
+    validate_triangle_shape_settings();
+
     auto uniformity_weight_it = jo.find("uniformityWeight");
     uniformityWeight = uniformity_weight_it != jo.end() ? uniformity_weight_it->value().as_double() : 1.0;
+  }
+
+  void validate_triangle_shape_settings() const
+  {
+    if (!std::isfinite(triangleShapeTangentWeight) || triangleShapeTangentWeight < 0.0)
+      throw std::invalid_argument("paramCollapse.triangleShapeTangentWeight must be finite and nonnegative");
+    if (!std::isfinite(triangleShapeHeightWeight) || triangleShapeHeightWeight < 0.0)
+      throw std::invalid_argument("paramCollapse.triangleShapeHeightWeight must be finite and nonnegative");
+    if (!std::isfinite(triangleShapeNormalWeight) || triangleShapeNormalWeight < 0.0)
+      throw std::invalid_argument("paramCollapse.triangleShapeNormalWeight must be finite and nonnegative");
   }
 };
 
@@ -453,6 +484,9 @@ struct ParamCageGenerator
     collapse.lineSearchMaxIter = 6;
     collapse.planeWeight = 1.0;
     collapse.triangleQualityWeight = 2.0;
+    collapse.triangleShapeTangentWeight = 1.0;
+    collapse.triangleShapeHeightWeight = 1.0;
+    collapse.triangleShapeNormalWeight = 0.25;
     collapse.uniformityWeight = 1.0;
 
     auto& relocate = paramCageSimplifier.paramRelocate;

@@ -16,6 +16,7 @@ namespace CageSimp
 
 class CollapseStage
 {
+  friend struct CollapseStageTestAccess;
 public:
   // input
   ParamCollapseStage* param;

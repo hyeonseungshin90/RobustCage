@@ -651,11 +651,12 @@ double CollapseStage::evaluate_triangle_quality_energy(const Phase2PlacementCont
 Eigen::Matrix4d CollapseStage::build_phase2_triangle_quality_surrogate_quadric(
   const Phase2PlacementContext& ctx) const
 {
+  param->validate_triangle_shape_settings();
   Phase2HomogeneousQuadric surrogate;
   if (ctx.fan_edges.empty())
     return surrogate.Q;
 
-  // Average squared apex distances normalized by L^2, with equal face weights.
+  // Average directional residual costs normalized by L^2, with equal face weights.
   // The caller applies triangleQualityWeight to placement and queue scoring.
   const double fan_count = static_cast<double>(ctx.fan_edges.size());
   const double w = inverse_local_length_squared(ctx.local_scale) / fan_count;
@@ -678,13 +679,32 @@ Eigen::Matrix4d CollapseStage::build_phase2_triangle_quality_surrogate_quadric(
         fan_edge.from, fan_edge.to, fan_edge.apex).cross(t));
     s = normalized_or_fallback(s, Vec3d(0.0, 1.0, 0.0));
 
+    Vec3d n = t.cross(s);
+    if (!finite_vec(n) || n.length() <= 1e-12 || std::abs(t | s) > 1e-8)
+    {
+      // Recover an orthogonal frame only for degenerate or rounded input.
+      // The least-aligned coordinate axis has a nonzero projection off t.
+      const Vec3d axis = std::abs(t.x()) <= std::abs(t.y()) && std::abs(t.x()) <= std::abs(t.z())
+        ? Vec3d(1.0, 0.0, 0.0)
+        : (std::abs(t.y()) <= std::abs(t.z()) ? Vec3d(0.0, 1.0, 0.0) : Vec3d(0.0, 0.0, 1.0));
+      s = axis - (axis | t) * t;
+      s = s / s.norm();
+      n = t.cross(s);
+    }
+    n = normalized_or_fallback(
+      n, triangle_normal(fan_edge.from, fan_edge.to, fan_edge.apex));
+
     const double target_height =
       0.5 * std::sqrt(3.0) * base_length;
-    const Vec3d reference_apex = mid + target_height * s;
 
-    // Penalize squared distance to the equilateral reference apex equally
-    // in every direction: w * ||x - reference_apex||^2.
-    surrogate.add_point_target(w, reference_apex);
+    // The fixed frame gives r_t=t.(x-mid), r_s=s.(x-mid)-height,
+    // and r_n=n.(x-mid). The homogeneous builder retains their constants.
+    surrogate.add_linear_residual(
+      w * param->triangleShapeTangentWeight, t, t | mid);
+    surrogate.add_linear_residual(
+      w * param->triangleShapeHeightWeight, s, (s | mid) + target_height);
+    surrogate.add_linear_residual(
+      w * param->triangleShapeNormalWeight, n, n | mid);
   }
 
   return surrogate.Q;
@@ -1158,7 +1178,7 @@ double CollapseStage::evaluate_phase2_queue_score(
   if (kEnableTriangleQualityInPhase2LinearSolve &&
     is_phase2_linear_solve_strategy())
   {
-    // Use the mean squared distance to the reference apices, normalized by L^2.
+    // Use the mean weighted directional residuals, normalized by L^2.
     // triangleQualityWeight controls its contribution to the queue cost.
     add_nonnegative_component(
       param->triangleQualityWeight,
@@ -2050,6 +2070,13 @@ size_t CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num
     param->curvatureMode,
     param->uniformityMode, param->uniformityWeight,
     param->robustnessMode);
+  if (kEnableTriangleQualityInPhase2LinearSolve && is_phase2_linear_solve_strategy())
+  {
+    param->validate_triangle_shape_settings();
+    Logger::user_logger->info(
+      "phase 2 triangle shape directions: triangleShapeTangentWeight {}, triangleShapeHeightWeight {}, triangleShapeNormalWeight {}.",
+      param->triangleShapeTangentWeight, param->triangleShapeHeightWeight, param->triangleShapeNormalWeight);
+  }
   if (param->uniformityWeight > 0.0 && param->uniformityMode != "none")
   {
     if (kEnableUniformityInPhase2LinearSolve && is_phase2_linear_solve_strategy())

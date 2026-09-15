@@ -24,6 +24,42 @@
 #include "spdlog/sinks/ostream_sink.h"
 #include "omp.h"
 
+namespace Cage
+{
+namespace CageSimp
+{
+// Keep the numerical regression tests on the production implementation without
+// exposing placement internals through the runtime API.
+struct CollapseStageTestAccess
+{
+  using Context = CollapseStage::Phase2PlacementContext;
+
+  static Eigen::Matrix4d shape_quadric(const CollapseStage& stage, const Context& context)
+  {
+    return stage.build_phase2_triangle_quality_surrogate_quadric(context);
+  }
+
+  static double shape_energy(const CollapseStage& stage, const Context& context,
+    const Vec3d& point)
+  {
+    return stage.evaluate_phase2_triangle_quality_surrogate(context, point);
+  }
+
+  static double placement_energy(const CollapseStage& stage, const Context& context,
+    const Vec3d& point)
+  {
+    return stage.evaluate_phase2_proxy_energy(context, point);
+  }
+
+  static double queue_score(const CollapseStage& stage, const Context& context,
+    const Vec3d& point)
+  {
+    return stage.evaluate_phase2_queue_score(stage.evaluate_phase2_queue_components(context, point));
+  }
+};
+}
+}
+
 namespace
 {
 using namespace Cage;
@@ -636,6 +672,253 @@ void quality_configuration_roundtrip()
   preferred.deserialize(legacy_collapse_json);
   require(preferred.planeWeight == 1.0,
     "absent plane energy weights must retain the existing default");
+}
+
+void triangle_shape_configuration_roundtrip()
+{
+  auto parameters = ParamCageGenerator().paramCageSimplifier.paramCollapse;
+  require(parameters.triangleShapeTangentWeight == 1.0 &&
+    parameters.triangleShapeHeightWeight == 1.0 &&
+    parameters.triangleShapeNormalWeight == 0.25,
+    "triangle shape must default to directional weights (1, 1, 0.25)");
+  parameters.triangleShapeTangentWeight = 2.5;
+  parameters.triangleShapeHeightWeight = 0.75;
+  parameters.triangleShapeNormalWeight = 4.0;
+  auto json = boost::json::parse(boost::json::serialize(parameters.serialize())).as_object();
+  ParamCollapseStage restored;
+  restored.deserialize(json);
+  require(restored.triangleShapeTangentWeight == 2.5 &&
+    restored.triangleShapeHeightWeight == 0.75 &&
+    restored.triangleShapeNormalWeight == 4.0,
+    "all three independent shape weights must survive textual JSON serialization");
+
+  json.erase("triangleShapeTangentWeight");
+  json.erase("triangleShapeHeightWeight");
+  json.erase("triangleShapeNormalWeight");
+  restored.deserialize(json);
+  require(restored.triangleShapeTangentWeight == 1.0 &&
+    restored.triangleShapeHeightWeight == 1.0 &&
+    restored.triangleShapeNormalWeight == 0.25,
+    "legacy JSON without directional weights must restore anisotropic defaults");
+
+  json["triangleShapeTangentWeight"] = 0;
+  json["triangleShapeHeightWeight"] = 2;
+  json["triangleShapeNormalWeight"] = 1;
+  restored.deserialize(json);
+  require(restored.triangleShapeTangentWeight == 0.0 &&
+    restored.triangleShapeHeightWeight == 2.0 &&
+    restored.triangleShapeNormalWeight == 1.0,
+    "directional weights must accept JSON integers, including an explicit zero");
+}
+
+void require_energy_close(double actual, double expected, const char* message)
+{
+  require(std::isfinite(actual) &&
+    std::abs(actual - expected) <= 1e-10 * std::max(1.0, std::abs(expected)), message);
+}
+
+double quadric_energy(const Eigen::Matrix4d& quadric, const Vec3d& point)
+{
+  const Eigen::Vector4d homogeneous(point.x(), point.y(), point.z(), 1.0);
+  return homogeneous.dot(quadric * homogeneous);
+}
+
+Vec3d quadric_minimizer(const Eigen::Matrix4d& quadric)
+{
+  const Eigen::Vector3d point = quadric.topLeftCorner<3, 3>().ldlt().solve(
+    -quadric.topRightCorner<3, 1>());
+  return Vec3d(point.x(), point.y(), point.z());
+}
+
+void directional_triangle_shape_costs_and_minimum()
+{
+  auto parameters = ParamCageGenerator().paramCageSimplifier.paramCollapse;
+  parameters.phase2PlacementStrategy = "linear_solve";
+  parameters.planeWeight = 0.0;
+  parameters.uniformityWeight = 0.0;
+  parameters.uniformityMode = "none";
+  parameters.triangleQualityWeight = 2.4;
+  CollapseStage stage(nullptr, nullptr, &parameters, nullptr, nullptr, nullptr, 1.0);
+  CollapseStageTestAccess::Context context;
+  context.local_scale = 3.0;
+  // The base lies along x, height along y, and triangle normal along z.
+  // Its original apex is deliberately neither equilateral nor centered.
+  context.fan_edges.push_back({Vec3d(0.0, -1.0, 3.0), Vec3d(4.0, -1.0, 3.0),
+    Vec3d(2.5, 0.5, 3.0)});
+  const Vec3d reference(2.0, -1.0 + 2.0 * std::sqrt(3.0), 3.0);
+  const std::array<std::array<double, 3>, 3> weight_sets = {{
+    {{1.0, 1.0, 0.25}}, {{2.5, 0.75, 4.0}}, {{1.0, 1.0, 1.0}}
+  }};
+  for (const auto& weights : weight_sets)
+  {
+    parameters.triangleShapeTangentWeight = weights[0];
+    parameters.triangleShapeHeightWeight = weights[1];
+    parameters.triangleShapeNormalWeight = weights[2];
+    const Eigen::Matrix4d quadric = CollapseStageTestAccess::shape_quadric(stage, context);
+    require(close(quadric_minimizer(quadric), reference),
+      "positive directional weights must preserve the unique equilateral reference minimum");
+    require_energy_close(quadric_energy(quadric, reference), 0.0,
+      "the reference apex must have zero shape energy");
+    for (size_t axis = 0; axis < 3; ++axis)
+    {
+      Vec3d offset(0.0, 0.0, 0.0);
+      offset[axis] = 3.6;
+      const Vec3d point = reference + offset;
+      const double expected = weights[axis] * 12.96 / 9.0;
+      require_energy_close(quadric_energy(quadric, point), expected,
+        "each pure directional displacement must use only its own weight");
+      require_energy_close(CollapseStageTestAccess::shape_energy(stage, context, point), expected,
+        "production shape evaluation must agree with the analytical directional residual");
+      require_energy_close(CollapseStageTestAccess::placement_energy(stage, context, point),
+        parameters.triangleQualityWeight * expected,
+        "placement must apply the global shape weight exactly once");
+      require_energy_close(CollapseStageTestAccess::queue_score(stage, context, point),
+        parameters.triangleQualityWeight * expected,
+        "queue scoring must use the same weighted directional shape energy as placement");
+      require(quadric_energy(quadric, point) > quadric_energy(quadric, reference),
+        "positive directional weights must penalize motion away from the reference in every axis");
+    }
+  }
+}
+
+CollapseStageTestAccess::Context three_plane_shape_context()
+{
+  CollapseStageTestAccess::Context context;
+  context.local_scale = 2.0;
+  // Three different plane orientations and base lengths distinguish local
+  // directional weights from world-axis weights and from base-length weights.
+  context.fan_edges.push_back({Vec3d(-1.0, 0.0, 0.0), Vec3d(1.0, 0.0, 0.0),
+    Vec3d(0.2, 0.6, 0.0)});
+  context.fan_edges.push_back({Vec3d(0.0, -2.0, 0.0), Vec3d(0.0, 2.0, 0.0),
+    Vec3d(0.0, 0.3, 1.0)});
+  context.fan_edges.push_back({Vec3d(0.0, 0.0, -0.5), Vec3d(0.0, 0.0, 0.5),
+    Vec3d(0.8, 0.0, -0.1)});
+  return context;
+}
+
+void isotropic_triangle_shape_matches_squared_distances()
+{
+  auto parameters = ParamCageGenerator().paramCageSimplifier.paramCollapse;
+  parameters.triangleShapeTangentWeight = 1.0;
+  parameters.triangleShapeHeightWeight = 1.0;
+  parameters.triangleShapeNormalWeight = 1.0;
+  CollapseStage stage(nullptr, nullptr, &parameters, nullptr, nullptr, nullptr, 1.0);
+  const auto context = three_plane_shape_context();
+  const Eigen::Matrix4d quadric = CollapseStageTestAccess::shape_quadric(stage, context);
+  const std::array<Vec3d, 3> references = {{Vec3d(0.0, std::sqrt(3.0), 0.0),
+    Vec3d(0.0, 0.0, 2.0 * std::sqrt(3.0)), Vec3d(0.5 * std::sqrt(3.0), 0.0, 0.0)}};
+  const std::array<Vec3d, 3> points = {{Vec3d(0.0, 0.0, 0.0),
+    Vec3d(0.3, -0.7, 1.1), Vec3d(-1.2, 2.3, 0.4)}};
+  for (const Vec3d& point : points)
+  {
+    double expected = 0.0;
+    for (const Vec3d& reference : references)
+      expected += (point - reference).sqrnorm() / 12.0;
+    require_energy_close(quadric_energy(quadric, point), expected,
+      "weights (1,1,1) must recover equal-face squared Euclidean apex distances");
+    require_energy_close(CollapseStageTestAccess::shape_energy(stage, context, point), expected,
+      "isotropic scalar evaluation must retain the previous normalized distance energy");
+  }
+  require(close(quadric_minimizer(quadric),
+    (references[0] + references[1] + references[2]) / 3.0),
+    "isotropic fan placement must remain the centroid of equally weighted reference apices");
+  auto degenerate = context;
+  degenerate.fan_edges.clear();
+  for (const Vec3d& axis : {Vec3d(0.0, 1.0, 0.0), Vec3d(1.0, 1.0, 1.0)})
+  {
+    degenerate.fan_edges.clear();
+    degenerate.fan_edges.push_back({-axis, axis, 0.3 * axis});
+    const Eigen::Matrix4d fallback = CollapseStageTestAccess::shape_quadric(stage, degenerate);
+    require(fallback.allFinite() && fallback.topLeftCorner<3, 3>().isApprox(
+      Eigen::Matrix3d::Identity() / 4.0, 1e-12),
+      "a collinear apex must still yield a finite orthogonal isotropic frame");
+  }
+}
+
+void directional_triangle_shape_similarity_invariance()
+{
+  auto parameters = ParamCageGenerator().paramCageSimplifier.paramCollapse;
+  parameters.triangleShapeTangentWeight = 2.5;
+  parameters.triangleShapeHeightWeight = 0.75;
+  parameters.triangleShapeNormalWeight = 4.0;
+  CollapseStage stage(nullptr, nullptr, &parameters, nullptr, nullptr, nullptr, 1.0);
+  const auto original = three_plane_shape_context();
+  const Eigen::Matrix4d original_quadric = CollapseStageTestAccess::shape_quadric(stage, original);
+  const Vec3d point(0.3, -0.7, 1.1);
+  // In these three frames the residual coordinate orders are (x,y,z),
+  // (y,z,x), and (z,x,y), respectively. This is independent of quadric assembly.
+  const double root3 = std::sqrt(3.0);
+  const double expected = (
+    2.5 * point.x() * point.x() + 0.75 * std::pow(point.y() - root3, 2) + 4.0 * point.z() * point.z() +
+    2.5 * point.y() * point.y() + 0.75 * std::pow(point.z() - 2.0 * root3, 2) + 4.0 * point.x() * point.x() +
+    2.5 * point.z() * point.z() + 0.75 * std::pow(point.x() - 0.5 * root3, 2) + 4.0 * point.y() * point.y()) / 12.0;
+  require_energy_close(quadric_energy(original_quadric, point), expected,
+    "multi-plane quadric must sum independently weighted local directional residuals");
+  const Vec3d original_minimum = quadric_minimizer(original_quadric);
+  Eigen::Matrix3d rotation;
+  rotation << 1.0, 2.0, 2.0, 2.0, 1.0, -2.0, -2.0, 2.0, -1.0;
+  rotation /= 3.0;
+  for (double scale : {0.125, 1.0, 8.0})
+  {
+    const auto transform = [&](const Vec3d& value)
+    {
+      const Eigen::Vector3d result = scale * rotation * Eigen::Vector3d(value.x(), value.y(), value.z());
+      return Vec3d(result.x(), result.y(), result.z()) + Vec3d(3.0, -2.0, 5.0);
+    };
+    auto transformed = original;
+    transformed.local_scale *= scale;
+    for (auto& triangle : transformed.fan_edges)
+    {
+      triangle.from = transform(triangle.from);
+      triangle.to = transform(triangle.to);
+      triangle.apex = transform(triangle.apex);
+    }
+    const Eigen::Matrix4d quadric = CollapseStageTestAccess::shape_quadric(stage, transformed);
+    require_energy_close(quadric_energy(quadric, transform(point)), expected,
+      "normalized directional energy must be invariant under rotation, translation, and uniform scaling");
+    require_energy_close(CollapseStageTestAccess::shape_energy(stage, transformed, transform(point)), expected,
+      "transformed production scalar evaluation must agree with the untransformed analytical energy");
+    require(close(quadric_minimizer(quadric), transform(original_minimum), 1e-10),
+      "anisotropic placement must rotate, translate, and scale with the triangle fan");
+  }
+}
+
+void invalid_triangle_shape_weights_rejected()
+{
+  const std::array<double ParamCollapseStage::*, 3> fields = {{
+    &ParamCollapseStage::triangleShapeTangentWeight,
+    &ParamCollapseStage::triangleShapeHeightWeight,
+    &ParamCollapseStage::triangleShapeNormalWeight}};
+  const std::array<const char*, 3> keys = {{"triangleShapeTangentWeight",
+    "triangleShapeHeightWeight", "triangleShapeNormalWeight"}};
+  const auto context = three_plane_shape_context();
+  for (size_t axis = 0; axis < fields.size(); ++axis)
+    for (double invalid : {-1.0, std::numeric_limits<double>::infinity(),
+      std::numeric_limits<double>::quiet_NaN()})
+    {
+      auto parameters = ParamCageGenerator().paramCageSimplifier.paramCollapse;
+      auto json = boost::json::parse(boost::json::serialize(parameters.serialize())).as_object();
+      json[keys[axis]] = invalid;
+      bool json_rejected = false;
+      try { parameters.deserialize(json); }
+      catch (const std::invalid_argument&) { json_rejected = true; }
+      require(json_rejected, "each negative or nonfinite directional JSON weight must be rejected");
+
+      ParamCollapseStage direct;
+      direct.*fields[axis] = invalid;
+      CollapseStage stage(nullptr, nullptr, &direct, nullptr, nullptr, nullptr, 1.0);
+      bool direct_rejected = false;
+      try { CollapseStageTestAccess::shape_quadric(stage, context); }
+      catch (const std::invalid_argument&) { direct_rejected = true; }
+      require(direct_rejected, "programmatic directional weights must obey the same validity checks as JSON");
+    }
+  ParamCollapseStage disabled;
+  disabled.triangleShapeTangentWeight = 0.0;
+  disabled.triangleShapeHeightWeight = 0.0;
+  disabled.triangleShapeNormalWeight = 0.0;
+  CollapseStage stage(nullptr, nullptr, &disabled, nullptr, nullptr, nullptr, 1.0);
+  require(CollapseStageTestAccess::shape_quadric(stage, context).isZero(),
+    "zero directional weights must remain valid and disable their contributions");
 }
 
 void invalid_relocation_energy_settings_rejected()
@@ -1837,6 +2120,11 @@ int main()
     {"relocation backtracks to preserve its configured quality floor", relocation_quality_floor_backtracks},
     {"relocation cannot worsen fans already below the quality floor", relocation_preserves_quality_below_floor},
     {"quality configuration round-trips and supports legacy JSON", quality_configuration_roundtrip},
+    {"triangle shape directional weights round-trip and support legacy JSON", triangle_shape_configuration_roundtrip},
+    {"directional triangle costs share their reference minimum and placement/queue energy", directional_triangle_shape_costs_and_minimum},
+    {"equal directional weights recover isotropic reference-apex distances", isotropic_triangle_shape_matches_squared_distances},
+    {"directional triangle costs and placements follow rotated and scaled frames", directional_triangle_shape_similarity_invariance},
+    {"invalid directional shape weights are rejected while zero disables terms", invalid_triangle_shape_weights_rejected},
     {"invalid relocation weights and quality floors are rejected", invalid_relocation_energy_settings_rejected},
     {"linear mode polishes an already-at-target closed rail cage", [] { linear_solve_integration(true); }},
     {"zero polish rounds disable integrated quality operations", [] { linear_solve_integration(false); }},

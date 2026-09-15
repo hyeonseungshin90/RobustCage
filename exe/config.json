@@ -6,7 +6,10 @@
     "initError": 0.005,
     "errorStep": 0.005,
     "paramCollapse": {
-      "maxValence": 8
+      "maxValence": 8,
+      "triangleShapeTangentWeight": 1.0,
+      "triangleShapeHeightWeight": 1.0,
+      "triangleShapeNormalWeight": 0.25
     },
     "paramFlip": {
       "maxValence": 8

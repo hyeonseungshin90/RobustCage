@@ -630,7 +630,7 @@ void apply_plane_energy_weights(
 {
   collapse.planeWeight = 1.0;
   collapse.triangleQualityWeight = include_triangle_quality ? 2.0 : 0.0;
-  collapse.uniformityWeight = 2.0;
+  collapse.uniformityWeight = 4.0;
 }
 
 void enable_newton_solve_phase2_defaults(Cage::ParamCageGenerator& param)
