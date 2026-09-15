@@ -112,7 +112,7 @@ private:
     size_t total() const { return inside + outside + on_surface + unknown; }
   };
 
-  struct QEMPlane
+  struct PlaneConstraint
   {
     Vec3d normal;
     double offset = 0.0;
@@ -127,7 +127,7 @@ private:
   };
 
   // Local geometric data for evaluating one edge-collapse placement x.
-  // This object does not run Newton; it is shared by the QEM proxy solve,
+  // This object does not run Newton; it is shared by the quadric proxy solve,
   // fallback candidate checks, and optional Newton refinement.
   struct Phase2PlacementContext
   {
@@ -135,7 +135,7 @@ private:
     std::vector<HalfedgeHandle> halfedges;
     std::vector<CollapseFanEdge> fan_edges;
     std::vector<Vec3d> neighbor_points;
-    std::vector<QEMPlane> qem_planes;
+    std::vector<PlaneConstraint> plane_constraints;
     std::set<int> ignored_faces;
     Eigen::Matrix4d qem_matrix = Eigen::Matrix4d::Zero();
     bool use_qem_matrix = false;
@@ -169,7 +169,7 @@ private:
 
   struct Phase2QueueComponents
   {
-    double qem = 0.0;
+    double plane = 0.0;
     double triangle_quality = 0.0;
     double uniformity = 0.0;
   };
@@ -185,7 +185,7 @@ private:
   void initialize_collapse_edges_reward();
   void update_after_collapsing(VertexHandle collapsed_center);
   bool is_optimization_collapse_placement_method() const;
-  bool is_phase2_qem_based_strategy() const;
+  bool is_phase2_quadric_strategy() const;
   bool is_phase2_linear_solve_strategy() const;
   bool is_phase2_qem_original_strategy() const;
   bool is_phase2_newton_solve_strategy() const;
@@ -197,8 +197,8 @@ private:
   NewtonDerivatives approximate_newton_derivatives(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   NewtonDerivatives autodiff_newton_derivatives(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double evaluate_newton_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
-  double evaluate_qem_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
-  double evaluate_qem_only_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
+  double evaluate_plane_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
+  double evaluate_plane_only_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   double calc_triangle_quality(SMeshT* mesh, FaceHandle fh) const;
   double evaluate_triangle_quality_energy(const Phase2PlacementContext& ctx, const Vec3d& x) const;
   Eigen::Matrix4d build_phase2_triangle_quality_surrogate_quadric(
@@ -230,13 +230,13 @@ private:
     const Phase2PlacementContext& ctx, Vec3d& new_point, double& energy) const;
   bool select_phase2_linear_solve_line_search_candidate(
     const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
-    const Vec3d& qem_point, Vec3d& selected_point, double& selected_energy) const;
+    const Vec3d& quadric_point, Vec3d& selected_point, double& selected_energy) const;
   void initialize_phase2_qem_quadrics();
   void update_phase2_qem_quadric_after_collapse(VertexHandle center_vh, const Eigen::Matrix4d& quadric);
   Eigen::Matrix4d phase2_qem_quadric(VertexHandle vh) const;
   bool select_phase2_feasibility_fallback(
     EdgeHandle eh, const Phase2PlacementContext& ctx, EdgeCollapser& edge_collapser,
-    Vec3d& new_point, double& energy, bool qem_only_score = false) const;
+    Vec3d& new_point, double& energy, bool plane_only_score = false) const;
   bool compute_phase2_queue_placement_candidate(EdgeHandle eh, Vec3d& new_point, double& energy);
   bool compute_phase2_queue_candidate_data(
     EdgeHandle eh, Vec3d& new_point, Phase2QueueComponents& components);

@@ -83,10 +83,10 @@ struct ParamCollapseStage
 
   // Collapse placement method:
   // "sampling" keeps the original candidate sampling strategy.
-  // "optimization" uses local QEM/Newton-style energies to choose the post-collapse vertex position.
+  // "optimization" uses local plane and triangle-quality energies to choose the post-collapse vertex position.
   std::string collapsePlacementMethod;
   // Phase 2 placement strategy:
-  // "linear_solve": use the QEM-based linear system with quality terms and no Newton.
+  // "linear_solve": use the plane-based linear system with quality terms and no Newton.
   // "newton_solve": use Newton placement for every popped edge.
   // "qem_original": pure Garland-Heckbert QEM; non-QEM energies and collision rejection are disabled.
   std::string phase2PlacementStrategy;
@@ -96,13 +96,13 @@ struct ParamCollapseStage
   // "exact_reject": optimize first, then reject invalid final positions.
   // "exact_backtracking": use exact local checks during backtracking.
   std::string robustnessMode;
-  // Curvature mode: "none" or "weighted_qem".
+  // Curvature mode: "none" or "weighted_plane" ("weighted-plane" is also accepted).
   std::string curvatureMode;
   // Uniformity mode: "none", "source", "global".
   std::string uniformityMode;
   // When true, phase2PlacementStrategy "linear_solve" rejects the edge outright (no
-  // collapse) if the raw QEM linear-solve point fails the hard validity
-  // checks (collision/degenerate/wrinkle), instead of backtracking toward a
+  // collapse) if the raw plane-energy linear-solve point fails the hard validity
+  // checks (collision/degenerate/face orientation), instead of backtracking toward a
   // nearby fallback position. Default false keeps the existing backtracking
   // behavior; this is an opt-in alternative.
   bool phase2LinearSolveCollisionReject;
@@ -113,7 +113,7 @@ struct ParamCollapseStage
   double newtonFiniteDiffScale;
   double trustRegionRadiusScale;
   size_t lineSearchMaxIter;
-  double qemWeight;
+  double planeWeight;
   double triangleQualityWeight;
   double uniformityWeight;
 
@@ -134,7 +134,7 @@ struct ParamCollapseStage
     jo["newtonFiniteDiffScale"] = newtonFiniteDiffScale;
     jo["trustRegionRadiusScale"] = trustRegionRadiusScale;
     jo["lineSearchMaxIter"] = lineSearchMaxIter;
-    jo["qemWeight"] = qemWeight;
+    jo["planeWeight"] = planeWeight;
     jo["triangleQualityWeight"] = triangleQualityWeight;
     jo["uniformityWeight"] = uniformityWeight;
     return jo;
@@ -164,6 +164,9 @@ struct ParamCollapseStage
 
     auto curvature_mode_it = jo.find("curvatureMode");
     curvatureMode = curvature_mode_it != jo.end() ? std::string(curvature_mode_it->value().as_string().c_str()) : "none";
+    if (curvatureMode == "weighted_qem" || curvatureMode == "weighted-qem" ||
+      curvatureMode == "weighted-plane")
+      curvatureMode = "weighted_plane";
 
     auto uniformity_mode_it = jo.find("uniformityMode");
     uniformityMode = uniformity_mode_it != jo.end() ? std::string(uniformity_mode_it->value().as_string().c_str()) : "none";
@@ -190,8 +193,10 @@ struct ParamCollapseStage
     auto line_search_max_iter_it = jo.find("lineSearchMaxIter");
     lineSearchMaxIter = line_search_max_iter_it != jo.end() ? line_search_max_iter_it->value().as_int64() : 6;
 
-    auto qem_weight_it = jo.find("qemWeight");
-    qemWeight = qem_weight_it != jo.end() ? qem_weight_it->value().as_double() : 1.0;
+    auto plane_weight_it = jo.find("planeWeight");
+    if (plane_weight_it == jo.end())
+      plane_weight_it = jo.find("qemWeight"); // Legacy configuration key.
+    planeWeight = plane_weight_it != jo.end() ? plane_weight_it->value().as_double() : 1.0;
 
     auto triangle_quality_weight_it = jo.find("triangleQualityWeight");
     triangleQualityWeight = triangle_quality_weight_it != jo.end() ? triangle_quality_weight_it->value().as_double() : 2.0;
@@ -315,7 +320,7 @@ struct ParamCageSimplifier
   // target
   size_t targetVerticesNum;
   // Phase 2 simplification mode: "fast" keeps the original FastSimplifier,
-  // "linear_solve" uses the QEM-based linear system, "newton_solve" uses
+  // "linear_solve" uses the plane-based linear system, "newton_solve" uses
   // Newton placement for every collapse, and "qem_original" uses pure
   // Garland-Heckbert QEM cost/placement only.
   std::string phase2Mode;
@@ -446,7 +451,7 @@ struct ParamCageGenerator
     collapse.newtonFiniteDiffScale = 1e-4;
     collapse.trustRegionRadiusScale = 0.25;
     collapse.lineSearchMaxIter = 6;
-    collapse.qemWeight = 1.0;
+    collapse.planeWeight = 1.0;
     collapse.triangleQualityWeight = 2.0;
     collapse.uniformityWeight = 1.0;
 

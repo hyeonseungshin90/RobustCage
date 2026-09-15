@@ -77,7 +77,7 @@ int same_side_wrapped(CR_Vec3d a, CR_Vec3d b, CR_Vec3d c, CR_Vec3d p);
 /*    Constraint   */
 /*******************/
 
-bool check_wrinkle(
+bool check_face_orientation_violation(
   SMeshT* mesh,
   const std::vector<HalfedgeHandle>& halfedges,
   CR_Vec3d new_point

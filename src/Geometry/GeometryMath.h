@@ -15,7 +15,7 @@ typedef const Vec3d& CR_Vec3d;
 struct GeomThr
 {
   /// used in:
-  /// * check_wrinkle
+  /// * check_face_orientation_violation (disabled area test)
   /// * flip_ok
   static double area_de_thr;
   /// used in:

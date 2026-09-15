@@ -226,14 +226,14 @@ Vec3d EdgeCollapser::constrained_target_point(const Vec3d& new_point)const
 
 void EdgeCollapser::set_flags(
   bool _f_update_links, bool _f_update_target_length,
-  bool _f_update_normals, bool _f_check_wrinkle,
+  bool _f_update_normals, bool _f_check_face_orientation_violation,
   bool _f_check_selfinter, bool _f_check_inter
 )
 {
   f_update_links = _f_update_links;
   f_update_target_length = _f_update_target_length;
   f_update_normals = _f_update_normals;
-  f_check_wrinkle = _f_check_wrinkle;
+  f_check_face_orientation_violation = _f_check_face_orientation_violation;
   f_check_selfinter = _f_check_selfinter;
   f_check_inter = _f_check_inter;
 }
@@ -254,7 +254,7 @@ bool EdgeCollapser::try_collapse_edge(const Vec3d& new_point, const ExactPoint* 
     ((effective_point - new_point).length() <= point_tolerance ? new_ep : nullptr);
 
   // check and backup before collapsing
-  if (f_check_wrinkle && collapse_would_cause_wrinkle(effective_point))
+  if (f_check_face_orientation_violation && collapse_would_violate_face_orientation(effective_point))
     return false;
   if (collapse_would_cause_degenerate(effective_point, effective_ep))
     return false;
@@ -590,7 +590,7 @@ bool EdgeCollapser::target_point_is_valid(const Vec3d& new_point, const ExactPoi
     rm->data(rail_fixed_vertex).ep.get() :
     ((effective_point - new_point).length() <= 1e-15 ? new_ep : nullptr);
 
-  if (f_check_wrinkle && collapse_would_cause_wrinkle(effective_point))
+  if (f_check_face_orientation_violation && collapse_would_violate_face_orientation(effective_point))
     return false;
   if (collapse_would_cause_degenerate(effective_point, effective_ep))
     return false;
@@ -672,9 +672,9 @@ VertexHandle EdgeCollapser::find_closer_end_point()const
     return rm->from_vertex_handle(collapse_he);
 }
 
-bool EdgeCollapser::collapse_would_cause_wrinkle(const Vec3d& new_point)const
+bool EdgeCollapser::collapse_would_violate_face_orientation(const Vec3d& new_point)const
 {
-  return check_wrinkle(rm, halfedges, new_point);
+  return check_face_orientation_violation(rm, halfedges, new_point);
 }
 
 bool EdgeCollapser::collapse_would_cause_intersection(const Vec3d& new_point, const ExactPoint* new_ep)const

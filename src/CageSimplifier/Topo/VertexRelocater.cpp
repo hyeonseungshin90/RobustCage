@@ -32,12 +32,12 @@ void VertexRelocater::clear()
 
 void VertexRelocater::set_flags(
   bool _f_update_links, bool _f_update_target_length,
-  bool _f_update_normals, bool _f_check_wrinkle)
+  bool _f_update_normals, bool _f_check_face_orientation_violation)
 {
   f_update_links = _f_update_links;
   f_update_target_length = _f_update_target_length;
   f_update_normals = _f_update_normals;
-  f_check_wrinkle = _f_check_wrinkle;
+  f_check_face_orientation_violation = _f_check_face_orientation_violation;
 }
 
 void VertexRelocater::relocate(const Vec3d& new_point)
@@ -72,7 +72,7 @@ bool VertexRelocater::try_relocate_vertex(const Vec3d& new_point)
     return false;
   if (relocate_would_cause_intersection(new_point))
     return false;
-  if (f_check_wrinkle && relocate_would_cause_wrinkle(new_point))
+  if (f_check_face_orientation_violation && relocate_would_violate_face_orientation(new_point))
     return false;
 
   relocate(new_point);
@@ -105,7 +105,7 @@ double VertexRelocater::local_Hausdorff_after_relocating(SMeshT* local_rm, const
 {
   ASSERT(initialized, "relocater not initialized.");
 
-  if (f_check_wrinkle && relocate_would_cause_wrinkle(new_point))
+  if (f_check_face_orientation_violation && relocate_would_violate_face_orientation(new_point))
     return DBL_MAX;
 
   if (relocate_would_cause_intersection(new_point))
@@ -352,9 +352,9 @@ void VertexRelocater::generate_links()
   }
 }
 
-bool VertexRelocater::relocate_would_cause_wrinkle(const Vec3d& new_point)const
+bool VertexRelocater::relocate_would_violate_face_orientation(const Vec3d& new_point)const
 {
-  return check_wrinkle(rm, halfedges, new_point);
+  return check_face_orientation_violation(rm, halfedges, new_point);
 }
 
 bool VertexRelocater::relocate_would_cause_intersection(const Vec3d& new_point)const

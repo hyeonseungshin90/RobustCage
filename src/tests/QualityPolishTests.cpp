@@ -552,10 +552,18 @@ void quality_configuration_roundtrip()
   configured.paramRelocate.tangentialWeight = 2.5;
   configured.paramRelocate.surfaceWeight = 0.75;
   configured.paramRelocate.minTriangleQuality = 0.35;
+  configured.paramCollapse.planeWeight = 2.75;
+  configured.paramCollapse.curvatureMode = "weighted_plane";
   // Exercise the actual textual JSON boundary, including JSON integer types.
   auto serialized = boost::json::parse(boost::json::serialize(configured.serialize())).as_object();
   ParamCageGenerator restored;
   restored.paramCageSimplifier.deserialize(serialized);
+  const auto& serialized_collapse = serialized.at("paramCollapse").as_object();
+  require(serialized_collapse.at("planeWeight").as_double() == 2.75 &&
+    serialized_collapse.find("qemWeight") == serialized_collapse.end() &&
+    restored.paramCageSimplifier.paramCollapse.planeWeight == 2.75 &&
+    restored.paramCageSimplifier.paramCollapse.curvatureMode == "weighted_plane",
+    "plane energy settings must round-trip through the canonical JSON names");
   require(restored.paramCageSimplifier.phase2QualityPolishIterations == 5 &&
     restored.paramCageSimplifier.paramRelocate.qualitySweeps == 7 &&
     restored.paramCageSimplifier.paramRelocate.lineSearchMaxIter == 9 &&
@@ -602,6 +610,32 @@ void quality_configuration_roundtrip()
     legacy.paramCageSimplifier.paramRelocate.surfaceWeight == 1.0 &&
     legacy.paramCageSimplifier.paramRelocate.minTriangleQuality == 0.0,
     "relocation scalar settings must accept numeric JSON integers");
+
+  auto legacy_collapse_json = serialized.at("paramCollapse").as_object();
+  legacy_collapse_json.erase("planeWeight");
+  legacy_collapse_json["qemWeight"] = 4.25;
+  for (const char* curvature_alias : {"weighted_qem", "weighted-qem", "weighted-plane"})
+  {
+    legacy_collapse_json["curvatureMode"] = curvature_alias;
+    ParamCollapseStage migrated;
+    migrated.deserialize(legacy_collapse_json);
+    const auto canonical = migrated.serialize();
+    require(migrated.planeWeight == 4.25 && migrated.curvatureMode == "weighted_plane" &&
+      canonical.at("planeWeight").as_double() == 4.25 &&
+      canonical.find("qemWeight") == canonical.end() &&
+      canonical.at("curvatureMode").as_string() == "weighted_plane",
+      "legacy plane energy names must retain their values and serialize with canonical names");
+  }
+  legacy_collapse_json["planeWeight"] = 0.0;
+  ParamCollapseStage preferred;
+  preferred.deserialize(legacy_collapse_json);
+  require(preferred.planeWeight == 0.0,
+    "planeWeight must take precedence over qemWeight, including an explicit zero");
+  legacy_collapse_json.erase("planeWeight");
+  legacy_collapse_json.erase("qemWeight");
+  preferred.deserialize(legacy_collapse_json);
+  require(preferred.planeWeight == 1.0,
+    "absent plane energy weights must retain the existing default");
 }
 
 void invalid_relocation_energy_settings_rejected()
@@ -1300,7 +1334,7 @@ void linear_solve_collapses_only_mixed_edges()
   // ordinary vertex can collapse. The zero proxy has no unique solve.
   auto& parameters = fixture.parameters.paramCageSimplifier.paramCollapse;
   parameters.phase2PlacementStrategy = "linear_solve";
-  parameters.qemWeight = 0.0;
+  parameters.planeWeight = 0.0;
   parameters.triangleQualityWeight = 0.0;
   parameters.uniformityWeight = 0.0;
   parameters.phase2LinearSolveCollisionReject = true;
@@ -1651,7 +1685,7 @@ size_t full_topological_offset_rail_pipeline(size_t outer_cycles = 3,
   simplification.paramRelocate.qualitySweeps = relocation_sweeps;
   // Match the CLI linear-solve preset; only Phase 1 sampling is coarser.
   simplification.paramCollapse.uniformityMode = "global";
-  simplification.paramCollapse.qemWeight = 1.0;
+  simplification.paramCollapse.planeWeight = 1.0;
   simplification.paramCollapse.triangleQualityWeight = 1.0;
   simplification.paramCollapse.uniformityWeight = 1.0;
   omp_set_num_threads(2);

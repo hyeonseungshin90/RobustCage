@@ -30,7 +30,7 @@ public:
     f_update_links(false),
     f_update_target_length(false),
     f_update_normals(false),
-    f_check_wrinkle(true)
+    f_check_face_orientation_violation(true)
   {}
 
   bool init(VertexHandle _v);
@@ -38,7 +38,7 @@ public:
 
   void set_flags(
     bool _f_update_links, bool _f_update_target_length,
-    bool _f_update_normals, bool _f_check_wrinkle
+    bool _f_update_normals, bool _f_check_face_orientation_violation
   );
 
   const std::vector<HalfedgeHandle>& get_halfedges()
@@ -75,7 +75,7 @@ public:
   bool f_update_links;
   bool f_update_target_length;
   bool f_update_normals;
-  bool f_check_wrinkle;
+  bool f_check_face_orientation_violation;
 
   void find_faces_affected();
 
@@ -89,7 +89,7 @@ public:
   /// one ring faces around vertex.
   std::set<FaceHandle> one_ring_faces;
 
-  bool relocate_would_cause_wrinkle(const Vec3d& new_point)const;
+  bool relocate_would_violate_face_orientation(const Vec3d& new_point)const;
   bool relocate_would_cause_intersection(const Vec3d& new_point)const;
   bool relocate_would_cause_degenerate(const Vec3d& new_point)const;
 

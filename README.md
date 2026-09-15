@@ -58,9 +58,22 @@ target is reached, collapse is skipped while flips and rail updates can continue
 Rail updates run only when boundary rails are enabled. A cycle with no accepted
 collapses, flips, or rail updates ends this loop early. Relocation starts after
 the loop ends; no collapse, flip, or rail update follows it.
-Collapse placement and its line-search energy use QEM and the triangle-quality
-surrogate. Uniformity contributes only to collapse queue priority: the global
-mode adds `uniformityWeight * (edge_length / target_length)^2` to the score.
+Collapse placement and its line-search energy use plane approximation and the triangle-quality
+surrogate. Let `L` be the local mean edge length for a collapse candidate.
+The plane term sums the area-weighted squared plane distances and divides by `L^4`:
+`E_plane(x) = planeWeight * sum_f A_f * d_f(x)^2 / L^4`.
+The triangle surrogate averages the squared Euclidean distances to the
+equilateral reference apices and divides by `L^2`:
+`E_triangle(x) = triangleQualityWeight / (N * L^2) * sum_f ||x - reference_apex_f||^2`.
+Each triangle has equal weight in the surrogate, with equal penalties in every
+direction. Both terms are dimensionless, so uniform scaling of the geometry
+preserves their values, apart from numerical safeguards. Their relative strengths
+are set by `planeWeight` and `triangleQualityWeight`. Older JSON files using
+`qemWeight` are accepted as a fallback; `planeWeight` takes precedence when
+both are present. Serialized settings use `planeWeight`. Placement, line search and queue
+scoring use the same normalized terms. Uniformity contributes only to collapse
+queue priority: the global mode adds
+`uniformityWeight * (edge_length / target_length)^2` to the score.
 Flips prioritize improvement in the minimum quality of their two triangles
 and reject intersections, as described below.
 Relocation combines a tangential smoothing target `t`, computed

@@ -625,10 +625,10 @@ std::string normalize_parameter_token(std::string token)
   return token;
 }
 
-void apply_qem_energy_weights(
+void apply_plane_energy_weights(
   Cage::ParamCollapseStage& collapse, bool include_triangle_quality)
 {
-  collapse.qemWeight = 1.0;
+  collapse.planeWeight = 1.0;
   collapse.triangleQualityWeight = include_triangle_quality ? 2.0 : 0.0;
   collapse.uniformityWeight = 2.0;
 }
@@ -640,7 +640,7 @@ void enable_newton_solve_phase2_defaults(Cage::ParamCageGenerator& param)
   simplifier.phase2Mode = "newton_solve";
   collapse.collapsePlacementMethod = "optimization";
   collapse.phase2PlacementStrategy = "newton_solve";
-  collapse.curvatureMode = "weighted_qem";
+  collapse.curvatureMode = "weighted_plane";
   collapse.uniformityMode = "source";
   collapse.triangleQualityWeight = 2.0;
   collapse.uniformityWeight = 1.0;
@@ -658,7 +658,7 @@ void enable_linear_solve_phase2_defaults(Cage::ParamCageGenerator& param)
   collapse.robustnessMode = "exact_reject";
   collapse.curvatureMode = "none";
   collapse.uniformityMode = "global";
-  apply_qem_energy_weights(collapse, true);
+  apply_plane_energy_weights(collapse, true);
 }
 
 void enable_qem_original_phase2_defaults(Cage::ParamCageGenerator& param)
@@ -671,7 +671,7 @@ void enable_qem_original_phase2_defaults(Cage::ParamCageGenerator& param)
   collapse.robustnessMode = "exact_reject";
   collapse.curvatureMode = "none";
   collapse.uniformityMode = "none";
-  apply_qem_energy_weights(collapse, false);
+  apply_plane_energy_weights(collapse, false);
 }
 
 bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerator& param)
@@ -727,7 +727,7 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   if (token == "phase2_newton_solve" || token == "newton_solve")
   {
     enable_newton_solve_phase2_defaults(param);
-    apply_qem_energy_weights(collapse, true);
+    apply_plane_energy_weights(collapse, true);
     return true;
   }
   Logger::user_logger->error("unknown parameter token: {}", raw_token);

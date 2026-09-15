@@ -29,7 +29,7 @@ public:
     f_update_links(false),
     f_update_target_length(false),
     f_update_normals(false),
-    f_check_wrinkle(false),
+    f_check_face_orientation_violation(false),
     f_check_selfinter(true),
     f_check_inter(true)
   {}
@@ -39,7 +39,7 @@ public:
 
   void set_flags(
     bool _f_update_links, bool _f_update_target_length,
-    bool _f_update_normals, bool _f_check_wrinkle,
+    bool _f_update_normals, bool _f_check_face_orientation_violation,
     bool _f_check_selfinter, bool _f_check_inter
   );
 
@@ -80,7 +80,7 @@ private:
   bool f_update_links;
   bool f_update_target_length;
   bool f_update_normals;
-  bool f_check_wrinkle;
+  bool f_check_face_orientation_violation;
   bool f_check_selfinter;
   bool f_check_inter;
 
@@ -112,7 +112,7 @@ private:
   /// one ring faces around collapse halfedge 
   std::set<FaceHandle> one_ring_faces;
 
-  bool collapse_would_cause_wrinkle(const Vec3d& new_point)const;
+  bool collapse_would_violate_face_orientation(const Vec3d& new_point)const;
   bool collapse_would_cause_intersection(const Vec3d& new_point, const ExactPoint* new_ep)const;
   bool collapse_would_cause_degenerate(const Vec3d& new_point, const ExactPoint* new_ep)const;
   bool initialize_rail_constraint(EdgeHandle edge);

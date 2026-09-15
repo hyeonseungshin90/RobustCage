@@ -142,7 +142,7 @@ size_t FastSimplifier::collapse_short_edges()
   auto edge_collapser = new_edge_collapser();
   edge_collapser.set_flags(
     /*update_links*/false, /*update_target_length*/true,
-    /*update_normals*/true, /*check_wrinkle*/false,
+    /*update_normals*/true, /*check_face_orientation_violation*/false,
     /*check_selfinter*/true, /*check_inter*/true);
   initialize_edges_to_collapse();
 
@@ -188,7 +188,7 @@ size_t FastSimplifier::Laplacian_smooth()
     /*update_links*/false,
     /*update_target_length*/true,
     /*update_normals*/true,
-    /*check_wrinkle*/false);
+    /*check_face_orientation_violation*/false);
 
   size_t smooth_num = 0;
   for (size_t it = 0;it < param->smoothIter;it++)

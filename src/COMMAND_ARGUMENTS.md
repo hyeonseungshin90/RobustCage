@@ -64,7 +64,7 @@ rail update가 모두 없으면 반복을 조기 종료합니다. 반복 종료 
 그 뒤에는 collapse, flip, rail update를 다시 실행하지 않습니다. Flip은 boundary rail
 활성화 여부와 관계없이 두 삼각형의 최소 quality 증가량이 큰 순서로 수행합니다.
 교차가 생기는 후보는 reject합니다.
-Collapse 위치의 linear solve와 line-search energy는 QEM과 triangle-quality
+Collapse 위치의 linear solve와 line-search energy는 plane과 triangle-quality
 surrogate를 사용하며 uniformity는 제외합니다. Uniformity는 collapse 우선순위에만
 적용하며, `global` 모드에서는 `uniformityWeight * (edge_length / target_length)^2`를
 큐 점수에 더합니다.
@@ -148,10 +148,15 @@ collapse-only 동작을 유지하여 flip, rail update, 최종 relocation을 생
 
 Newton placement 세부 가중치는 JSON에서 조절합니다. 주요 키는
 `paramCageSimplifier.paramCollapse.phase2PlacementStrategy`,
-`qemWeight`, `triangleQualityWeight`,
+`planeWeight`, `triangleQualityWeight`,
 `uniformityWeight`, `newtonMaxIter`,
 `lineSearchMaxIter`,
 `phase2LinearSolveCollisionReject`입니다.
+
+`planeWeight` controls the local point-to-plane approximation energy. Legacy JSON
+`qemWeight` remains accepted; `planeWeight` takes precedence when both keys are present.
+`curvatureMode` uses `none` or `weighted_plane`. JSON values `weighted-plane`,
+`weighted_qem`, and `weighted-qem` are accepted and normalized to `weighted_plane`.
 
 ## JSON Config
 

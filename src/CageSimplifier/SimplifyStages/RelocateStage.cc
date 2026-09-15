@@ -254,7 +254,7 @@ void RelocateStage::update_after_relocating(VertexHandle relocate_center)
 void RelocateStage::do_relocate()
 {
   auto vertex_relocater = new_vertex_relocater();
-  vertex_relocater.set_flags(/*update_links*/true, /*update_target_length*/false, /*update_normals*/true, /*check_wrinkle*/false);
+  vertex_relocater.set_flags(/*update_links*/true, /*update_target_length*/false, /*update_normals*/true, /*check_face_orientation_violation*/false);
   Logger::user_logger->info("relocate priority mode: {}", param->priorityMode);
   size_t relocated_vertex_num = 0;
   for (size_t it = 0;it < param->smoothIter;it++)
@@ -315,7 +315,7 @@ size_t RelocateStage::do_quality_relocate(size_t line_search_max_iter)
 
   auto relocater = new_vertex_relocater();
   relocater.set_flags(/*update_links*/false, /*update_target_length*/false,
-    /*update_normals*/true, /*check_wrinkle*/true);
+    /*update_normals*/true, /*check_face_orientation_violation*/true);
 
   size_t relocated = 0;
   size_t backtracked = 0;

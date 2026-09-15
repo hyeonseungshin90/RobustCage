@@ -66,7 +66,7 @@ size_t DegenerationRemover::eliminate_almost_degeneration()
     /*update_links*/false,
     /*update_target_length*/false,
     /*update_normals*/false,
-    /*check_wrinkle*/false,
+    /*check_face_orientation_violation*/false,
     /*check_selfinter*/true,
     /*check_inter*/true
   );

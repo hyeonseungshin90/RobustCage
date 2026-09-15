@@ -564,13 +564,13 @@ int same_side_wrapped(CR_Vec3d a, CR_Vec3d b, CR_Vec3d c, CR_Vec3d p)
 /*    Constraint   */
 /*******************/
 
-/// @brief check all triangles formed by halfedges and new point
-/// will cause wrinkle with respect to original point.
+/// @brief Check whether proposed triangles violate their original face orientations.
 /// @param [in] mesh triangle mesh
 /// @param [in] halfedges form a circle(interior) or semi-circle(boundary).
 /// @param [in] new_point new position of original center point located on center of halfedges.
-/// @return true if new position will cause wrinkle.
-bool check_wrinkle(
+/// @return true if any original and proposed face normals have dot product <= 0.
+/// Zero-length base edges are skipped.
+bool check_face_orientation_violation(
 	SMeshT* mesh,
 	const std::vector<HalfedgeHandle>& halfedges,
 	CR_Vec3d new_point)
