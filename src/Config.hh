@@ -367,6 +367,10 @@ struct ParamCageSimplifier
   // bisector alternative, and "compare" runs both on copies of one Phase 1
   // cage without entering simplification.
   std::string boundaryRailAnchorMode = "edge";
+  // Run the per-triangle rail relabeling pass after each linear-solve quality
+  // flip stage.  Only meaningful with enableBoundaryRails; turning it off
+  // isolates the effect of the rail update on an otherwise identical run.
+  bool enableRailUpdate = true;
   // iterations
   size_t maxIter;
   // distance error control
@@ -394,6 +398,7 @@ struct ParamCageSimplifier
     jo["phase2QualityPolishIterations"] = phase2QualityPolishIterations;
     jo["enableBoundaryRails"] = enableBoundaryRails;
     jo["boundaryRailAnchorMode"] = boundaryRailAnchorMode;
+    jo["enableRailUpdate"] = enableRailUpdate;
     jo["relaxErrorIterStep"] = relaxErrorIterStep;
     jo["maxErrorRelaxIter"] = maxErrorRelaxIter;
     jo["initError"] = initError;
@@ -420,6 +425,9 @@ struct ParamCageSimplifier
       "edge";
     if (boundaryRailAnchorMode == "compare")
       enableBoundaryRails = true;
+    auto rail_update_it = jo.find("enableRailUpdate");
+    enableRailUpdate = rail_update_it != jo.end() ?
+      rail_update_it->value().as_bool() : true;
     relaxErrorIterStep = jo.at("relaxErrorIterStep").as_int64();
     maxErrorRelaxIter = jo.at("maxErrorRelaxIter").as_int64();
     initError = jo.at("initError").as_double();
@@ -452,6 +460,7 @@ struct ParamCageGenerator
     simplifier.phase2Mode = "fast";
     simplifier.enableBoundaryRails = false;
     simplifier.boundaryRailAnchorMode = "edge";
+    simplifier.enableRailUpdate = true;
     simplifier.maxIter = 30;
     simplifier.relaxErrorIterStep = 5;
     simplifier.maxErrorRelaxIter = 4;

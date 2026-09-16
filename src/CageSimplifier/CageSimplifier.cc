@@ -315,7 +315,8 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
     // Each call processes triangle shortcuts until no more are possible.
     // Labels change only; newly released vertices are reconsidered by the
     // next cycle's collapse/flip stages and by the final relocation stage.
-    const size_t rail_updates = param->enableBoundaryRails ?
+    const size_t rail_updates =
+      param->enableBoundaryRails && param->enableRailUpdate ?
       update_boundary_rails(*rm) : 0;
     Logger::user_logger->info(
       "phase 2 linear-solve cycle {}: collapsed {}, flipped {}, rail updates {}, vertices {}, min triangle quality {}.",

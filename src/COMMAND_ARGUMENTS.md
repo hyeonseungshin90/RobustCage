@@ -46,6 +46,7 @@ config.json
 | `phase1_topological_offset` | phase1 | Zint et al.의 simplicial embedding과 offset insertion을 수행한 뒤 기존 `retrieveCage()`로 boundary를 추출합니다. `topological_offset`도 같은 별칭으로 사용할 수 있습니다. |
 | `boundary_rail` | phase1.5/phase2 | Source-boundary anchor를 삽입하고 Dijkstra로 초기 loop를 구성한 뒤, anchor를 고정한 intrinsic flip geodesics와 실제 mesh split으로 rail 경로를 단축합니다. 이후 rail collapse는 source boundary tangent와 outward co-normal의 ruled half-strip으로 제약합니다. 네 가지 energy Phase 2 preset 중 하나와 조합해야 합니다. |
 | `boundary_rail_vertex` | phase1.5/phase2 | `boundary_rail`과 동일하지만 ray를 boundary vertex에서 인접한 두 edge co-normal의 bisector 방향으로 쏩니다. 비교 실험용이며 source-edge support에는 평균 전의 edge co-normal을 저장합니다. Energy Phase 2 preset과 조합해야 합니다. |
+| `no_rail_update` | phase2 | `enableRailUpdate = false`; `linear_solve` 반복에서 flip 뒤의 `update_boundary_rails()` 호출만 생략합니다. Collapse, flip, relocation과 초기 rail 구성은 그대로이므로 rail update의 효과만 분리해 비교할 수 있습니다. `boundary_rail` 계열 토큰과 함께 사용하며, 이 경우 실행 폴더 이름에 `__no_rail_update`가 붙습니다. |
 | `boundary_rail_compare` | phase1/benchmark | Phase 1을 한 번만 실행한 뒤 동일 initial cage와 source의 독립 복사본에서 edge-midpoint 방식과 vertex-bisector 방식을 각각 실행합니다. simplification은 생략하고 run-local CSV와 두 결과 cage/rail을 기록합니다. |
 | `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; repeat linear-solve collapses with Armijo backtracking and quality-priority flips, then run final relocation sweeps combining Voronoi tangential smoothing with source-surface attraction |
 | `phase2_linear_solve_collision_reject` | phase2 | Same defaults as `phase2_linear_solve` plus `phase2LinearSolveCollisionReject = true`; reject an invalid raw linear-solve point instead of backtracking |
@@ -189,6 +190,7 @@ JSON 파일을 첫 번째 인수로 넘기면 `ParamCageGenerator` 설정을 덮
 |---|---|---:|
 | `paramCageInitializer.phase1Mode` | Phase 1 방식: `"subdivision"` 또는 `"topological_offset"` | `"subdivision"` |
 | `paramCageSimplifier.maxIter` | 기존 일반 cage simplifier 최대 반복 횟수 | `30` |
+| `paramCageSimplifier.enableRailUpdate` | `false`이면 `linear_solve` 반복에서 flip 뒤의 rail update만 생략. `enableBoundaryRails`가 `true`일 때만 의미가 있음 | `true` |
 | `paramCageSimplifier.phase2QualityPolishIterations` | linear-solve의 collapse/flip/rail-update 반복 한도. `0`이면 collapse만 한 번 실행하고 flip, rail update, 마지막 relocation 생략 | `30` |
 | `paramCageSimplifier.relaxErrorIterStep` | 에러 완화 반복 간격 | `5` |
 | `paramCageSimplifier.maxErrorRelaxIter` | 최대 에러 완화 단계 | `4` |

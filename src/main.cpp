@@ -275,6 +275,9 @@ std::string build_run_dir_name(const Cage::ParamCageGenerator& param)
       << "__" << flip_mode_label(simplifier.paramFlip)
       << "__" << relocate_mode_label(simplifier.paramRelocate);
   }
+  // Only the disabled case is named, so existing run folder names are unchanged.
+  if (simplifier.enableBoundaryRails && !simplifier.enableRailUpdate)
+    oss << "__no_rail_update";
   return oss.str();
 }
 
@@ -704,6 +707,11 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
   {
     param.paramCageSimplifier.enableBoundaryRails = true;
     param.paramCageSimplifier.boundaryRailAnchorMode = "compare";
+    return true;
+  }
+  if (token == "no_rail_update")
+  {
+    param.paramCageSimplifier.enableRailUpdate = false;
     return true;
   }
 
