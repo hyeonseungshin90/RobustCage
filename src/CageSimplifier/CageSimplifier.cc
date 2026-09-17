@@ -238,9 +238,14 @@ void CageSimplifier::calc_diagonal_length()
 
 void CageSimplifier::run_phase2_energy_simplification()
 {
-  Logger::user_logger->info(
-    "running Phase 2 energy mode [{}] to final target {} vertices.",
-    param->phase2Mode, param->targetVerticesNum);
+  if (param->targetVerticesNum == 0)
+    Logger::user_logger->info(
+      "running Phase 2 energy mode [{}] until no further progress (no vertex target).",
+      param->phase2Mode);
+  else
+    Logger::user_logger->info(
+      "running Phase 2 energy mode [{}] to final target {} vertices.",
+      param->phase2Mode, param->targetVerticesNum);
 
   collapse_stage = std::make_unique<CollapseStage>(
     om, rm, &param->paramCollapse,
@@ -290,15 +295,20 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
     return;
   }
 
+  const bool until_stalled = param->targetVerticesNum == 0;
+  const std::string cycle_limit = until_stalled ? "unlimited" :
+    "up to " + std::to_string(param->phase2QualityPolishIterations);
   Logger::user_logger->info(
-    "running phase 2 linear-solve iterations: up to {} collapse/flip/rail-update cycles, then up to {} final relocation sweeps with {} backtracking attempts per vertex; rail vertices fixed during relocation.",
-    param->phase2QualityPolishIterations, param->paramRelocate.qualitySweeps,
+    "running phase 2 linear-solve iterations: {} collapse/flip/rail-update cycles, then up to {} final relocation sweeps with {} backtracking attempts per vertex; rail vertices fixed during relocation.",
+    cycle_limit, param->paramRelocate.qualitySweeps,
     param->paramRelocate.lineSearchMaxIter);
 
   flip_stage = std::make_unique<FlipStage>(
     om, rm, &param->paramFlip,
     ot.get(), lrt.get(), og.get(), original_diagonal_length);
-  for (size_t iteration = 0; iteration < param->phase2QualityPolishIterations; ++iteration)
+  for (size_t iteration = 0;
+       until_stalled || iteration < param->phase2QualityPolishIterations;
+       ++iteration)
   {
     // Rebuild collapse candidates after the previous cycle's flips and rail
     // relabeling, which can make previously constrained edges collapsible.
@@ -330,7 +340,7 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
       Logger::user_logger->info("phase 2 linear-solve iterations stopped: no accepted collapses, flips, or rail updates.");
       break;
     }
-    if (iteration + 1 == param->phase2QualityPolishIterations)
+    if (!until_stalled && iteration + 1 == param->phase2QualityPolishIterations)
       Logger::user_logger->info("phase 2 linear-solve iterations stopped: cycle limit reached.");
   }
   flip_stage = nullptr;

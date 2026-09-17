@@ -56,6 +56,11 @@ struct CollapseStageTestAccess
   {
     return stage.evaluate_phase2_queue_score(stage.evaluate_phase2_queue_components(context, point));
   }
+
+  static double target_edge_length(const CollapseStage& stage)
+  {
+    return stage.phase2_target_edge_length;
+  }
 };
 }
 }
@@ -1602,7 +1607,7 @@ void mixed_collapse_collision_is_rejected()
     require_closed_rail_cycles(fixture.cage) == 1, "collision rejection must preserve both endpoints and the rail");
 }
 
-void linear_solve_collapses_only_mixed_edges()
+void linear_solve_collapses_only_mixed_edges(size_t target_vertices)
 {
   Fixture fixture;
   const auto v = add_collapse_octahedron(fixture.cage, false, true);
@@ -1624,13 +1629,37 @@ void linear_solve_collapses_only_mixed_edges()
   parameters.lineSearchMaxIter = 0;
   CollapseStage stage(&fixture.original, &fixture.cage, &parameters, fixture.source_tree.get(),
     fixture.cage_tree.get(), fixture.source_grid.get(), 1.0);
-  require(stage.do_phase2_energy_simplification(6) == 1,
+  require(stage.do_phase2_energy_simplification(7) == 0 && fixture.cage.n_vertices() == 7,
+    "a positive target already reached must preserve a legally collapsible mesh");
+  double initial_mean_edge_length = 0.0;
+  for (EdgeHandle edge : fixture.cage.edges())
+    initial_mean_edge_length += fixture.cage.calc_edge_length(edge);
+  initial_mean_edge_length /= fixture.cage.n_edges();
+  require(stage.do_phase2_energy_simplification(target_vertices) == 1,
     "linear Phase 2 must queue and commit a mixed edge even with a singular zero-weight proxy");
   require(fixture.cage.n_vertices() == 6 && fixture.cage.n_faces() == 8 &&
     require_closed_rail_cycles(fixture.cage) == 2,
     "mixed-only Phase 2 must remove the free vertex while retaining both minimal rail cycles");
   for (size_t i = 0; i < v.size(); ++i)
     require(fixture.cage.point(v[i]) == before[i], "linear mixed collapse must keep all six rail positions exactly");
+  if (target_vertices == 0)
+  {
+    require(std::abs(CollapseStageTestAccess::target_edge_length(stage) - initial_mean_edge_length) < 1e-12,
+      "unbounded collapse must use the initial mean edge length without target-count scaling");
+    double final_mean_edge_length = 0.0;
+    for (EdgeHandle edge : fixture.cage.edges())
+      final_mean_edge_length += fixture.cage.calc_edge_length(edge);
+    final_mean_edge_length /= fixture.cage.n_edges();
+    require(std::abs(final_mean_edge_length - initial_mean_edge_length) > 1e-3,
+      "unbounded scale fixture must change the mesh mean edge length after collapse");
+    const RailUpdateSnapshot after_first_call(fixture.cage);
+    require(stage.do_phase2_energy_simplification(0) == 0,
+      "unbounded collapse must terminate with no progress once every remaining edge is constrained");
+    after_first_call.require_geometry_unchanged(fixture.cage);
+    after_first_call.require_labels_unchanged(fixture.cage);
+    require(std::abs(CollapseStageTestAccess::target_edge_length(stage) - initial_mean_edge_length) < 1e-12,
+      "repeated unbounded collapse calls must keep the initial mean edge length fixed");
+  }
   fixture.require_source_clear();
 }
 
@@ -1715,6 +1744,70 @@ public:
   ~ScopedUserLogCapture() { Logger::user_logger = previous_logger; }
   std::string text() const { return output.str(); }
 };
+
+void unbounded_linear_solve_reaches_the_stalled_cycle()
+{
+  for (size_t target_vertices : {size_t(6), size_t(0)})
+    for (size_t outer_cycles : {size_t(0), size_t(1)})
+    {
+      Fixture fixture;
+      for (VertexHandle vertex : fixture.original.vertices())
+        fixture.original.set_point(vertex,
+          (fixture.original.point(vertex) - Vec3d(10.25, 10.25, 10.25)) * 0.2);
+      const auto v = add_collapse_octahedron(fixture.cage, false, true);
+      label_rail_cycle(fixture.cage, {v[0], v[1], v[2]}, 3);
+      label_rail_cycle(fixture.cage, {v[5], v[3], v[4]}, 4);
+      std::array<Vec3d, 6> rail_points;
+      for (size_t i = 0; i < v.size(); ++i)
+        rail_points[i] = fixture.cage.point(v[i]);
+      const std::filesystem::path output_directory = std::filesystem::path("quality_polish_test_output") /
+        ("target_" + std::to_string(target_vertices) + "_cycles_" + std::to_string(outer_cycles));
+      std::filesystem::create_directories(output_directory);
+      fixture.parameters.setOutputPath(output_directory.generic_string() + "/", "octahedron");
+      fixture.parameters.setCageLabel(0);
+      auto& parameters = fixture.parameters.paramCageSimplifier;
+      parameters.phase2Mode = "linear_solve";
+      parameters.targetVerticesNum = target_vertices;
+      parameters.enableBoundaryRails = true;
+      parameters.phase2QualityPolishIterations = outer_cycles;
+      parameters.paramRelocate.qualitySweeps = 0;
+      parameters.paramCollapse.planeWeight = 0.0;
+      parameters.paramCollapse.triangleQualityWeight = 0.0;
+      parameters.paramCollapse.uniformityWeight = 0.0;
+      ScopedUserLogCapture captured_log;
+      CageSimplifier simplifier(&fixture.original, &fixture.cage, &parameters);
+      simplifier.simplify();
+      require(fixture.cage.n_vertices() == 6 && fixture.cage.n_faces() == 8 &&
+        require_closed_rail_cycles(fixture.cage) == 2,
+        "bounded and unbounded production must remove the only free vertex and preserve both minimal rails");
+      for (size_t i = 0; i < v.size(); ++i)
+        require(fixture.cage.point(v[i]) == rail_points[i],
+          "production collapse must preserve every fixed rail position");
+      require_clear_closed_mesh(fixture.cage, fixture.original);
+      const std::string log = captured_log.text();
+      if (outer_cycles == 0)
+      {
+        require(log.find("phase 2 energy simplification") != std::string::npos &&
+          log.find("phase 2 linear-solve cycle ") == std::string::npos &&
+          log.find("quality flip:") == std::string::npos &&
+          log.find("energy relocation:") == std::string::npos,
+          "zero polish cycles must retain collapse-only behavior for both positive and zero targets");
+        continue;
+      }
+      require(log.find("phase 2 linear-solve cycle 1: collapsed 1, flipped 0, rail updates 0, vertices 6") != std::string::npos,
+        "production must accept the legal mixed collapse in its first cycle");
+      if (target_vertices == 0)
+        require(log.find("phase 2 linear-solve cycle 2: collapsed 0, flipped 0, rail updates 0, vertices 6") != std::string::npos &&
+          log.find("phase 2 linear-solve cycle 3:") == std::string::npos &&
+          log.find("no accepted collapses, flips, or rail updates.") != std::string::npos &&
+          log.find("cycle limit reached.") == std::string::npos,
+          "zero target must bypass the one-cycle cap and terminate at the stable second cycle");
+      else
+        require(log.find("phase 2 linear-solve cycle 2:") == std::string::npos &&
+          log.find("cycle limit reached.") != std::string::npos,
+          "a positive target must retain the configured one-cycle limit");
+    }
+}
 
 void at_target_default_flips_use_quality_only()
 {
@@ -2108,7 +2201,9 @@ int main()
     {"mixed collapse preserves rail cycles without promoting chords", [] { mixed_collapse_keeps_rail_vertex(true, true); }},
     {"minimal rail edges, chords, and cross-rail edges remain forbidden", prohibited_rail_collapses_stay_rejected},
     {"mixed collapse still rejects collisions at the fixed rail point", mixed_collapse_collision_is_rejected},
-    {"linear solve queues and commits mixed edges with fixed rail positions", linear_solve_collapses_only_mixed_edges},
+    {"linear solve queues and commits mixed edges with fixed rail positions", [] { linear_solve_collapses_only_mixed_edges(6); }},
+    {"zero target collapses until constrained and retains its initial edge scale", [] { linear_solve_collapses_only_mixed_edges(0); }},
+    {"zero target bypasses the outer cycle cap and preserves collapse-only mode", unbounded_linear_solve_reaches_the_stalled_cycle},
     {"Voronoi smoothing includes neighbors' exterior faces", voronoi_target_uses_neighbor_faces},
     {"tangential relocation improves quality and fixes rail vertices", improving_relocation},
     {"symmetric smoothing is a no-op", symmetric_relocation_is_noop},

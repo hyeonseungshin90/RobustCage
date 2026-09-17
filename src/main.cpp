@@ -812,7 +812,7 @@ bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator&
 int main(int argc, char* argv[])
 {
   // args tips
-  if (argc < 5)
+  if (argc < 4)
   {
     printf("Need args:\n");
     printf("arg[0]: parameters.\n");
@@ -830,9 +830,10 @@ int main(int argc, char* argv[])
     printf("arg[1]: input model path.\n");
     printf("ASCII and binary STL input files are supported.\n");
     printf("arg[2]: output dir path.\n");
-    printf("(optional)arg[2]: vertices number of nested cage 0.\n");
-    printf("(optional)arg[3]: vertices number of nested cage 1.\n");
-    printf("(optional)arg[n + 2]: vertices number of nested cage n.\n");
+    printf("arg[3]: target vertices number of cage 0 (optional for linear_solve).\n");
+    printf("(optional)arg[4]: target vertices number of nested cage 1.\n");
+    printf("(optional)arg[n + 3]: target vertices number of nested cage n.\n");
+    printf("For linear_solve, omit targets or use 0 to repeat collapse/flip/rail update until no further progress.\n");
     return 1;
   }
 
@@ -845,6 +846,13 @@ int main(int argc, char* argv[])
   Cage::ParamCageGenerator param;
   if (!parse_parameter_arg(arg_param, param))
     return 1;
+
+  if (argc == 4 && param.paramCageSimplifier.phase2Mode != "linear_solve")
+  {
+    Logger::user_logger->error(
+      "a target vertex count is required; targets may be omitted only for linear_solve.");
+    return 1;
+  }
 
   // parse input/output file/directory.
   bf::path in_model_path(argv[2]);
@@ -888,6 +896,9 @@ int main(int argc, char* argv[])
     Logger::user_logger->error("error in parsing arguments.");
     return 1;
   }
+
+  if (target_vn.empty())
+    target_vn.push_back(0);
 
   // generate!
   generate_cages(param, in_model_path, out_data_path, target_vn);

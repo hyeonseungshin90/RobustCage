@@ -1,9 +1,9 @@
 # Command Arguments
 
-`exeCageGenerator.exe`는 위치 기반 명령 인수를 사용합니다. 최소 1개의 목표 정점 수가 필요합니다.
+`exeCageGenerator.exe`는 위치 기반 명령 인수를 사용합니다. `linear_solve`에서는 목표 정점 수를 생략할 수 있으며, 다른 모드에서는 최소 1개가 필요합니다.
 
 ```text
-exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path> <target_Nv_0> [target_Nv_1 ... target_Nv_n]
+exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path> [target_Nv_0 target_Nv_1 ... target_Nv_n]
 ```
 
 ## Arguments
@@ -13,8 +13,8 @@ exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path>
 | 0 | `exeCageGenerator.exe` | 예 | 실행 파일 이름입니다. CMake 대상 이름은 `exeCageGenerator`입니다. |
 | 1 | `<parameters_or_config>` | 예 | `default`, 프리셋 토큰, 토큰 조합, 또는 JSON 설정 파일 경로입니다. |
 | 2 | `<input_model_path>` | 예 | 입력 메쉬 파일 경로입니다. 코드에서 일반 파일인지 검사합니다. |
-| 3 | `<output_dir_path>` | 예 | 출력 디렉터리 경로입니다. 이미 존재하는 디렉터리여야 합니다. |
-| 4+ | `<target_Nv_i>` | 예 | 생성할 cage의 목표 정점 수입니다. 여러 개를 넘기면 nested cage를 순서대로 생성합니다. |
+| 3 | `<output_dir_path>` | 예 | 출력 디렉터리 경로입니다. 없으면 자동으로 생성합니다. |
+| 4+ | `<target_Nv_i>` | 조건부 | 생성할 cage의 목표 정점 수입니다. `linear_solve`에서는 `0` 또는 생략 시 더 이상 진행할 수 없을 때까지 실행합니다. 다른 모드에서는 필수입니다. 여러 개를 넘기면 nested cage를 순서대로 생성합니다. |
 
 ## Parameter Argument
 
@@ -55,10 +55,16 @@ config.json
 
 `phase1_topological_offset`을 명시한 경우에만 새 Phase 1을 사용합니다. `default`와 기존 `phase2_*` 토큰만 사용한 명령은 이전과 동일하게 subdivision 기반 Phase 1을 수행합니다.
 
-`linear_solve`에서는 `collapse → flip → rail update`를 기본 최대 30회 반복한 뒤,
+양의 목표 정점 수를 지정한 `linear_solve`에서는 `collapse → flip → rail update`를 기본 최대 30회 반복한 뒤,
 마지막에 relocation 단계를 한 번 실행합니다.
+목표 정점 수를 `0`으로 지정하거나 생략하면 정점 수, collapse pass 횟수,
+cycle 횟수 제한 없이 collapse, flip, rail update가 모두 더 이상 수락되지 않을
+때까지 반복합니다. `phase2Mode = "linear_solve"`인 JSON 설정과
+`phase2_linear_solve_collision_reject`에도 적용합니다. 다른 모드는 목표 정점 수를
+생략하면 오류입니다.
 Flip과 rail 라벨 갱신 이후 collapse 후보 큐를 다시 만들어 새롭게 가능한 collapse를
-재시도하며, global target edge length는 최초 값으로 유지합니다. 목표 정점 수에
+재시도하며, global target edge length는 최초 값으로 유지합니다. 목표가 `0`이면
+초기 cage의 평균 edge length를 고정 기준으로 사용합니다. 양의 목표 정점 수에
 도달하면 collapse를 생략하고 flip과 rail update는 계속할 수 있습니다.
 Rail update는 boundary rail이 활성화된 경우에만 실행합니다. Collapse, flip,
 rail update가 모두 없으면 반복을 조기 종료합니다. 반복 종료 후 relocation을 수행하며,
@@ -129,7 +135,9 @@ Boundary rail을 활성화한 `linear_solve`에서는 매 quality-flip 단계 �
 source 거리나 opening 크기에 대한 별도 오차 제한은 없습니다.
 Rail update만 발생한 cycle도 진행으로 간주하므로, 다음 cycle에서 갱신된 제약으로
 collapse와 flip을 다시 시도합니다. `phase2QualityPolishIterations = 0`은 기존
-collapse-only 동작을 유지하여 flip, rail update, 최종 relocation을 생략합니다.
+collapse-only 동작을 유지하여 collapse 단계를 한 번 호출하고 flip, rail update,
+최종 relocation을 생략합니다. 목표도 `0`이면 이 collapse 단계는 더 이상
+collapse를 수락할 수 없을 때까지 진행합니다.
 
 이 에너지는 전체 Hausdorff distance를 최소화하거나 그 개선을 보장하지 않습니다.
 교차 검사는 후보 위치 기준이며, 이동 경로 전체의 CCD나 양의 표면 간격을
@@ -142,8 +150,9 @@ collapse-only 동작을 유지하여 flip, rail update, 최종 relocation을 생
 두 가중치는 유한한 비음수여야 합니다. `surfaceWeight = 0`이면 tangential target만,
 `tangentialWeight = 0`이면 원본 최근접점 target만 사용하며, 둘 다 `0`이면 relocation을
 생략합니다. `minTriangleQuality`는 유한한 `[0, 1]` 값이어야 합니다. 기존 JSON 키 이름
-`phase2QualityPolishIterations`는 호환성을 위해 유지하며, collapse/flip/rail-update 반복 한도를
-뜻합니다. `0`이면 collapse만 한 번 실행하고 flip, rail update, 마지막 relocation을 모두 생략합니다.
+`phase2QualityPolishIterations`는 호환성을 위해 유지하며, 양의 목표 정점 수에 대한
+collapse/flip/rail-update 반복 한도를 뜻합니다. 목표가 `0`이면 양의 반복 한도는
+무시합니다. 설정 자체가 `0`이면 위의 collapse-only 동작을 사용합니다.
 
 알 수 없는 토큰이 들어오면 `unknown parameter token` 오류와 함께 실행이 중단됩니다.
 
@@ -191,7 +200,7 @@ JSON 파일을 첫 번째 인수로 넘기면 `ParamCageGenerator` 설정을 덮
 | `paramCageInitializer.phase1Mode` | Phase 1 방식: `"subdivision"` 또는 `"topological_offset"` | `"subdivision"` |
 | `paramCageSimplifier.maxIter` | 기존 일반 cage simplifier 최대 반복 횟수 | `30` |
 | `paramCageSimplifier.enableRailUpdate` | `false`이면 `linear_solve` 반복에서 flip 뒤의 rail update만 생략. `enableBoundaryRails`가 `true`일 때만 의미가 있음 | `true` |
-| `paramCageSimplifier.phase2QualityPolishIterations` | linear-solve의 collapse/flip/rail-update 반복 한도. `0`이면 collapse만 한 번 실행하고 flip, rail update, 마지막 relocation 생략 | `30` |
+| `paramCageSimplifier.phase2QualityPolishIterations` | linear-solve의 collapse/flip/rail-update 반복 한도. 목표 정점 수가 `0`이면 양의 한도는 무시. 설정 자체가 `0`이면 collapse 단계만 한 번 호출하고 flip, rail update, 마지막 relocation 생략 | `30` |
 | `paramCageSimplifier.relaxErrorIterStep` | 에러 완화 반복 간격 | `5` |
 | `paramCageSimplifier.maxErrorRelaxIter` | 최대 에러 완화 단계 | `4` |
 | `paramCageSimplifier.initError` | 초기 Hausdorff distance 허용값 | `0.005` |
@@ -241,6 +250,13 @@ nested cage 생성:
 .\exeCageGenerator.exe phase2_linear_solve+boundary_rail C:\models\bunny.obj C:\out 500
 ```
 
+목표 정점 수 없이 가능한 단순화가 끝날 때까지 실행(아래 두 명령은 동일):
+
+```powershell
+.\exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve+boundary_rail C:\models\open.obj C:\out 0
+.\exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve+boundary_rail C:\models\open.obj C:\out
+```
+
 동일한 Phase 1 cage에서 두 anchor 방법 비교(`target_Nv`는 CLI 형식상 필요하지만 사용하지 않음):
 
 ```powershell
@@ -282,8 +298,7 @@ JSON 설정 파일 사용:
 
 ## Notes
 
-- `<output_dir_path>`는 실행 전에 존재해야 합니다. 프로그램은 그 아래에 입력 파일 이름의 하위 디렉터리와 실행별 결과 디렉터리를 만듭니다.
-- `<target_Nv_i>`는 정수로 파싱됩니다. 의도와 다른 결과를 피하려면 양의 정수를 사용하세요.
+- `<output_dir_path>`가 없으면 자동으로 생성합니다. 프로그램은 그 아래에 입력 파일 이름의 하위 디렉터리와 실행별 결과 디렉터리를 만듭니다.
+- `<target_Nv_i>`는 정수로 파싱됩니다. 양의 정수는 기존 목표 정점 수와 반복 한도를 사용합니다. `linear_solve`에서만 `0` 또는 인수 생략을 무제한 모드로 사용하세요. 충돌 검사와 boundary rail 제약, 마지막 relocation의 sweep 및 line-search 한도는 유지됩니다.
 - rail 파일(`*_rails.obj`, `*_rails.txt`)은 `boundary_rail` 프리셋으로 실행해 rail이 실제로 만들어졌을 때만 생성됩니다. rail은 입력 메쉬의 boundary loop에서 나오므로 watertight 입력에서는 생성되지 않습니다.
 - 입력 메쉬가 non-manifold이거나 non-watertight이면 경고를 남기고 계속 진행합니다. 단, 읽기 실패 또는 vertex/face가 없는 입력은 `invalid mesh`로 중단됩니다.
-- 현재 `main.cpp`의 도움말 출력은 인덱스 표기가 일부 어긋나 있습니다. 실제 파싱 기준은 이 문서의 명령 형식입니다.

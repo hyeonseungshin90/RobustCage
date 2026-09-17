@@ -1909,6 +1909,18 @@ void CollapseStage::initialize_phase2_target_edge_length(size_t target_vertices_
   refresh_phase2_average_lengths();
   phase2_target_edge_length = avg_edge_length;
 
+  // With no vertex target, keep the initial cage mean as the queue's fixed
+  // length scale instead of estimating a length from a fictitious target.
+  if (target_vertices_num == 0)
+  {
+    phase2_target_edge_length_initialized = true;
+    phase2_target_vertices_num = 0;
+    Logger::user_logger->info(
+      "phase 2 target edge length: no vertex target; fixed initial mean {}.",
+      phase2_target_edge_length);
+    return;
+  }
+
   const double initial_vertices = static_cast<double>(rm->n_vertices());
   const double initial_edges = static_cast<double>(rm->n_edges());
   const double initial_faces = static_cast<double>(rm->n_faces());
@@ -2057,12 +2069,18 @@ void CollapseStage::update_phase2_after_collapsing(VertexHandle collapsed_center
 // 4. Requeue only the affected one-ring edges.
 size_t CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num)
 {
-  if (target_vertices_num == 0 || rm->n_vertices() <= target_vertices_num)
+  const bool until_stalled = target_vertices_num == 0;
+  if (!until_stalled && rm->n_vertices() <= target_vertices_num)
     return 0;
 
-  Logger::user_logger->info(
-    "phase 2 energy simplification [{}]: {} -> {} vertices.",
-    param->phase2PlacementStrategy, rm->n_vertices(), target_vertices_num);
+  if (until_stalled)
+    Logger::user_logger->info(
+      "phase 2 energy simplification [{}]: {} vertices, collapsing until no further progress.",
+      param->phase2PlacementStrategy, rm->n_vertices());
+  else
+    Logger::user_logger->info(
+      "phase 2 energy simplification [{}]: {} -> {} vertices.",
+      param->phase2PlacementStrategy, rm->n_vertices(), target_vertices_num);
   initialize_phase2_target_edge_length(target_vertices_num);
   Logger::user_logger->info(
     "phase 2 energy terms: planeWeight {}, triangleQualityWeight {}, curvatureMode [{}], uniformityMode [{}], uniformityWeight {}, robustnessMode [{}].",
@@ -2109,7 +2127,10 @@ size_t CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num
   size_t no_progress_passes = 0;
   const size_t max_phase2_passes = 12;
 
-  for (size_t pass = 1; remaining_vertices > target_vertices_num && pass <= max_phase2_passes; pass++)
+  for (size_t pass = 1;
+       (until_stalled || remaining_vertices > target_vertices_num) &&
+         (until_stalled || pass <= max_phase2_passes);
+       pass++)
   {
     Logger::user_logger->info("phase 2 energy pass {}.", pass);
     initialize_phase2_candidates();
@@ -2128,7 +2149,8 @@ size_t CollapseStage::do_phase2_energy_simplification(size_t target_vertices_num
     double pass_newton_seconds = 0.0;
     double pass_exact_collapse_seconds = 0.0;
     auto last_progress_log_time = std::chrono::steady_clock::now();
-    while (remaining_vertices > target_vertices_num && !phase2_edges_to_collapse.empty())
+    while ((until_stalled || remaining_vertices > target_vertices_num) &&
+           !phase2_edges_to_collapse.empty())
     {
       Phase2EdgeReward edge_reward = phase2_edges_to_collapse.top();
       phase2_edges_to_collapse.pop();

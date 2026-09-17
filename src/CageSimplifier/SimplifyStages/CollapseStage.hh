@@ -42,6 +42,8 @@ public:
   // Replaces legacy Phase 2 by repeatedly collapsing edges until the target
   // vertex count is reached. Each collapse chooses its new vertex position
   // before the topology change is committed.
+  // A zero target removes the vertex/pass limits and stops after two rebuilt
+  // passes without a collapse, using the initial mean edge length as its scale.
   // Repeated calls rebuild candidates after flip/relocation while retaining
   // the global target edge length for the same requested vertex count.
   // Returns the number of accepted collapses in this call.

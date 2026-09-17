@@ -50,10 +50,22 @@ Phase presets compose with `+`, for example:
 
 `exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve path-to-input path-to-out-dir target_Nv`
 
-Linear-solve Phase 2 repeats `collapse -> flip -> rail update` for up to 30 cycles, then runs
-one final relocation stage. Each collapse stage rebuilds its candidates after
+With a positive vertex target, linear-solve Phase 2 repeats
+`collapse -> flip -> rail update` for up to 30 cycles, then runs
+one final relocation stage. To continue until no more operations are accepted,
+set the target to `0` or omit it:
+
+`exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve+boundary_rail path-to-input path-to-out-dir 0`
+
+`exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve+boundary_rail path-to-input path-to-out-dir`
+
+This mode removes the vertex target, collapse-pass cap, and cycle cap. It applies
+to `phase2Mode = "linear_solve"`, including `phase2_linear_solve_collision_reject`
+and JSON configurations; other modes still require a target argument.
+Each collapse stage rebuilds its candidates after
 the previous cycle's flips and rail relabeling, so newly feasible collapses can be accepted.
-The global target edge length remains fixed across cycles. Once the vertex
+The global target edge length remains fixed across cycles; without a vertex
+target, it uses the initial cage's mean edge length. Once a positive vertex
 target is reached, collapse is skipped while flips and rail updates can continue.
 Rail updates run only when boundary rails are enabled. A cycle with no accepted
 collapses, flips, or rail updates ends this loop early. Relocation starts after
@@ -147,8 +159,10 @@ accepting no moves ends relocation early. JSON settings control these three
 separate limits:
 
 * `paramCageSimplifier.phase2QualityPolishIterations`: collapse/flip/rail-update cycles,
-  default `30`. The existing key name is retained; `0` runs collapse once and
-  disables flips, rail updates, and final relocation.
+  default `30`. A target of `0` ignores a positive cycle limit. The existing key
+  name is retained; a setting of `0` calls the collapse stage once and disables
+  flips, rail updates, and final relocation. With target `0`, that collapse stage
+  still runs until stalled.
 * `paramCageSimplifier.paramRelocate.qualitySweeps`: final relocation sweep limit,
   default `20`; `0` disables relocation.
 * `paramCageSimplifier.paramRelocate.lineSearchMaxIter`: backtracking attempts

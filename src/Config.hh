@@ -348,14 +348,15 @@ struct ParamFlipStage
 
 struct ParamCageSimplifier
 {
-  // target
+  // Target vertex count; zero runs energy-mode collapse until no progress.
   size_t targetVerticesNum;
   // Phase 2 simplification mode: "fast" keeps the original FastSimplifier,
   // "linear_solve" uses the plane-based linear system, "newton_solve" uses
   // Newton placement for every collapse, and "qem_original" uses pure
   // Garland-Heckbert QEM cost/placement only.
   std::string phase2Mode;
-  // Linear-solve collapse/flip cycle cap; final relocation runs after the loop.
+  // Linear-solve collapse/flip cycle cap; ignored when targetVerticesNum is zero.
+  // Final relocation runs after the loop.
   // Keep the existing setting name; zero runs collapse once and skips both
   // quality flips and final relocation.
   size_t phase2QualityPolishIterations = 30;
