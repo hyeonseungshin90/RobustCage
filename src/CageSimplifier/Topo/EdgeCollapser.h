@@ -42,6 +42,9 @@ public:
     bool _f_update_normals, bool _f_check_face_orientation_violation,
     bool _f_check_selfinter, bool _f_check_inter
   );
+  // Project rail-edge collapses onto the source-boundary half-strips instead
+  // of clamping them to the collapsed rail edge.  Applies from the next init().
+  void set_rail_support(bool enabled) { f_use_rail_support = enabled; }
 
   bool try_collapse_edge(const Vec3d& new_point, const ExactPoint* new_ep);
   bool try_collapse_edge(EdgeHandle e, const Vec3d& new_point, const ExactPoint* new_ep);
@@ -53,8 +56,9 @@ public:
   double local_Hausdorff_after_collapsing(SMeshT* local_rm, const Vec3d& new_point, double& threshold)const;
   bool target_point_is_valid(const Vec3d& new_point, const ExactPoint* new_ep)const;
   // Mixed collapses keep the existing rail vertex fixed. Rail-edge collapses
-  // are projected to the source-boundary ruled surface; ordinary collapses
-  // return new_point unchanged.
+  // are projected to the source-boundary ruled surface with rail support, or
+  // to the collapsed rail edge without it; ordinary collapses return
+  // new_point unchanged.
   Vec3d constrained_target_point(const Vec3d& new_point)const;
   bool has_fixed_rail_target()const { return rail_fixed_vertex.is_valid(); }
 
@@ -83,6 +87,7 @@ private:
   bool f_check_face_orientation_violation;
   bool f_check_selfinter;
   bool f_check_inter;
+  bool f_use_rail_support = false;
 
   void predict_faces_after_collapse();
   VertexHandle find_closer_end_point()const;

@@ -299,7 +299,7 @@ struct AnchorRequest
   Vec3d point;
   // This is always the co-normal of the corresponding source edge.  In the
   // vertex benchmark the ray itself follows the bisector of two co-normals,
-  // so keeping the support direction separate is essential for Phase 2.
+  // so keeping the support direction separate is essential for Phase 3.
   Vec3d support_outer_direction;
   FaceHandle source_face;
   enum class Location { Vertex, Edge, Face } location = Location::Face;
@@ -821,7 +821,7 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
     return stats;
 
   // The source-edge labels and directions are consumed by EdgeCollapser in
-  // Phase 2.  Reset them in case a mesh instance is reused for another build.
+  // Phase 3.  Reset them in case a mesh instance is reused for another build.
   for (EdgeHandle eh : source->edges())
   {
     source->data(eh).boundary_rail_id = kNoRail;
@@ -1272,7 +1272,7 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
       // retain the per-edge outward co-normal.  Together with the boundary
       // edge tangent this defines the half-strip
       //   p(u, t) = edge(u) + t * outward, 0 <= u <= 1, t >= 0,
-      // used as the Phase 2 rail support surface.
+      // used as the Phase 3 rail support surface.
       for (size_t request_index : loop.request_indices)
       {
         const AnchorRequest& request = requests[request_index];

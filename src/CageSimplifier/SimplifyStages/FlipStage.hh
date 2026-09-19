@@ -32,7 +32,7 @@ public:
     double _original_diagonal_length);
 
   void do_flip();
-  // Fixed-position quality polish for the linear Phase 2 path. Accepts only
+  // Fixed-position quality polish for the linear Phase 3 path. Accepts only
   // strict improvements to the two triangles' minimum quality. Returns
   // accepted flips; no Hausdorff sampling links are needed.
   size_t do_quality_flip();

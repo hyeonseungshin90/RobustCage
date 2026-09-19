@@ -35,7 +35,13 @@ To generate nested cages with target numbers of vertices, run the executable fil
 
 `exeCageGenerator.exe default path-to-input path-to-out-dir target_Nv_0 target_Nv_1 ... target_Nv_n`
 
-The `default` can be substituted by a Phase 2 preset or a configure file. We provide an example at "src/config.json".
+The `default` can be substituted by phase presets or a configure file. We provide an example at "src/config.json".
+
+The pipeline has three phases: Phase 1 builds the initial cage, Phase 2
+constructs boundary rails (only with a `phase2_boundary_rail*` preset), and
+Phase 3 simplifies the cage. Presets are named after their phase (`phase1_*`,
+`phase2_*`, `phase3_*`); the `phaseN_` prefix may be omitted, and combined
+presets may appear in any order. `src/COMMAND_ARGUMENTS.md` lists them all.
 
 Phase 1 has two modes:
 
@@ -48,26 +54,26 @@ For example:
 
 Phase presets compose with `+`, for example:
 
-`exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve path-to-input path-to-out-dir target_Nv`
+`exeCageGenerator.exe phase1_topological_offset+phase3_linear_solve path-to-input path-to-out-dir target_Nv`
 
-With a positive vertex target, linear-solve Phase 2 repeats
+With a positive vertex target, linear-solve Phase 3 repeats
 `collapse -> flip -> rail update` for up to 30 cycles, then runs
 one final relocation stage. To continue until no more operations are accepted,
 set the target to `0` or omit it:
 
-`exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve+boundary_rail path-to-input path-to-out-dir 0`
+`exeCageGenerator.exe phase1_topological_offset+phase2_boundary_rail+phase3_linear_solve path-to-input path-to-out-dir 0`
 
-`exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve+boundary_rail path-to-input path-to-out-dir`
+`exeCageGenerator.exe phase1_topological_offset+phase2_boundary_rail+phase3_linear_solve path-to-input path-to-out-dir`
 
 This mode removes the vertex target, collapse-pass cap, and cycle cap. It applies
-to `phase2Mode = "linear_solve"`, including `phase2_linear_solve_collision_reject`
+to `phase3Mode = "linear_solve"`, including `phase3_linear_solve_collision_reject`
 and JSON configurations; other modes still require a target argument.
 Each collapse stage rebuilds its candidates after
 the previous cycle's flips and rail relabeling, so newly feasible collapses can be accepted.
 The global target edge length remains fixed across cycles; without a vertex
 target, it uses the initial cage's mean edge length. Once a positive vertex
 target is reached, collapse is skipped while flips and rail updates can continue.
-Rail updates run only when boundary rails are enabled. A cycle with no accepted
+Rail updates run only with Phase 2 rails and `phase3_rail_update`. A cycle with no accepted
 collapses, flips, or rail updates ends this loop early. Relocation starts after
 the loop ends; no collapse, flip, or rail update follows it.
 Collapse placement and its line-search energy use plane approximation and the triangle-quality
@@ -100,11 +106,13 @@ pass the degeneracy, orientation and intersection checks, and preserve
 `new_min_quality >= min(old_min_quality, minTriangleQuality)` within roundoff
 tolerance. Quality is normalized to `[0, 1]`; its default floor is `0.2`.
 A fan above the floor may decrease to the floor; a fan below it cannot worsen.
-With `+boundary_rail`, a mixed rail/nonrail edge may collapse only from the
+With `+phase2_boundary_rail`, a mixed rail/nonrail edge may collapse only from the
 nonrail vertex into the existing rail vertex at its unchanged position. This
 preserves the rail label and loop connectivity and must pass the existing
-collapse validity checks. Actual rail-edge collapses still project their new
-position onto the source-boundary support half-strips. Rail edges cannot flip.
+collapse validity checks. With `phase3_rail_support`, actual rail-edge collapses
+project their new position onto the source-boundary support half-strips;
+without it (the default), the new position stays on the collapsed rail edge.
+Rail edges cannot flip.
 Rail vertices and actual mesh boundary vertices remain fixed during relocation.
 Flips and relocation preserve vertex count.
 
@@ -121,9 +129,9 @@ remain unchanged.
 
 The C++ entry point is `do_quality_flip()`, with no chord-policy argument or
 optional chord-aware mode. The triangle-based rail update runs after flipping
-when boundary rails are enabled.
+when `phase3_rail_update` is given with Phase 2 rails.
 
-Initial boundary rails are constructed before Phase 2 with
+Phase 2 constructs the initial boundary rails with
 `Dijkstra -> intrinsic flip geodesics -> actual mesh splitting`.
 After inserting the source-boundary anchors, the builder finds closed, simple
 edge paths with Dijkstra and its existing path validation. Geometry Central
@@ -135,17 +143,17 @@ Embedding keeps existing vertex positions and the cage surface fixed, but
 can add vertices and triangles. It does not replace a path across folded faces
 with a straight 3D chord.
 
-This construction runs for both `boundary_rail` and `boundary_rail_vertex`,
-including the independent builds in `boundary_rail_compare`, without a new
+This construction runs for both `phase2_boundary_rail` and `phase2_boundary_rail_vertex`,
+including the independent builds in `phase2_boundary_rail_compare`, without a new
 command-line option. If intrinsic shortening or embedding fails, the builder
 keeps the cage and rails from the completed Dijkstra construction and records
 a warning and failure statistics; that result has not received the geodesic
 update. Flip geodesics seek locally shortest paths, not a global optimum, and
-fixed anchors can leave a path unchanged. This step is performed only during
-initial rail construction. Later collapses do not preserve a geodesic
+fixed anchors can leave a path unchanged. This step is performed only in
+Phase 2. Later collapses do not preserve a geodesic
 guarantee or trigger another intrinsic shortening pass.
 
-With boundary rails enabled, linear-solve Phase 2 calls the triangle-based
+With Phase 2 rails and `phase3_rail_update`, linear-solve Phase 3 calls the triangle-based
 `update_boundary_rails()` after each quality-flip pass. Each call repeatedly
 replaces a labeled path `A-B-C` with `A-C` across a cage triangle and releases
 `B`, until no eligible shortcut remains. It preserves a simple loop of at least
@@ -158,15 +166,19 @@ Voronoi areas, normals and source closest points from current positions. A sweep
 accepting no moves ends relocation early. JSON settings control these three
 separate limits:
 
-* `paramCageSimplifier.phase2QualityPolishIterations`: collapse/flip/rail-update cycles,
-  default `30`. A target of `0` ignores a positive cycle limit. The existing key
-  name is retained; a setting of `0` calls the collapse stage once and disables
+* `paramCageSimplifier.phase3QualityPolishIterations`: collapse/flip/rail-update cycles,
+  default `30`. A target of `0` ignores a positive cycle limit. A setting of
+  `0` calls the collapse stage once and disables
   flips, rail updates, and final relocation. With target `0`, that collapse stage
   still runs until stalled.
 * `paramCageSimplifier.paramRelocate.qualitySweeps`: final relocation sweep limit,
   default `20`; `0` disables relocation.
 * `paramCageSimplifier.paramRelocate.lineSearchMaxIter`: backtracking attempts
   per vertex per sweep, default `12`; `0` also disables relocation.
+
+JSON files written while simplification was Phase 2 still load: the keys
+`phase2Mode`, `phase2QualityPolishIterations`, `phase2PlacementStrategy` and
+`phase2LinearSolveCollisionReject` are read when their `phase3*` names are absent.
 
 The relocation energy and quality gate have three further JSON settings under
 `paramCageSimplifier.paramRelocate`:
@@ -185,17 +197,17 @@ continuous collision detection or enforce a positive surface clearance.
 
 Outputs are written under a unique run directory inside the input-name folder:
 
-`path-to-out-dir/input_name/<run_timestamp>[__phase1_topological_offset]__phase2_<mode>[__<mode-specific-details>]/`
+`path-to-out-dir/input_name/<run_timestamp>__[phase1_TO_][from_IC_|from_RC_]phase3_<mode>[_<mode-specific-details>][_RU][_RS]/`
 
-The default mode retains its existing `__collapse_hausdorff__flip_<mode>__relocate_<mode>` suffix for output compatibility.
+`RU` and `RS` mark `phase3_rail_update` and `phase3_rail_support`; `src/COMMAND_ARGUMENTS.md` lists all abbreviations.
 
 If that directory already exists, the program appends `_001`, `_002`, and so on to avoid overwriting previous results.
 
-With `+boundary_rail`, the rails are exported next to each cage OBJ in two
+With `+phase2_boundary_rail`, the rails are exported next to each cage OBJ in two
 states:
 
 * `input_name_cage_<label>_initial_rails.obj` / `.txt`: the constructed rails,
-  including successful geodesic embedding, written before Phase 2 starts.
+  including successful geodesic embedding, written before Phase 3 starts.
 * `input_name_cage_<label>_rails.obj` / `.txt`: the rails carried by the final
   cage.
 
@@ -203,7 +215,7 @@ Each OBJ holds the rail vertices as OBJ points and the rail edges as OBJ line
 elements, one object/group per rail id. Each TXT lists the same rails with the
 1-based vertex indices of the mesh named in its header: the final rails index
 `input_name_cage_<label>.obj`, while the initial rails index the cage after
-rail construction and before Phase 2, so the two index spaces differ.
+Phase 2 and before Phase 3, so the two index spaces differ.
 Rail ids are shared between both states.
 
 The quality and boundary-rail geodesic regression tests can be built and run with:

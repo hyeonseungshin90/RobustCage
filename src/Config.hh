@@ -9,6 +9,15 @@
 
 namespace Cage
 {
+// Simplification was Phase 2 before rail construction became its own phase,
+// so configs may still name its keys phase2*.
+inline boost::json::object::const_iterator find_key_or_legacy(
+  const boost::json::object& jo, const char* key, const char* legacy_key)
+{
+  const auto it = jo.find(key);
+  return it != jo.end() ? it : jo.find(legacy_key);
+}
+
 struct ParamLatticePointsGenerator
 {
   /// minimal point's distance to surface mesh, nearer points will be ingored.
@@ -85,11 +94,11 @@ struct ParamCollapseStage
   // "sampling" keeps the original candidate sampling strategy.
   // "optimization" uses local plane and triangle-quality energies to choose the post-collapse vertex position.
   std::string collapsePlacementMethod;
-  // Phase 2 placement strategy:
+  // Phase 3 placement strategy:
   // "linear_solve": use the plane-based linear system with quality terms and no Newton.
   // "newton_solve": use Newton placement for every popped edge.
   // "qem_original": pure Garland-Heckbert QEM; non-QEM energies and collision rejection are disabled.
-  std::string phase2PlacementStrategy;
+  std::string phase3PlacementStrategy;
   // Newton solver mode: "damped" or "trust_region".
   std::string newtonSolverMode;
   // Robustness mode:
@@ -100,12 +109,12 @@ struct ParamCollapseStage
   std::string curvatureMode;
   // Uniformity mode: "none", "source", "global".
   std::string uniformityMode;
-  // When true, phase2PlacementStrategy "linear_solve" rejects the edge outright (no
+  // When true, phase3PlacementStrategy "linear_solve" rejects the edge outright (no
   // collapse) if the raw plane-energy linear-solve point fails the hard validity
   // checks (collision/degenerate/face orientation), instead of backtracking toward a
   // nearby fallback position. Default false keeps the existing backtracking
   // behavior; this is an opt-in alternative.
-  bool phase2LinearSolveCollisionReject;
+  bool phase3LinearSolveCollisionReject;
 
   size_t newtonMaxIter;
   double newtonGradTol;
@@ -127,12 +136,12 @@ struct ParamCollapseStage
     boost::json::object jo;
     jo["maxValence"] = maxValence;
     jo["collapsePlacementMethod"] = collapsePlacementMethod;
-    jo["phase2PlacementStrategy"] = phase2PlacementStrategy;
+    jo["phase3PlacementStrategy"] = phase3PlacementStrategy;
     jo["newtonSolverMode"] = newtonSolverMode;
     jo["robustnessMode"] = robustnessMode;
     jo["curvatureMode"] = curvatureMode;
     jo["uniformityMode"] = uniformityMode;
-    jo["phase2LinearSolveCollisionReject"] = phase2LinearSolveCollisionReject;
+    jo["phase3LinearSolveCollisionReject"] = phase3LinearSolveCollisionReject;
     jo["newtonMaxIter"] = newtonMaxIter;
     jo["newtonGradTol"] = newtonGradTol;
     jo["newtonStepTol"] = newtonStepTol;
@@ -158,11 +167,12 @@ struct ParamCollapseStage
     if (collapsePlacementMethod == "newton" || collapsePlacementMethod == "energy")
       collapsePlacementMethod = "optimization";
 
-    auto phase2_placement_strategy_it = jo.find("phase2PlacementStrategy");
-    if (phase2_placement_strategy_it == jo.end())
-      phase2_placement_strategy_it = jo.find("phase2PlacementMode");
-    phase2PlacementStrategy =
-      phase2_placement_strategy_it != jo.end() ? std::string(phase2_placement_strategy_it->value().as_string().c_str()) : "linear_solve";
+    auto phase3_placement_strategy_it = find_key_or_legacy(
+      jo, "phase3PlacementStrategy", "phase2PlacementStrategy");
+    if (phase3_placement_strategy_it == jo.end())
+      phase3_placement_strategy_it = jo.find("phase2PlacementMode");
+    phase3PlacementStrategy =
+      phase3_placement_strategy_it != jo.end() ? std::string(phase3_placement_strategy_it->value().as_string().c_str()) : "linear_solve";
 
     auto solver_mode_it = jo.find("newtonSolverMode");
     newtonSolverMode = solver_mode_it != jo.end() ? std::string(solver_mode_it->value().as_string().c_str()) : "damped";
@@ -179,9 +189,10 @@ struct ParamCollapseStage
     auto uniformity_mode_it = jo.find("uniformityMode");
     uniformityMode = uniformity_mode_it != jo.end() ? std::string(uniformity_mode_it->value().as_string().c_str()) : "none";
 
-    auto phase2_linear_solve_collision_reject_it = jo.find("phase2LinearSolveCollisionReject");
-    phase2LinearSolveCollisionReject =
-      phase2_linear_solve_collision_reject_it != jo.end() ? phase2_linear_solve_collision_reject_it->value().as_bool() : false;
+    auto phase3_linear_solve_collision_reject_it = find_key_or_legacy(
+      jo, "phase3LinearSolveCollisionReject", "phase2LinearSolveCollisionReject");
+    phase3LinearSolveCollisionReject =
+      phase3_linear_solve_collision_reject_it != jo.end() ? phase3_linear_solve_collision_reject_it->value().as_bool() : false;
 
     auto newton_max_iter_it = jo.find("newtonMaxIter");
     newtonMaxIter = newton_max_iter_it != jo.end() ? newton_max_iter_it->value().as_int64() : 4;
@@ -244,7 +255,7 @@ struct ParamRelocateStage
   // Full-mesh sweeps in the final relocation stage after collapse/flip cycles.
   // Stop earlier when a sweep accepts no moves. Separate from legacy smoothIter.
   size_t qualitySweeps = 20;
-  // Backtracking attempts for the Phase 2 relocation energy decrease.
+  // Backtracking attempts for the Phase 3 relocation energy decrease.
   size_t lineSearchMaxIter = 12;
   // Squared-distance energy weights for the tangential smoothing target and
   // closest source-surface point, frozen during each vertex's line search.
@@ -320,7 +331,7 @@ struct ParamFlipStage
   // Supported modes: "valence", "triangle_quality_hard".
   std::string priorityMode;
   // When true, quality-priority flips must also move all four incident
-  // vertices toward regular valence 6. Used by the Newton Phase 2 polish.
+  // vertices toward regular valence 6. Used by the Newton Phase 3 polish.
   bool requireRegularValence;
 
   boost::json::object serialize()const
@@ -350,18 +361,18 @@ struct ParamCageSimplifier
 {
   // Target vertex count; zero runs energy-mode collapse until no progress.
   size_t targetVerticesNum;
-  // Phase 2 simplification mode: "fast" keeps the original FastSimplifier,
+  // Phase 3 simplification mode: "fast" keeps the original FastSimplifier,
   // "linear_solve" uses the plane-based linear system, "newton_solve" uses
   // Newton placement for every collapse, and "qem_original" uses pure
   // Garland-Heckbert QEM cost/placement only.
-  std::string phase2Mode;
+  std::string phase3Mode;
   // Linear-solve collapse/flip cycle cap; ignored when targetVerticesNum is zero.
   // Final relocation runs after the loop.
-  // Keep the existing setting name; zero runs collapse once and skips both
-  // quality flips and final relocation.
-  size_t phase2QualityPolishIterations = 30;
-  // Build and preserve source-boundary rails on the initial cage.  This is
-  // deliberately opt-in so the original/default pipeline is unchanged.
+  // Zero runs collapse once and skips both quality flips and final relocation.
+  size_t phase3QualityPolishIterations = 30;
+  // Phase 2: build source-boundary rails on the initial cage, which Phase 3
+  // then preserves.  This is deliberately opt-in so the original/default
+  // pipeline is unchanged.
   bool enableBoundaryRails = false;
   // Anchor-ray origin/direction for boundary rails: "edge" is the production
   // edge-midpoint co-normal method, "vertex" is the adjacent-edge co-normal
@@ -372,6 +383,11 @@ struct ParamCageSimplifier
   // flip stage.  Only meaningful with enableBoundaryRails; off by default so
   // the rails keep their initial construction unless the update is requested.
   bool enableRailUpdate = false;
+  // Project the target of a rail-edge collapse onto the ruled half-strips of
+  // its source boundary (tangent x outward co-normal).  Off by default: the
+  // target is then clamped to the collapsed rail edge.  Only meaningful with
+  // enableBoundaryRails.
+  bool enableRailSupport = false;
   // iterations
   size_t maxIter;
   // distance error control
@@ -395,11 +411,12 @@ struct ParamCageSimplifier
   {
     boost::json::object jo;
     jo["maxIter"] = maxIter;
-    jo["phase2Mode"] = phase2Mode;
-    jo["phase2QualityPolishIterations"] = phase2QualityPolishIterations;
+    jo["phase3Mode"] = phase3Mode;
+    jo["phase3QualityPolishIterations"] = phase3QualityPolishIterations;
     jo["enableBoundaryRails"] = enableBoundaryRails;
     jo["boundaryRailAnchorMode"] = boundaryRailAnchorMode;
     jo["enableRailUpdate"] = enableRailUpdate;
+    jo["enableRailSupport"] = enableRailSupport;
     jo["relaxErrorIterStep"] = relaxErrorIterStep;
     jo["maxErrorRelaxIter"] = maxErrorRelaxIter;
     jo["initError"] = initError;
@@ -412,11 +429,12 @@ struct ParamCageSimplifier
   void deserialize(const boost::json::object& jo)
   {
     maxIter = jo.at("maxIter").as_int64();
-    auto phase2_mode_it = jo.find("phase2Mode");
-    phase2Mode = phase2_mode_it != jo.end() ? std::string(phase2_mode_it->value().as_string().c_str()) : "fast";
-    auto quality_polish_it = jo.find("phase2QualityPolishIterations");
+    auto phase3_mode_it = find_key_or_legacy(jo, "phase3Mode", "phase2Mode");
+    phase3Mode = phase3_mode_it != jo.end() ? std::string(phase3_mode_it->value().as_string().c_str()) : "fast";
+    auto quality_polish_it = find_key_or_legacy(
+      jo, "phase3QualityPolishIterations", "phase2QualityPolishIterations");
     if (quality_polish_it != jo.end())
-      phase2QualityPolishIterations = static_cast<size_t>(std::max<std::int64_t>(0, quality_polish_it->value().as_int64()));
+      phase3QualityPolishIterations = static_cast<size_t>(std::max<std::int64_t>(0, quality_polish_it->value().as_int64()));
     auto boundary_rails_it = jo.find("enableBoundaryRails");
     enableBoundaryRails = boundary_rails_it != jo.end() ?
       boundary_rails_it->value().as_bool() : false;
@@ -429,6 +447,9 @@ struct ParamCageSimplifier
     auto rail_update_it = jo.find("enableRailUpdate");
     enableRailUpdate = rail_update_it != jo.end() ?
       rail_update_it->value().as_bool() : false;
+    auto rail_support_it = jo.find("enableRailSupport");
+    enableRailSupport = rail_support_it != jo.end() ?
+      rail_support_it->value().as_bool() : false;
     relaxErrorIterStep = jo.at("relaxErrorIterStep").as_int64();
     maxErrorRelaxIter = jo.at("maxErrorRelaxIter").as_int64();
     initError = jo.at("initError").as_double();
@@ -458,10 +479,11 @@ struct ParamCageGenerator
     Lpg.offsetLengthScale = 1.0;
 
     auto& simplifier = paramCageSimplifier;
-    simplifier.phase2Mode = "fast";
+    simplifier.phase3Mode = "fast";
     simplifier.enableBoundaryRails = false;
     simplifier.boundaryRailAnchorMode = "edge";
     simplifier.enableRailUpdate = false;
+    simplifier.enableRailSupport = false;
     simplifier.maxIter = 30;
     simplifier.relaxErrorIterStep = 5;
     simplifier.maxErrorRelaxIter = 4;
@@ -480,12 +502,12 @@ struct ParamCageGenerator
     auto& collapse = paramCageSimplifier.paramCollapse;
     collapse.maxValence = 8;
     collapse.collapsePlacementMethod = "sampling";
-    collapse.phase2PlacementStrategy = "linear_solve";
+    collapse.phase3PlacementStrategy = "linear_solve";
     collapse.newtonSolverMode = "damped";
     collapse.robustnessMode = "exact_backtracking";
     collapse.curvatureMode = "none";
     collapse.uniformityMode = "none";
-    collapse.phase2LinearSolveCollisionReject = false;
+    collapse.phase3LinearSolveCollisionReject = false;
     collapse.newtonMaxIter = 4;
     collapse.newtonGradTol = 1e-8;
     collapse.newtonStepTol = 1e-8;

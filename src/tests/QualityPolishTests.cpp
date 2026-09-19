@@ -32,34 +32,34 @@ namespace CageSimp
 // exposing placement internals through the runtime API.
 struct CollapseStageTestAccess
 {
-  using Context = CollapseStage::Phase2PlacementContext;
+  using Context = CollapseStage::Phase3PlacementContext;
 
   static Eigen::Matrix4d shape_quadric(const CollapseStage& stage, const Context& context)
   {
-    return stage.build_phase2_triangle_quality_surrogate_quadric(context);
+    return stage.build_phase3_triangle_quality_surrogate_quadric(context);
   }
 
   static double shape_energy(const CollapseStage& stage, const Context& context,
     const Vec3d& point)
   {
-    return stage.evaluate_phase2_triangle_quality_surrogate(context, point);
+    return stage.evaluate_phase3_triangle_quality_surrogate(context, point);
   }
 
   static double placement_energy(const CollapseStage& stage, const Context& context,
     const Vec3d& point)
   {
-    return stage.evaluate_phase2_proxy_energy(context, point);
+    return stage.evaluate_phase3_proxy_energy(context, point);
   }
 
   static double queue_score(const CollapseStage& stage, const Context& context,
     const Vec3d& point)
   {
-    return stage.evaluate_phase2_queue_score(stage.evaluate_phase2_queue_components(context, point));
+    return stage.evaluate_phase3_queue_score(stage.evaluate_phase3_queue_components(context, point));
   }
 
   static double target_edge_length(const CollapseStage& stage)
   {
-    return stage.phase2_target_edge_length;
+    return stage.phase3_target_edge_length;
   }
 };
 }
@@ -576,7 +576,7 @@ void relocation_preserves_quality_below_floor()
 void quality_configuration_roundtrip()
 {
   ParamCageGenerator defaults;
-  require(defaults.paramCageSimplifier.phase2QualityPolishIterations == 30,
+  require(defaults.paramCageSimplifier.phase3QualityPolishIterations == 30,
     "linear simplification must default to at most thirty outer cycles");
   require(defaults.paramCageSimplifier.paramRelocate.qualitySweeps == 20,
     "relocation must default to at most twenty sweeps per outer cycle");
@@ -588,8 +588,10 @@ void quality_configuration_roundtrip()
     "relocation must default to equal energy weights and a 0.2 quality floor");
   require(!defaults.paramCageSimplifier.enableRailUpdate,
     "rail update must be opt-in");
+  require(!defaults.paramCageSimplifier.enableRailSupport,
+    "rail support must be opt-in");
   auto& configured = defaults.paramCageSimplifier;
-  configured.phase2QualityPolishIterations = 5;
+  configured.phase3QualityPolishIterations = 5;
   configured.paramRelocate.qualitySweeps = 7;
   configured.paramRelocate.lineSearchMaxIter = 9;
   configured.paramRelocate.tangentialWeight = 2.5;
@@ -607,14 +609,32 @@ void quality_configuration_roundtrip()
     restored.paramCageSimplifier.paramCollapse.planeWeight == 2.75 &&
     restored.paramCageSimplifier.paramCollapse.curvatureMode == "weighted_plane",
     "plane energy settings must round-trip through the canonical JSON names");
-  require(restored.paramCageSimplifier.phase2QualityPolishIterations == 5 &&
+  require(restored.paramCageSimplifier.phase3QualityPolishIterations == 5 &&
     restored.paramCageSimplifier.paramRelocate.qualitySweeps == 7 &&
     restored.paramCageSimplifier.paramRelocate.lineSearchMaxIter == 9 &&
     restored.paramCageSimplifier.paramRelocate.tangentialWeight == 2.5 &&
     restored.paramCageSimplifier.paramRelocate.surfaceWeight == 0.75 &&
     restored.paramCageSimplifier.paramRelocate.minTriangleQuality == 0.35,
     "quality parameters must round-trip through JSON");
-  serialized.erase("phase2QualityPolishIterations");
+  // Simplification was Phase 2 before rail construction became its own phase.
+  auto phase2_named = serialized;
+  phase2_named.erase("phase3Mode");
+  phase2_named.erase("phase3QualityPolishIterations");
+  phase2_named["phase2Mode"] = "linear_solve";
+  phase2_named["phase2QualityPolishIterations"] = 4;
+  auto& phase2_named_collapse = phase2_named.at("paramCollapse").as_object();
+  phase2_named_collapse.erase("phase3PlacementStrategy");
+  phase2_named_collapse.erase("phase3LinearSolveCollisionReject");
+  phase2_named_collapse["phase2PlacementStrategy"] = "newton_solve";
+  phase2_named_collapse["phase2LinearSolveCollisionReject"] = true;
+  ParamCageGenerator from_phase2_names;
+  from_phase2_names.paramCageSimplifier.deserialize(phase2_named);
+  require(from_phase2_names.paramCageSimplifier.phase3Mode == "linear_solve" &&
+    from_phase2_names.paramCageSimplifier.phase3QualityPolishIterations == 4 &&
+    from_phase2_names.paramCageSimplifier.paramCollapse.phase3PlacementStrategy == "newton_solve" &&
+    from_phase2_names.paramCageSimplifier.paramCollapse.phase3LinearSolveCollisionReject,
+    "JSON written with the former phase2* key names must still be read");
+  serialized.erase("phase3QualityPolishIterations");
   serialized.at("paramRelocate").as_object().erase("qualitySweeps");
   serialized.at("paramRelocate").as_object().erase("lineSearchMaxIter");
   serialized.at("paramRelocate").as_object().erase("tangentialWeight");
@@ -622,26 +642,26 @@ void quality_configuration_roundtrip()
   serialized.at("paramRelocate").as_object().erase("minTriangleQuality");
   ParamCageGenerator legacy;
   legacy.paramCageSimplifier.deserialize(serialized);
-  require(legacy.paramCageSimplifier.phase2QualityPolishIterations == 30 &&
+  require(legacy.paramCageSimplifier.phase3QualityPolishIterations == 30 &&
     legacy.paramCageSimplifier.paramRelocate.qualitySweeps == 20 &&
     legacy.paramCageSimplifier.paramRelocate.lineSearchMaxIter == 12 &&
     legacy.paramCageSimplifier.paramRelocate.tangentialWeight == 1.0 &&
     legacy.paramCageSimplifier.paramRelocate.surfaceWeight == 1.0 &&
     legacy.paramCageSimplifier.paramRelocate.minTriangleQuality == 0.2,
     "legacy JSON must retain quality defaults when new fields are absent");
-  serialized["phase2QualityPolishIterations"] = 0;
+  serialized["phase3QualityPolishIterations"] = 0;
   serialized.at("paramRelocate").as_object()["qualitySweeps"] = 0;
   serialized.at("paramRelocate").as_object()["lineSearchMaxIter"] = 0;
   legacy.paramCageSimplifier.deserialize(serialized);
-  require(legacy.paramCageSimplifier.phase2QualityPolishIterations == 0 &&
+  require(legacy.paramCageSimplifier.phase3QualityPolishIterations == 0 &&
     legacy.paramCageSimplifier.paramRelocate.qualitySweeps == 0 &&
     legacy.paramCageSimplifier.paramRelocate.lineSearchMaxIter == 0,
     "zero must explicitly disable quality cycles, relocation sweeps, or line search");
-  serialized["phase2QualityPolishIterations"] = -2;
+  serialized["phase3QualityPolishIterations"] = -2;
   serialized.at("paramRelocate").as_object()["qualitySweeps"] = -3;
   serialized.at("paramRelocate").as_object()["lineSearchMaxIter"] = -4;
   legacy.paramCageSimplifier.deserialize(serialized);
-  require(legacy.paramCageSimplifier.phase2QualityPolishIterations == 0 &&
+  require(legacy.paramCageSimplifier.phase3QualityPolishIterations == 0 &&
     legacy.paramCageSimplifier.paramRelocate.qualitySweeps == 0 &&
     legacy.paramCageSimplifier.paramRelocate.lineSearchMaxIter == 0,
     "negative iteration limits must clamp to zero rather than wrap around");
@@ -740,7 +760,7 @@ Vec3d quadric_minimizer(const Eigen::Matrix4d& quadric)
 void directional_triangle_shape_costs_and_minimum()
 {
   auto parameters = ParamCageGenerator().paramCageSimplifier.paramCollapse;
-  parameters.phase2PlacementStrategy = "linear_solve";
+  parameters.phase3PlacementStrategy = "linear_solve";
   parameters.planeWeight = 0.0;
   parameters.uniformityWeight = 0.0;
   parameters.uniformityMode = "none";
@@ -1000,10 +1020,10 @@ double linear_solve_integration(bool enable_polish, size_t sweeps = 20, size_t l
   fixture.parameters.setOutputPath(output_directory.generic_string() + "/", "octahedron");
   fixture.parameters.setCageLabel(0);
   auto& parameters = fixture.parameters.paramCageSimplifier;
-  parameters.phase2Mode = "linear_solve";
+  parameters.phase3Mode = "linear_solve";
   parameters.targetVerticesNum = 6;
   parameters.enableBoundaryRails = true;
-  parameters.phase2QualityPolishIterations = enable_polish ? 1 : 0;
+  parameters.phase3QualityPolishIterations = enable_polish ? 1 : 0;
   parameters.paramRelocate.qualitySweeps = sweeps;
   parameters.paramRelocate.lineSearchMaxIter = line_attempts;
   // This integration isolates repeated tangential smoothing. Separate
@@ -1046,8 +1066,8 @@ double linear_solve_integration(bool enable_polish, size_t sweeps = 20, size_t l
     require(halfedge.is_valid() && fixture.cage.data(fixture.cage.edge_handle(halfedge)).boundary_rail_id == 3,
       "integrated polish must preserve the labeled rail cycle");
   }
-  require(std::filesystem::exists(output_directory / "octahedron_debug_phase2_linear_solve.obj"),
-    "integration must complete the production Phase 2 output path");
+  require(std::filesystem::exists(output_directory / "octahedron_debug_phase3_linear_solve.obj"),
+    "integration must complete the production Phase 3 output path");
   fixture.initialize();
   fixture.require_source_clear();
   return min_quality(fixture.cage);
@@ -1609,6 +1629,38 @@ void mixed_collapse_collision_is_rejected()
     require_closed_rail_cycles(fixture.cage) == 1, "collision rejection must preserve both endpoints and the rail");
 }
 
+void rail_support_projection_is_opt_in()
+{
+  for (bool rail_support : {false, true})
+  {
+    Fixture fixture;
+    const auto v = add_collapse_octahedron(fixture.cage);
+    label_rail_cycle(fixture.cage, {v[0], v[1], v[2], v[3]}, 3);
+    // Remote source boundary whose half-strips rise from the plane z = 20.
+    add_triangle(fixture.original, Vec3d(20.0, 20.0, 20.0),
+      Vec3d(22.0, 20.0, 20.0), Vec3d(20.0, 22.0, 20.0));
+    for (EdgeHandle edge : fixture.original.edges())
+      if (fixture.original.is_boundary(edge))
+      {
+        fixture.original.data(edge).boundary_rail_id = 3;
+        fixture.original.data(edge).boundary_rail_outer_direction = Vec3d(0.0, 0.0, 1.0);
+      }
+    fixture.initialize();
+    auto collapser = collapse_operator(fixture);
+    collapser.set_rail_support(rail_support);
+    const auto edge = fixture.cage.edge_handle(fixture.cage.find_halfedge(v[1], v[2]));
+    require(collapser.init(edge) && !collapser.has_fixed_rail_target(),
+      "a four-vertex rail must allow collapsing one of its rail edges");
+    const Vec3d target = collapser.constrained_target_point(Vec3d(0.5, 0.5, 0.4));
+    if (rail_support)
+      require(target[2] == 20.0,
+        "rail support must project a rail-edge collapse onto the source half-strips");
+    else
+      require(target == Vec3d(0.5, 0.5, 0.0),
+        "without rail support a rail-edge collapse must stay on the collapsed rail edge");
+  }
+}
+
 void linear_solve_collapses_only_mixed_edges(size_t target_vertices)
 {
   Fixture fixture;
@@ -1623,25 +1675,25 @@ void linear_solve_collapses_only_mixed_edges(size_t target_vertices)
   // and cross-rail connections are forbidden; only the face subdivision's
   // ordinary vertex can collapse. The zero proxy has no unique solve.
   auto& parameters = fixture.parameters.paramCageSimplifier.paramCollapse;
-  parameters.phase2PlacementStrategy = "linear_solve";
+  parameters.phase3PlacementStrategy = "linear_solve";
   parameters.planeWeight = 0.0;
   parameters.triangleQualityWeight = 0.0;
   parameters.uniformityWeight = 0.0;
-  parameters.phase2LinearSolveCollisionReject = true;
+  parameters.phase3LinearSolveCollisionReject = true;
   parameters.lineSearchMaxIter = 0;
   CollapseStage stage(&fixture.original, &fixture.cage, &parameters, fixture.source_tree.get(),
     fixture.cage_tree.get(), fixture.source_grid.get(), 1.0);
-  require(stage.do_phase2_energy_simplification(7) == 0 && fixture.cage.n_vertices() == 7,
+  require(stage.do_phase3_energy_simplification(7) == 0 && fixture.cage.n_vertices() == 7,
     "a positive target already reached must preserve a legally collapsible mesh");
   double initial_mean_edge_length = 0.0;
   for (EdgeHandle edge : fixture.cage.edges())
     initial_mean_edge_length += fixture.cage.calc_edge_length(edge);
   initial_mean_edge_length /= fixture.cage.n_edges();
-  require(stage.do_phase2_energy_simplification(target_vertices) == 1,
-    "linear Phase 2 must queue and commit a mixed edge even with a singular zero-weight proxy");
+  require(stage.do_phase3_energy_simplification(target_vertices) == 1,
+    "linear Phase 3 must queue and commit a mixed edge even with a singular zero-weight proxy");
   require(fixture.cage.n_vertices() == 6 && fixture.cage.n_faces() == 8 &&
     require_closed_rail_cycles(fixture.cage) == 2,
-    "mixed-only Phase 2 must remove the free vertex while retaining both minimal rail cycles");
+    "mixed-only Phase 3 must remove the free vertex while retaining both minimal rail cycles");
   for (size_t i = 0; i < v.size(); ++i)
     require(fixture.cage.point(v[i]) == before[i], "linear mixed collapse must keep all six rail positions exactly");
   if (target_vertices == 0)
@@ -1655,7 +1707,7 @@ void linear_solve_collapses_only_mixed_edges(size_t target_vertices)
     require(std::abs(final_mean_edge_length - initial_mean_edge_length) > 1e-3,
       "unbounded scale fixture must change the mesh mean edge length after collapse");
     const RailUpdateSnapshot after_first_call(fixture.cage);
-    require(stage.do_phase2_energy_simplification(0) == 0,
+    require(stage.do_phase3_energy_simplification(0) == 0,
       "unbounded collapse must terminate with no progress once every remaining edge is constrained");
     after_first_call.require_geometry_unchanged(fixture.cage);
     after_first_call.require_labels_unchanged(fixture.cage);
@@ -1768,10 +1820,10 @@ void unbounded_linear_solve_reaches_the_stalled_cycle()
       fixture.parameters.setOutputPath(output_directory.generic_string() + "/", "octahedron");
       fixture.parameters.setCageLabel(0);
       auto& parameters = fixture.parameters.paramCageSimplifier;
-      parameters.phase2Mode = "linear_solve";
+      parameters.phase3Mode = "linear_solve";
       parameters.targetVerticesNum = target_vertices;
       parameters.enableBoundaryRails = true;
-      parameters.phase2QualityPolishIterations = outer_cycles;
+      parameters.phase3QualityPolishIterations = outer_cycles;
       parameters.paramRelocate.qualitySweeps = 0;
       parameters.paramCollapse.planeWeight = 0.0;
       parameters.paramCollapse.triangleQualityWeight = 0.0;
@@ -1789,23 +1841,23 @@ void unbounded_linear_solve_reaches_the_stalled_cycle()
       const std::string log = captured_log.text();
       if (outer_cycles == 0)
       {
-        require(log.find("phase 2 energy simplification") != std::string::npos &&
-          log.find("phase 2 linear-solve cycle ") == std::string::npos &&
+        require(log.find("phase 3 energy simplification") != std::string::npos &&
+          log.find("phase 3 linear-solve cycle ") == std::string::npos &&
           log.find("quality flip:") == std::string::npos &&
           log.find("energy relocation:") == std::string::npos,
           "zero polish cycles must retain collapse-only behavior for both positive and zero targets");
         continue;
       }
-      require(log.find("phase 2 linear-solve cycle 1: collapsed 1, flipped 0, rail updates 0, vertices 6") != std::string::npos,
+      require(log.find("phase 3 linear-solve cycle 1: collapsed 1, flipped 0, rail updates 0, vertices 6") != std::string::npos,
         "production must accept the legal mixed collapse in its first cycle");
       if (target_vertices == 0)
-        require(log.find("phase 2 linear-solve cycle 2: collapsed 0, flipped 0, rail updates 0, vertices 6") != std::string::npos &&
-          log.find("phase 2 linear-solve cycle 3:") == std::string::npos &&
+        require(log.find("phase 3 linear-solve cycle 2: collapsed 0, flipped 0, rail updates 0, vertices 6") != std::string::npos &&
+          log.find("phase 3 linear-solve cycle 3:") == std::string::npos &&
           log.find("no accepted collapses, flips, or rail updates.") != std::string::npos &&
           log.find("cycle limit reached.") == std::string::npos,
           "zero target must bypass the one-cycle cap and terminate at the stable second cycle");
       else
-        require(log.find("phase 2 linear-solve cycle 2:") == std::string::npos &&
+        require(log.find("phase 3 linear-solve cycle 2:") == std::string::npos &&
           log.find("cycle limit reached.") != std::string::npos,
           "a positive target must retain the configured one-cycle limit");
     }
@@ -1832,12 +1884,12 @@ void at_target_default_flips_use_quality_only()
     fixture.parameters.setOutputPath(output_directory.generic_string() + "/", "octahedron");
     fixture.parameters.setCageLabel(0);
     auto& parameters = fixture.parameters.paramCageSimplifier;
-    parameters.phase2Mode = "linear_solve";
+    parameters.phase3Mode = "linear_solve";
     parameters.targetVerticesNum = 6;
     // Keep the preexisting rail labels, but isolate the ordinary flip gate
     // from the separate rail-label update pass.
     parameters.enableBoundaryRails = false;
-    parameters.phase2QualityPolishIterations = enable_flips ? 3 : 0;
+    parameters.phase3QualityPolishIterations = enable_flips ? 3 : 0;
     parameters.paramRelocate.qualitySweeps = 0;
     // Isolate the equal-quality BD -> AC candidate. Opposite vertices A,C
     // would reach valence four; other new diagonals exceed that limit or
@@ -1859,15 +1911,15 @@ void at_target_default_flips_use_quality_only()
     {
       before.require_labels_unchanged(fixture.cage);
       require(before.halfedges == after.halfedges, "zero outer cycles must also retain every non-rail edge");
-      require(log.find("phase 2 linear-solve cycle ") == std::string::npos &&
+      require(log.find("phase 3 linear-solve cycle ") == std::string::npos &&
         log.find("quality flip:") == std::string::npos &&
         log.find("energy relocation:") == std::string::npos,
         "zero outer cycles must bypass quality flips and relocation");
       continue;
     }
-    require(log.find("phase 2 linear-solve cycle 1: collapsed 0, flipped 0, rail updates 0, vertices 6") != std::string::npos &&
+    require(log.find("phase 3 linear-solve cycle 1: collapsed 0, flipped 0, rail updates 0, vertices 6") != std::string::npos &&
       log.find("quality flip: accepted 0 edges.") != std::string::npos &&
-      log.find("phase 2 linear-solve cycle 2:") == std::string::npos &&
+      log.find("phase 3 linear-solve cycle 2:") == std::string::npos &&
       log.find("no accepted collapses, flips, or rail updates.") != std::string::npos,
       "production must stop after the equal-quality chord fails the ordinary quality gate");
     require(fixture.cage.find_halfedge(v[1], v[3]).is_valid() &&
@@ -1897,11 +1949,11 @@ void production_rail_updates_keep_the_cycle_running()
     fixture.parameters.setOutputPath(output_directory.generic_string() + "/", "octahedron");
     fixture.parameters.setCageLabel(0);
     auto& parameters = fixture.parameters.paramCageSimplifier;
-    parameters.phase2Mode = "linear_solve";
+    parameters.phase3Mode = "linear_solve";
     parameters.targetVerticesNum = 6;
     parameters.enableBoundaryRails = true;
     parameters.enableRailUpdate = true;
-    parameters.phase2QualityPolishIterations = outer_cycles;
+    parameters.phase3QualityPolishIterations = outer_cycles;
     parameters.paramRelocate.qualitySweeps = 0;
     ScopedUserLogCapture captured_log;
     CageSimplifier simplifier(&fixture.original, &fixture.cage, &parameters);
@@ -1913,7 +1965,7 @@ void production_rail_updates_keep_the_cycle_running()
     if (outer_cycles == 0)
     {
       before.require_labels_unchanged(fixture.cage);
-      require(log.find("phase 2 linear-solve cycle ") == std::string::npos &&
+      require(log.find("phase 3 linear-solve cycle ") == std::string::npos &&
         log.find("quality flip:") == std::string::npos &&
         log.find("rail updates ") == std::string::npos,
         "zero outer cycles must retain the collapse-only path even when rail updates are enabled");
@@ -1934,9 +1986,9 @@ void production_rail_updates_keep_the_cycle_running()
         (expected_edges.count({std::min(a, b), std::max(a, b)}) ? 3 : -1),
         "production must replace the two old ear edges with its chord and keep no stale labels");
     }
-    require(log.find("phase 2 linear-solve cycle 1: collapsed 0, flipped 0, rail updates 1, vertices 6") != std::string::npos &&
-      log.find("phase 2 linear-solve cycle 2: collapsed 0, flipped 0, rail updates 0, vertices 6") != std::string::npos &&
-      log.find("phase 2 linear-solve cycle 3:") == std::string::npos &&
+    require(log.find("phase 3 linear-solve cycle 1: collapsed 0, flipped 0, rail updates 1, vertices 6") != std::string::npos &&
+      log.find("phase 3 linear-solve cycle 2: collapsed 0, flipped 0, rail updates 0, vertices 6") != std::string::npos &&
+      log.find("phase 3 linear-solve cycle 3:") == std::string::npos &&
       log.find("no accepted collapses, flips, or rail updates.") != std::string::npos,
       "a rail update alone must advance to the next cycle, then stop only when all three operations accept nothing");
   }
@@ -1971,11 +2023,11 @@ void production_rail_flips_use_triangle_quality()
     fixture.parameters.setOutputPath(output_directory.generic_string() + "/", "octahedron");
     fixture.parameters.setCageLabel(0);
     auto& parameters = fixture.parameters.paramCageSimplifier;
-    parameters.phase2Mode = "linear_solve";
+    parameters.phase3Mode = "linear_solve";
     parameters.targetVerticesNum = 6;
     parameters.enableBoundaryRails = true;
     parameters.enableRailUpdate = true;
-    parameters.phase2QualityPolishIterations = 3;
+    parameters.phase3QualityPolishIterations = 3;
     parameters.paramRelocate.qualitySweeps = 0;
     ScopedUserLogCapture captured_log;
     CageSimplifier simplifier(&fixture.original, &fixture.cage, &parameters);
@@ -2009,16 +2061,16 @@ void production_rail_flips_use_triangle_quality()
     if (start_with_chord)
     {
       before.require_geometry_unchanged(fixture.cage);
-      require(log.find("phase 2 linear-solve cycle 1: collapsed 0, flipped 0, rail updates 1, vertices 6") != std::string::npos,
+      require(log.find("phase 3 linear-solve cycle 1: collapsed 0, flipped 0, rail updates 1, vertices 6") != std::string::npos,
         "rail-enabled production must reject a quality-worsening chord removal before updating labels");
     }
     else
       require(log.find("quality flip: accepted 1 edges.") != std::string::npos &&
-        log.find("phase 2 linear-solve cycle 1: collapsed 0, flipped 1, rail updates 1, vertices 6") != std::string::npos,
+        log.find("phase 3 linear-solve cycle 1: collapsed 0, flipped 1, rail updates 1, vertices 6") != std::string::npos,
         "rail-enabled production must allow an improving chord creation before the rail update");
     require(log.find("quality flip: accepted 0 edges.") != std::string::npos &&
-      log.find("phase 2 linear-solve cycle 2: collapsed 0, flipped 0, rail updates 0, vertices 6") != std::string::npos &&
-      log.find("phase 2 linear-solve cycle 3:") == std::string::npos &&
+      log.find("phase 3 linear-solve cycle 2: collapsed 0, flipped 0, rail updates 0, vertices 6") != std::string::npos &&
+      log.find("phase 3 linear-solve cycle 3:") == std::string::npos &&
       log.find("no accepted collapses, flips, or rail updates.") != std::string::npos,
       "production must stop after the quality flips and rail updates both reach their fixed point");
     require_clear_closed_mesh(fixture.cage, fixture.original);
@@ -2057,10 +2109,10 @@ size_t full_topological_offset_rail_pipeline(size_t outer_cycles = 3,
   lattice.pointNumAlongAxis = 3;
   lattice.areaThresholdRate = 16.0;
   auto& simplification = generator.param.paramCageSimplifier;
-  simplification.phase2Mode = "linear_solve";
+  simplification.phase3Mode = "linear_solve";
   simplification.enableBoundaryRails = true;
   simplification.targetVerticesNum = target_vertices;
-  simplification.phase2QualityPolishIterations = outer_cycles;
+  simplification.phase3QualityPolishIterations = outer_cycles;
   simplification.paramRelocate.surfaceWeight = surface_weight;
   simplification.paramRelocate.qualitySweeps = relocation_sweeps;
   // Match the CLI linear-solve preset; only Phase 1 sampling is coarser.
@@ -2074,21 +2126,21 @@ size_t full_topological_offset_rail_pipeline(size_t outer_cycles = 3,
   generator.stageBuildBoundaryRails();
   const auto phase1_end = std::chrono::steady_clock::now();
   require(require_closed_rail_cycles(*generator.cage) == 2,
-    "both open-tube source boundaries must produce rail cycles in Phase 1");
+    "both open-tube source boundaries must produce rail cycles in Phase 2");
   const size_t phase1_vertices = generator.cage->n_vertices();
   require(phase1_vertices > simplification.targetVerticesNum,
-    "full pipeline fixture must exercise actual Phase 2 collapses");
+    "full pipeline fixture must exercise actual Phase 3 collapses");
   generator.cageInitializer.reset();
   generator.VMesh.reset();
   ScopedUserLogCapture captured_log;
   generator.stageSimplify();
-  const auto phase2_end = std::chrono::steady_clock::now();
+  const auto phase3_end = std::chrono::steady_clock::now();
   require(generator.cage->n_vertices() < phase1_vertices,
     "full pipeline must perform collapses before quality polish");
   require(require_closed_rail_cycles(*generator.cage) == 2,
     "both generated rail cycles must survive collapse and quality polish");
   require_clear_closed_mesh(*generator.cage, *generator.originalMesh);
-  require(std::filesystem::exists(output_directory / "open_tube_debug_phase2_linear_solve.obj"),
+  require(std::filesystem::exists(output_directory / "open_tube_debug_phase3_linear_solve.obj"),
     "full pipeline must write the final linear-solve cage OBJ");
   if (snapshot)
   {
@@ -2119,8 +2171,8 @@ size_t full_topological_offset_rail_pipeline(size_t outer_cycles = 3,
   std::cout << "Full pipeline (cycles " << outer_cycles << ", target " << target_vertices << "): "
     << phase1_vertices << " -> " << generator.cage->n_vertices()
     << " vertices, min quality " << min_quality(*generator.cage)
-    << ", Phase 1 " << std::chrono::duration<double>(phase1_end - start).count()
-    << " s, Phase 2 " << std::chrono::duration<double>(phase2_end - phase1_end).count() << " s\n";
+    << ", Phases 1-2 " << std::chrono::duration<double>(phase1_end - start).count()
+    << " s, Phase 3 " << std::chrono::duration<double>(phase3_end - phase1_end).count() << " s\n";
   return generator.cage->n_vertices();
 }
 
@@ -2128,15 +2180,15 @@ void require_final_relocation_order(const PipelineSnapshot& snapshot, const char
 {
   const std::string& log = snapshot.log;
   const size_t first_relocation = log.find("energy relocation:");
-  const size_t last_cycle = log.rfind("phase 2 linear-solve cycle ");
+  const size_t last_cycle = log.rfind("phase 3 linear-solve cycle ");
   const size_t stop = log.find(stop_reason);
-  const std::string summary_prefix = "phase 2 linear-solve final relocation: moves ";
+  const std::string summary_prefix = "phase 3 linear-solve final relocation: moves ";
   const size_t final_summary = log.find(summary_prefix);
   require(first_relocation != std::string::npos && last_cycle < first_relocation &&
     stop < first_relocation && final_summary > first_relocation && final_summary != std::string::npos,
     "all collapse/flip cycles must finish before the single final relocation stage");
-  require(log.find("phase 2 linear-solve cycle ", first_relocation) == std::string::npos &&
-    log.find("phase 2 energy simplification", first_relocation) == std::string::npos &&
+  require(log.find("phase 3 linear-solve cycle ", first_relocation) == std::string::npos &&
+    log.find("phase 3 energy simplification", first_relocation) == std::string::npos &&
     log.find("quality flip:", first_relocation) == std::string::npos &&
     log.find(summary_prefix, final_summary + summary_prefix.size()) == std::string::npos,
     "collapse and flip must not resume after relocation, and the final stage must run only once");
@@ -2153,7 +2205,7 @@ void relocation_runs_only_after_topology_selection()
   full_topological_offset_rail_pipeline(6, 8, 0.0, 20, &tangent_only);
   require(attracted.points.size() > 8,
     "ordering fixture must exercise a collapse/flip loop that stalls above its target");
-  require(attracted.log.find("phase 2 linear-solve cycle 2:") != std::string::npos,
+  require(attracted.log.find("phase 3 linear-solve cycle 2:") != std::string::npos,
     "ordering fixture must exercise more than one collapse/flip cycle");
   require(disabled.points.size() == attracted.points.size() &&
     disabled.points.size() == tangent_only.points.size() &&
@@ -2177,7 +2229,7 @@ void relocation_runs_only_after_topology_selection()
   full_topological_offset_rail_pipeline(1, 8, 1.0, 20, &capped);
   require_final_relocation_order(capped, "cycle limit reached.");
   full_topological_offset_rail_pipeline(0, 8, 1.0, 20, &collapse_only);
-  require(collapse_only.log.find("phase 2 energy simplification") != std::string::npos &&
+  require(collapse_only.log.find("phase 3 energy simplification") != std::string::npos &&
     collapse_only.log.find("quality flip:") == std::string::npos &&
     collapse_only.log.find("energy relocation:") == std::string::npos,
     "zero outer cycles must preserve the collapse-only compatibility path");
@@ -2205,6 +2257,7 @@ int main()
     {"mixed collapse preserves rail cycles without promoting chords", [] { mixed_collapse_keeps_rail_vertex(true, true); }},
     {"minimal rail edges, chords, and cross-rail edges remain forbidden", prohibited_rail_collapses_stay_rejected},
     {"mixed collapse still rejects collisions at the fixed rail point", mixed_collapse_collision_is_rejected},
+    {"rail-edge collapses use the source half-strips only with rail support", rail_support_projection_is_opt_in},
     {"linear solve queues and commits mixed edges with fixed rail positions", [] { linear_solve_collapses_only_mixed_edges(6); }},
     {"zero target collapses until constrained and retains its initial edge scale", [] { linear_solve_collapses_only_mixed_edges(0); }},
     {"zero target bypasses the outer cycle cap and preserves collapse-only mode", unbounded_linear_solve_reaches_the_stalled_cycle},

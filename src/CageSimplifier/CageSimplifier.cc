@@ -12,17 +12,17 @@ namespace CageSimp
 {
 namespace
 {
-bool is_phase2_energy_mode(const std::string& mode)
+bool is_phase3_energy_mode(const std::string& mode)
 {
   return mode == "linear_solve" || mode == "newton_solve" ||
     mode == "qem_original";
 }
 
-void configure_phase2_strategy(
+void configure_phase3_strategy(
   ParamCollapseStage& collapse, const std::string& mode)
 {
   collapse.collapsePlacementMethod = "optimization";
-  collapse.phase2PlacementStrategy = mode;
+  collapse.phase3PlacementStrategy = mode;
   if (mode == "linear_solve" || mode == "qem_original")
     collapse.robustnessMode = "exact_reject";
 }
@@ -139,11 +139,13 @@ void CageSimplifier::simplify()
     rm->request_vertex_normals();
   rm->update_normals();
 
-  if (is_phase2_energy_mode(param->phase2Mode))
-    configure_phase2_strategy(param->paramCollapse, param->phase2Mode);
+  if (is_phase3_energy_mode(param->phase3Mode))
+    configure_phase3_strategy(param->paramCollapse, param->phase3Mode);
 
   degeneration_remover = std::make_unique<DegenerationRemover>(
     om, rm, vt.get(), ot.get(), lrt.get(), og.get());
+  degeneration_remover->use_rail_support =
+    param->enableBoundaryRails && param->enableRailSupport;
   fast_simplifier = std::make_unique<FastSimplifier>(
     om, rm, vt.get(), ot.get(), lrt.get(), og.get(), &param->paramFastSimplifier);
   calc_diagonal_length();
@@ -151,23 +153,30 @@ void CageSimplifier::simplify()
     fast_simplifier->param->targetVerticesNum = (size_t)(om->n_vertices() * 3);
 
   Logger::user_logger->info("begin simplifying.");
+  if (param->enableBoundaryRails)
+  {
+    Logger::user_logger->info(
+      "boundary rail options: rail update {}, rail support {}.",
+      param->enableRailUpdate ? "on" : "off",
+      param->enableRailSupport ? "on" : "off");
+  }
 
   degeneration_remover->perform();
   if (param->enableBoundaryRails &&
     !validate_and_log_boundary_rails(rm, "after degeneration removal"))
     throw std::logic_error("boundary rail topology became invalid during degeneration removal");
-  if (is_phase2_energy_mode(param->phase2Mode))
+  if (is_phase3_energy_mode(param->phase3Mode))
   {
-    run_phase2_energy_simplification();
+    run_phase3_energy_simplification();
     if (param->enableBoundaryRails &&
-      !validate_and_log_boundary_rails(rm, "after Phase 2"))
-      throw std::logic_error("boundary rail topology became invalid during Phase 2");
-    const std::string quality_label = "after phase 2 " + param->phase2Mode;
+      !validate_and_log_boundary_rails(rm, "after Phase 3"))
+      throw std::logic_error("boundary rail topology became invalid during Phase 3");
+    const std::string quality_label = "after phase 3 " + param->phase3Mode;
     log_min_triangle_quality(quality_label.c_str());
-    const std::string phase2_path =
-      param->fileOutPath + param->fileName + "_debug_phase2_" + param->phase2Mode + ".obj";
-    OpenMesh::IO::write_mesh(*rm, phase2_path, OpenMesh::IO::Options::Default, 15);
-    Logger::user_logger->info("wrote phase 2 {} OBJ: {}", param->phase2Mode, phase2_path);
+    const std::string phase3_path =
+      param->fileOutPath + param->fileName + "_debug_phase3_" + param->phase3Mode + ".obj";
+    OpenMesh::IO::write_mesh(*rm, phase3_path, OpenMesh::IO::Options::Default, 15);
+    Logger::user_logger->info("wrote phase 3 {} OBJ: {}", param->phase3Mode, phase3_path);
 
     degeneration_remover = nullptr;
     fast_simplifier = nullptr;
@@ -208,6 +217,8 @@ void CageSimplifier::simplify()
   collapse_stage = std::make_unique<CollapseStage>(
     om, rm, &param->paramCollapse,
     ot.get(), lrt.get(), og.get(), original_diagonal_length);
+  collapse_stage->use_rail_support =
+    param->enableBoundaryRails && param->enableRailSupport;
 
   relocate_stage = std::make_unique<RelocateStage>(
     om, rm, &param->paramRelocate,
@@ -236,35 +247,37 @@ void CageSimplifier::calc_diagonal_length()
   fast_simplifier->original_diagonal_length = original_diagonal_length;
 }
 
-void CageSimplifier::run_phase2_energy_simplification()
+void CageSimplifier::run_phase3_energy_simplification()
 {
   if (param->targetVerticesNum == 0)
     Logger::user_logger->info(
-      "running Phase 2 energy mode [{}] until no further progress (no vertex target).",
-      param->phase2Mode);
+      "running Phase 3 energy mode [{}] until no further progress (no vertex target).",
+      param->phase3Mode);
   else
     Logger::user_logger->info(
-      "running Phase 2 energy mode [{}] to final target {} vertices.",
-      param->phase2Mode, param->targetVerticesNum);
+      "running Phase 3 energy mode [{}] to final target {} vertices.",
+      param->phase3Mode, param->targetVerticesNum);
 
   collapse_stage = std::make_unique<CollapseStage>(
     om, rm, &param->paramCollapse,
     ot.get(), lrt.get(), og.get(), original_diagonal_length);
-  if (param->phase2Mode == "linear_solve")
+  collapse_stage->use_rail_support =
+    param->enableBoundaryRails && param->enableRailSupport;
+  if (param->phase3Mode == "linear_solve")
   {
-    run_phase2_linear_solve_iterations();
+    run_phase3_linear_solve_iterations();
     collapse_stage = nullptr;
     return;
   }
-  collapse_stage->do_phase2_energy_simplification(param->targetVerticesNum);
+  collapse_stage->do_phase3_energy_simplification(param->targetVerticesNum);
   collapse_stage = nullptr;
-  if (param->phase2Mode == "qem_original")
+  if (param->phase3Mode == "qem_original")
   {
     init_one_ring_faces(rm);
     return;
   }
 
-  Logger::user_logger->info("running phase 2 energy final flip polish.");
+  Logger::user_logger->info("running phase 3 energy final flip polish.");
   rt = std::make_unique<FaceTree>(*rm);
   generate_out_links(om, rm, rt.get());
   rt = nullptr;
@@ -284,22 +297,22 @@ void CageSimplifier::run_phase2_energy_simplification()
   init_one_ring_faces(rm);
 }
 
-void CageSimplifier::run_phase2_linear_solve_iterations()
+void CageSimplifier::run_phase3_linear_solve_iterations()
 {
   init_one_ring_faces(rm);
-  if (param->phase2QualityPolishIterations == 0)
+  if (param->phase3QualityPolishIterations == 0)
   {
     // Preserve the existing zero setting as a collapse-only comparison.
-    collapse_stage->do_phase2_energy_simplification(param->targetVerticesNum);
+    collapse_stage->do_phase3_energy_simplification(param->targetVerticesNum);
     init_one_ring_faces(rm);
     return;
   }
 
   const bool until_stalled = param->targetVerticesNum == 0;
   const std::string cycle_limit = until_stalled ? "unlimited" :
-    "up to " + std::to_string(param->phase2QualityPolishIterations);
+    "up to " + std::to_string(param->phase3QualityPolishIterations);
   Logger::user_logger->info(
-    "running phase 2 linear-solve iterations: {} collapse/flip/rail-update cycles, then up to {} final relocation sweeps with {} backtracking attempts per vertex; rail vertices fixed during relocation.",
+    "running phase 3 linear-solve iterations: {} collapse/flip/rail-update cycles, then up to {} final relocation sweeps with {} backtracking attempts per vertex; rail vertices fixed during relocation.",
     cycle_limit, param->paramRelocate.qualitySweeps,
     param->paramRelocate.lineSearchMaxIter);
 
@@ -307,14 +320,14 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
     om, rm, &param->paramFlip,
     ot.get(), lrt.get(), og.get(), original_diagonal_length);
   for (size_t iteration = 0;
-       until_stalled || iteration < param->phase2QualityPolishIterations;
+       until_stalled || iteration < param->phase3QualityPolishIterations;
        ++iteration)
   {
     // Rebuild collapse candidates after the previous cycle's flips and rail
     // relabeling, which can make previously constrained edges collapsible.
     // Keep this stage alive so its initial uniformity target is fixed.
     // The collapse stage skips its work once the target vertex count is met.
-    const size_t collapsed = collapse_stage->do_phase2_energy_simplification(
+    const size_t collapsed = collapse_stage->do_phase3_energy_simplification(
       param->targetVerticesNum);
 
     // Degeneration removal and energy collapse do not update all normals.
@@ -329,7 +342,7 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
       param->enableBoundaryRails && param->enableRailUpdate ?
       update_boundary_rails(*rm) : 0;
     Logger::user_logger->info(
-      "phase 2 linear-solve cycle {}: collapsed {}, flipped {}, rail updates {}, vertices {}, min triangle quality {}.",
+      "phase 3 linear-solve cycle {}: collapsed {}, flipped {}, rail updates {}, vertices {}, min triangle quality {}.",
       iteration + 1, collapsed, flipped, rail_updates,
       rm->n_vertices(), calc_min_triangle_quality());
     if (param->enableBoundaryRails &&
@@ -337,11 +350,11 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
       throw std::logic_error("boundary rail topology became invalid during linear-solve iteration");
     if (collapsed == 0 && flipped == 0 && rail_updates == 0)
     {
-      Logger::user_logger->info("phase 2 linear-solve iterations stopped: no accepted collapses, flips, or rail updates.");
+      Logger::user_logger->info("phase 3 linear-solve iterations stopped: no accepted collapses, flips, or rail updates.");
       break;
     }
-    if (!until_stalled && iteration + 1 == param->phase2QualityPolishIterations)
-      Logger::user_logger->info("phase 2 linear-solve iterations stopped: cycle limit reached.");
+    if (!until_stalled && iteration + 1 == param->phase3QualityPolishIterations)
+      Logger::user_logger->info("phase 3 linear-solve iterations stopped: cycle limit reached.");
   }
   flip_stage = nullptr;
 
@@ -367,7 +380,7 @@ void CageSimplifier::run_phase2_linear_solve_iterations()
     }
   }
   Logger::user_logger->info(
-    "phase 2 linear-solve final relocation: moves {} in {} sweeps, vertices {}, min triangle quality {}.",
+    "phase 3 linear-solve final relocation: moves {} in {} sweeps, vertices {}, min triangle quality {}.",
     relocated, sweeps, rm->n_vertices(), calc_min_triangle_quality());
   if (param->enableBoundaryRails &&
     !validate_and_log_boundary_rails(rm, "after final linear-solve relocation"))

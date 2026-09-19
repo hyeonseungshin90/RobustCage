@@ -140,7 +140,7 @@ bool EdgeCollapser::initialize_rail_constraint(EdgeHandle edge)
   // axes are the boundary tangent and its outward co-normal.  Projecting a
   // rail collapse onto their union preserves a straight cylinder's opening,
   // while a sloped source wall naturally contracts or expands the rail.
-  if (om)
+  if (om && f_use_rail_support)
   {
     for (EdgeHandle source_edge : om->edges())
     {
@@ -213,8 +213,8 @@ Vec3d EdgeCollapser::constrained_target_point(const Vec3d& new_point)const
   if (project_to_source_rail(new_point, source_guided_point))
     return source_guided_point;
 
-  // Backward-compatible fallback for meshes whose rail labels predate the
-  // source support metadata.
+  // Without rail support, or without source support metadata for this rail,
+  // keep the target on the collapsed rail edge.
   const Vec3d segment = rail_segment1 - rail_segment0;
   const double segment_sqr = segment.squaredNorm();
   if (segment_sqr <= 0.0)

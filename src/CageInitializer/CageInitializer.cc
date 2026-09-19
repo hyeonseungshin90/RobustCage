@@ -167,7 +167,7 @@ bool write_cage_obj(SM::SMeshT& cage, const std::string& path)
   }
 
   // Phase 1 vertices and the rail crossings of the geodesic embedding lie
-  // exactly on rational positions, and Phase 2 predicates use those.  Their
+  // exactly on rational positions, and Phase 3 predicates use those.  Their
   // doubles alone can fold the zero-area slivers left by the embedding into
   // self-intersections, so the rationals are kept as comment lines, which
   // other OBJ readers skip.

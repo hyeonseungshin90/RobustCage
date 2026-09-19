@@ -48,7 +48,7 @@ struct MeshTraits : public OpenMesh::DefaultTraits
     int boundary_rail_id = -1;
 
     // On a source boundary edge this is the outward co-normal used to build
-    // the corresponding rail.  Keeping it on the source mesh lets Phase 2
+    // the corresponding rail.  Keeping it on the source mesh lets Phase 3
     // constrain rail collapses to the source-guided ruled surface instead of
     // pulling the new vertex onto a shrinking cage-edge chord.
     Point boundary_rail_outer_direction = Point(0.0, 0.0, 0.0);

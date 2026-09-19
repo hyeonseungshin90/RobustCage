@@ -19,8 +19,9 @@ public:
   // input
   std::unique_ptr<SM::SMeshT> originalMesh;
   ParamCageGenerator param;
-  // Optional files of an earlier run.  A cage path skips Phase 1; a rail
-  // index file (with the cage it refers to) also skips rail construction.
+  // Optional files of an earlier run.  A cage path skips Phase 1 (initial
+  // cage); a rail index file (with the cage it refers to) also skips Phase 2
+  // (rail construction).
   std::string inputCagePath;
   std::string inputRailPath;
 

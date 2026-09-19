@@ -55,8 +55,8 @@ private:
 
   void update_strategy();
 
-  void run_phase2_energy_simplification();
-  void run_phase2_linear_solve_iterations();
+  void run_phase3_energy_simplification();
+  void run_phase3_linear_solve_iterations();
   void simplify_to_target_num();
   double calc_triangle_quality(FaceHandle fh) const;
   double calc_min_triangle_quality() const;

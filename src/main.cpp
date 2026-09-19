@@ -238,7 +238,7 @@ std::string format_timestamp(std::time_t time_value)
   return oss.str();
 }
 
-// <timestamp>__<labels joined by '_'>, e.g. 20260919_182543__phase1_TO_phase2_LS.
+// <timestamp>__<labels joined by '_'>, e.g. 20260919_182543__phase1_TO_phase3_LS.
 // COMMAND_ARGUMENTS.md lists the abbreviations.
 std::string build_run_dir_name(
   const Cage::ParamCageGenerator& param, bool from_cage, bool from_rails)
@@ -259,10 +259,10 @@ std::string build_run_dir_name(
   }
   else
   {
-    labels.push_back("phase2_" + abbreviate_mode(simplifier.phase2Mode));
-    if (simplifier.phase2Mode == "newton_solve")
+    labels.push_back("phase3_" + abbreviate_mode(simplifier.phase3Mode));
+    if (simplifier.phase3Mode == "newton_solve")
     {
-      labels.push_back(abbreviate_mode(collapse.phase2PlacementStrategy));
+      labels.push_back(abbreviate_mode(collapse.phase3PlacementStrategy));
       labels.push_back(abbreviate_mode(collapse.newtonSolverMode));
       labels.push_back(abbreviate_mode(collapse.robustnessMode));
       if (collapse.curvatureMode != "none")
@@ -270,16 +270,18 @@ std::string build_run_dir_name(
       if (collapse.uniformityMode != "none")
         labels.push_back("unif" + abbreviate_mode(collapse.uniformityMode));
     }
-    else if (simplifier.phase2Mode != "linear_solve" &&
-      simplifier.phase2Mode != "qem_original")
+    else if (simplifier.phase3Mode != "linear_solve" &&
+      simplifier.phase3Mode != "qem_original")
     {
       labels.push_back("colH");
       labels.push_back("flip" + abbreviate_mode(simplifier.paramFlip.priorityMode));
       labels.push_back("reloc" + abbreviate_mode(simplifier.paramRelocate.priorityMode));
     }
-    // Only the enabled case is named.
+    // Only the enabled cases are named.
     if (simplifier.enableBoundaryRails && simplifier.enableRailUpdate)
       labels.push_back("RU");
+    if (simplifier.enableBoundaryRails && simplifier.enableRailSupport)
+      labels.push_back("RS");
   }
 
   std::ostringstream oss;
@@ -467,7 +469,7 @@ void run_boundary_rail_anchor_benchmark(
     vertex.builtLoopCount, vertex.detectedLoopCount,
     vertex.rayValidLoopCount, winner);
   Logger::user_logger->info(
-    "boundary rail anchor benchmark elapsed time: Phase 1 {:.6f}s, edge {:.6f}s, vertex {:.6f}s; simplification skipped.",
+    "boundary rail anchor benchmark elapsed time: Phase 1 {:.6f}s, Phase 2 edge {:.6f}s, Phase 2 vertex {:.6f}s; Phase 3 skipped.",
     phase1_seconds, edge_seconds, vertex_seconds);
 
   write_boundary_rail_benchmark_meshes(
@@ -568,7 +570,7 @@ void generate_cages(
       if (target_vn.size() > 1)
       {
         Logger::user_logger->warn(
-          "boundary_rail_compare ignores additional nested-cage targets; the benchmark uses one shared Phase 1 cage and skips simplification.");
+          "phase2_boundary_rail_compare ignores additional nested-cage targets; the benchmark uses one shared Phase 1 cage and skips Phase 3.");
       }
       cage_generator.param.setCageLabel(0);
       cage_generator.param.setTargetNumber(target_vn.front());
@@ -595,7 +597,7 @@ void generate_cages(
       Cage::CageInit::write_cage_obj(*cage_generator.cage, mesh_out_file.string());
 
       // export the final boundary rails on their own for separate
-      // visualization; the rails Phase 1 handed to Phase 2 were already written
+      // visualization; the rails Phase 2 handed to Phase 3 were already written
       // as <file>_cage_<label>_initial_rails.obj/.txt.
       bf::path rail_obj_file = file_out_dir;
       rail_obj_file.append(file_name + "_cage_" + std::to_string(it) + "_rails.obj");
@@ -620,7 +622,7 @@ void generate_cages(
 
       *cage_generator.originalMesh = *cage_generator.cage;
       // The input cage and rails belong to cage 0; each nested cage runs
-      // Phase 1 on the previous cage.
+      // Phases 1 and 2 on the previous cage.
       cage_generator.inputCagePath.clear();
       cage_generator.inputRailPath.clear();
     }
@@ -662,13 +664,13 @@ void apply_plane_energy_weights(
   collapse.uniformityWeight = 4.0;
 }
 
-void enable_newton_solve_phase2_defaults(Cage::ParamCageGenerator& param)
+void enable_newton_solve_phase3_defaults(Cage::ParamCageGenerator& param)
 {
   auto& simplifier = param.paramCageSimplifier;
   auto& collapse = simplifier.paramCollapse;
-  simplifier.phase2Mode = "newton_solve";
+  simplifier.phase3Mode = "newton_solve";
   collapse.collapsePlacementMethod = "optimization";
-  collapse.phase2PlacementStrategy = "newton_solve";
+  collapse.phase3PlacementStrategy = "newton_solve";
   collapse.curvatureMode = "weighted_plane";
   collapse.uniformityMode = "source";
   collapse.triangleQualityWeight = 2.0;
@@ -677,26 +679,26 @@ void enable_newton_solve_phase2_defaults(Cage::ParamCageGenerator& param)
   param.paramCageSimplifier.paramFlip.requireRegularValence = false;
 }
 
-void enable_linear_solve_phase2_defaults(Cage::ParamCageGenerator& param)
+void enable_linear_solve_phase3_defaults(Cage::ParamCageGenerator& param)
 {
   auto& simplifier = param.paramCageSimplifier;
   auto& collapse = simplifier.paramCollapse;
-  simplifier.phase2Mode = "linear_solve";
+  simplifier.phase3Mode = "linear_solve";
   collapse.collapsePlacementMethod = "optimization";
-  collapse.phase2PlacementStrategy = "linear_solve";
+  collapse.phase3PlacementStrategy = "linear_solve";
   collapse.robustnessMode = "exact_reject";
   collapse.curvatureMode = "none";
   collapse.uniformityMode = "global";
   apply_plane_energy_weights(collapse, true);
 }
 
-void enable_qem_original_phase2_defaults(Cage::ParamCageGenerator& param)
+void enable_qem_original_phase3_defaults(Cage::ParamCageGenerator& param)
 {
   auto& simplifier = param.paramCageSimplifier;
   auto& collapse = simplifier.paramCollapse;
-  simplifier.phase2Mode = "qem_original";
+  simplifier.phase3Mode = "qem_original";
   collapse.collapsePlacementMethod = "optimization";
-  collapse.phase2PlacementStrategy = "qem_original";
+  collapse.phase3PlacementStrategy = "qem_original";
   collapse.robustnessMode = "exact_reject";
   collapse.curvatureMode = "none";
   collapse.uniformityMode = "none";
@@ -717,50 +719,56 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
     return true;
   }
 
-  if (token == "boundary_rail")
+  if (token == "phase2_boundary_rail" || token == "boundary_rail")
   {
     param.paramCageSimplifier.enableBoundaryRails = true;
     param.paramCageSimplifier.boundaryRailAnchorMode = "edge";
     return true;
   }
-  if (token == "boundary_rail_vertex")
+  if (token == "phase2_boundary_rail_vertex" || token == "boundary_rail_vertex")
   {
     param.paramCageSimplifier.enableBoundaryRails = true;
     param.paramCageSimplifier.boundaryRailAnchorMode = "vertex";
     return true;
   }
-  if (token == "boundary_rail_compare")
+  if (token == "phase2_boundary_rail_compare" || token == "boundary_rail_compare")
   {
     param.paramCageSimplifier.enableBoundaryRails = true;
     param.paramCageSimplifier.boundaryRailAnchorMode = "compare";
     return true;
   }
-  if (token == "rail_update")
+
+  if (token == "phase3_rail_update" || token == "rail_update")
   {
     param.paramCageSimplifier.enableRailUpdate = true;
     return true;
   }
-
-  if (token == "phase2_linear_solve" || token == "linear_solve")
+  if (token == "phase3_rail_support" || token == "rail_support")
   {
-    enable_linear_solve_phase2_defaults(param);
+    param.paramCageSimplifier.enableRailSupport = true;
     return true;
   }
-  if (token == "phase2_linear_solve_collision_reject" ||
+
+  if (token == "phase3_linear_solve" || token == "linear_solve")
+  {
+    enable_linear_solve_phase3_defaults(param);
+    return true;
+  }
+  if (token == "phase3_linear_solve_collision_reject" ||
     token == "linear_solve_collision_reject")
   {
-    enable_linear_solve_phase2_defaults(param);
-    collapse.phase2LinearSolveCollisionReject = true;
+    enable_linear_solve_phase3_defaults(param);
+    collapse.phase3LinearSolveCollisionReject = true;
     return true;
   }
-  if (token == "phase2_qem_original" || token == "qem_original")
+  if (token == "phase3_qem_original" || token == "qem_original")
   {
-    enable_qem_original_phase2_defaults(param);
+    enable_qem_original_phase3_defaults(param);
     return true;
   }
-  if (token == "phase2_newton_solve" || token == "newton_solve")
+  if (token == "phase3_newton_solve" || token == "newton_solve")
   {
-    enable_newton_solve_phase2_defaults(param);
+    enable_newton_solve_phase3_defaults(param);
     apply_plane_energy_weights(collapse, true);
     return true;
   }
@@ -797,12 +805,12 @@ bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator&
     }
     if (anchor_mode == "compare")
       return true;
-    const std::string& mode = param.paramCageSimplifier.phase2Mode;
+    const std::string& mode = param.paramCageSimplifier.phase3Mode;
     if (mode == "linear_solve" || mode == "newton_solve" ||
       mode == "qem_original")
       return true;
     Logger::user_logger->error(
-      "boundary_rail and boundary_rail_vertex must be combined with phase2_linear_solve, phase2_linear_solve_collision_reject, phase2_newton_solve, or phase2_qem_original; boundary_rail_compare is Phase-1-only.");
+      "phase2_boundary_rail and phase2_boundary_rail_vertex must be combined with phase3_linear_solve, phase3_linear_solve_collision_reject, phase3_newton_solve, or phase3_qem_original; phase2_boundary_rail_compare skips Phase 3.");
     return false;
   };
 
@@ -864,16 +872,21 @@ int main(int argc, char* argv[])
     printf("Need args:\n");
     printf("arg[0]: parameters.\n");
     printf("input \"default\" to set default parameters\n");
-    printf("input \"phase1_topological_offset\" to use simplicial embedding and offset insertion in Phase 1\n");
-    printf("input \"phase2_linear_solve\" for repeated linear-solve collapse and quality flip, followed by final Voronoi/surface relocation sweeps\n");
-    printf("input \"phase2_linear_solve_collision_reject\" to reject invalid raw linear-solve placements without backtracking\n");
-    printf("input \"phase2_newton_solve\" to use Newton placement for every Phase 2 collapse candidate\n");
-    printf("input \"phase2_qem_original\" to run original Garland-Heckbert QEM without collision rejection\n");
-    printf("input \"boundary_rail\" with a Phase 2 energy preset to build and preserve closed boundary rails\n");
-    printf("input \"boundary_rail_vertex\" with a Phase 2 energy preset to use vertex-bisector anchor rays\n");
-    printf("input \"boundary_rail_compare\" to compare edge and vertex anchor rays on one shared Phase 1 cage and skip simplification\n");
-    printf("input \"rail_update\" with boundary_rail or boundary_rail_vertex to relabel rails after each linear-solve flip stage (off by default)\n");
-    printf("combine presets with '+' or ',', for example \"phase2_linear_solve+boundary_rail\".\n");
+    printf("Phase 1 (initial cage):\n");
+    printf("input \"phase1_topological_offset\" to use simplicial embedding and offset insertion\n");
+    printf("Phase 2 (boundary rail construction, runs only when requested):\n");
+    printf("input \"phase2_boundary_rail\" with a Phase 3 energy preset to build closed boundary rails and preserve them in Phase 3\n");
+    printf("input \"phase2_boundary_rail_vertex\" with a Phase 3 energy preset to use vertex-bisector anchor rays\n");
+    printf("input \"phase2_boundary_rail_compare\" to compare edge and vertex anchor rays on one shared Phase 1 cage and skip Phase 3\n");
+    printf("Phase 3 (simplification):\n");
+    printf("input \"phase3_linear_solve\" for repeated linear-solve collapse and quality flip, followed by final Voronoi/surface relocation sweeps\n");
+    printf("input \"phase3_linear_solve_collision_reject\" to reject invalid raw linear-solve placements without backtracking\n");
+    printf("input \"phase3_newton_solve\" to use Newton placement for every Phase 3 collapse candidate\n");
+    printf("input \"phase3_qem_original\" to run original Garland-Heckbert QEM without collision rejection\n");
+    printf("input \"phase3_rail_update\" with Phase 2 rails to relabel rails after each linear-solve flip stage (off by default)\n");
+    printf("input \"phase3_rail_support\" with Phase 2 rails to project rail-edge collapses onto the source-boundary half-strips (off by default)\n");
+    printf("the phaseN_ prefix may be omitted, e.g. \"linear_solve\" or \"boundary_rail\".\n");
+    printf("combine presets with '+' or ',' in any order, for example \"phase1_topological_offset+phase2_boundary_rail+phase3_linear_solve\".\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
     printf("ASCII and binary STL input files are supported.\n");
@@ -881,10 +894,10 @@ int main(int argc, char* argv[])
     printf("arg[3]: target vertices number of cage 0 (optional for linear_solve).\n");
     printf("(optional)arg[4]: target vertices number of nested cage 1.\n");
     printf("(optional)arg[n + 3]: target vertices number of nested cage n.\n");
-    printf("For linear_solve, omit targets or use 0 to repeat collapse/flip (and rail update with rail_update) until no further progress.\n");
+    printf("For linear_solve, omit targets or use 0 to repeat collapse/flip (and rail update with phase3_rail_update) until no further progress.\n");
     printf("options:\n");
     printf("--cage <initial_cage.obj>: skip Phase 1 and start from this cage, e.g. <model>_debug_retrieve_cage.obj of an earlier run.\n");
-    printf("--rails <rails.txt>: with --cage <model>_cage_<i>_initial.obj, also skip boundary rail construction and use <model>_cage_<i>_initial_rails.txt.\n");
+    printf("--rails <rails.txt>: with --cage <model>_cage_<i>_initial.obj, also skip Phase 2 and use <model>_cage_<i>_initial_rails.txt.\n");
     return 1;
   }
 
@@ -898,7 +911,7 @@ int main(int argc, char* argv[])
   if (!parse_parameter_arg(arg_param, param))
     return 1;
 
-  if (args.size() == 3 && param.paramCageSimplifier.phase2Mode != "linear_solve")
+  if (args.size() == 3 && param.paramCageSimplifier.phase3Mode != "linear_solve")
   {
     Logger::user_logger->error(
       "a target vertex count is required; targets may be omitted only for linear_solve.");
@@ -934,7 +947,7 @@ int main(int argc, char* argv[])
       simplifier.boundaryRailAnchorMode == "compare")
     {
       Logger::user_logger->error(
-        "--rails needs boundary_rail or boundary_rail_vertex; boundary_rail_compare always builds its rails.");
+        "--rails needs phase2_boundary_rail or phase2_boundary_rail_vertex; phase2_boundary_rail_compare always builds its rails.");
       return 1;
     }
     // A rail OBJ has no cage indices; its index file is written next to it.

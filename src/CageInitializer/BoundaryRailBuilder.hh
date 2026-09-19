@@ -31,7 +31,7 @@ struct BoundaryRailBuildStats
 // co-normals; the experimental alternative casts from vertices along adjacent
 // co-normal bisectors. Consecutive anchors are connected by Dijkstra paths;
 // all loops are then shortened as one pinned flip-geodesic network and split
-// into real cage edges for Phase 2. A failed refinement keeps the valid
+// into real cage edges for Phase 3. A failed refinement keeps the valid
 // Dijkstra rails and reports its reason. In both modes source
 // edges keep their own (unaveraged) co-normals as the rail support metadata.
 class BoundaryRailBuilder

@@ -32,6 +32,8 @@ public:
   FaceGrid* og;
   // parameters
   double original_diagonal_length;
+  // See EdgeCollapser::set_rail_support.
+  bool use_rail_support = false;
 public:
   DegenerationRemover(
     SMeshT* om_, SMeshT* rm_,
@@ -50,7 +52,12 @@ public:
   size_t eliminate_almost_degeneration();
   bool try_collapse_almost_degenerate_edge(EdgeCollapser& edge_collapser, EdgeHandle eh);
 
-  inline EdgeCollapser new_edge_collapser() { return EdgeCollapser(om, rm, ot, lrt, og); }
+  inline EdgeCollapser new_edge_collapser()
+  {
+    EdgeCollapser collapser(om, rm, ot, lrt, og);
+    collapser.set_rail_support(use_rail_support);
+    return collapser;
+  }
   inline EdgeFlipper new_edge_flipper() { return EdgeFlipper(om, rm, ot, lrt, og); }
   inline VertexRelocater new_vertex_relocater() { return VertexRelocater(om, rm, ot, lrt, vt, og); }
 };
