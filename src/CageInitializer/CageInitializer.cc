@@ -1,8 +1,11 @@
 #include "CageInitializer.hh"
 #include "CageSimplifier/SpaceSearch/DFaceTree.h"
 #include <algorithm>
+#include <cfloat>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <sstream>
 
 namespace Cage
 {
@@ -11,6 +14,9 @@ namespace CageInit
 
 namespace
 {
+// Comment tag of write_cage_obj for the exact coordinates of one vertex.
+const char* const kExactVertexTag = "#ev";
+
 bool hasExactNonAdjacentSelfIntersection(SM::SMeshT* mesh)
 {
   Geometry::LightDFaceTree tree(*mesh);
@@ -72,7 +78,7 @@ size_t countBoundaryEdges(SM::SMeshT* mesh)
   return boundary_edges;
 }
 
-void validateClosedManifoldCage(SM::SMeshT* mesh)
+void validateClosedManifoldCage(SM::SMeshT* mesh, const std::string& label)
 {
   const size_t boundary_edges = countBoundaryEdges(mesh);
   size_t non_manifold_vertices = 0;
@@ -85,15 +91,15 @@ void validateClosedManifoldCage(SM::SMeshT* mesh)
   if (boundary_edges != 0 || non_manifold_vertices != 0)
   {
     Logger::user_logger->critical(
-      "Phase 1 topological-offset cage is not a closed 2-manifold: "
+      "{} is not a closed 2-manifold: "
       "{} boundary edges, {} non-manifold vertices.",
-      boundary_edges, non_manifold_vertices);
-    throw std::logic_error(
-      "Phase 1 topological-offset cage is not a closed 2-manifold");
+      label, boundary_edges, non_manifold_vertices);
+    throw std::logic_error(label + " is not a closed 2-manifold");
   }
 
   Logger::user_logger->info(
-    "Phase 1 topological-offset manifold check passed: no boundary edges or singular vertices.");
+    "{} manifold check passed: no boundary edges or singular vertices.",
+    label);
 }
 
 void writeVolumeMeshFacesObj(VM::VMeshT* mesh, const std::string& file_name)
@@ -131,6 +137,68 @@ void writeVolumeMeshFacesObj(VM::VMeshT* mesh, const std::string& file_name)
   fout.close();
   Logger::user_logger->info("wrote volume mesh face OBJ: {} ({} faces)", file_name, written_faces);
 }
+}
+
+bool write_cage_obj(SM::SMeshT& cage, const std::string& path)
+{
+  std::ofstream fout(path.c_str());
+  if (!fout.is_open())
+  {
+    Logger::user_logger->warn("fail to open cage OBJ for writing: {}", path);
+    return false;
+  }
+
+  // 17 significant digits reproduce every double exactly when read back.
+  // Vertices are written by index, so rail files may refer to index + 1.
+  fout << std::setprecision(17);
+  fout << "# " << kExactVertexTag << " <vertex> <x> <y> <z> lines hold the exact "
+    "rational coordinates of vertices whose v line is only their double approximation\n";
+  for (size_t vidx = 0; vidx < cage.n_vertices(); vidx++)
+  {
+    const auto& p = cage.point(SM::VertexHandle(static_cast<int>(vidx)));
+    fout << "v " << p[0] << " " << p[1] << " " << p[2] << "\n";
+  }
+  for (SM::FaceHandle fh : cage.faces())
+  {
+    fout << "f";
+    for (SM::VertexHandle vh : cage.fv_range(fh))
+      fout << " " << vh.idx() + 1;
+    fout << "\n";
+  }
+
+  // Phase 1 vertices and the rail crossings of the geodesic embedding lie
+  // exactly on rational positions, and Phase 2 predicates use those.  Their
+  // doubles alone can fold the zero-area slivers left by the embedding into
+  // self-intersections, so the rationals are kept as comment lines, which
+  // other OBJ readers skip.
+  size_t exact_vertices = 0;
+  for (size_t vidx = 0; vidx < cage.n_vertices(); vidx++)
+  {
+    const Geometry::ExactPoint* ep =
+      cage.data(SM::VertexHandle(static_cast<int>(vidx))).ep.get();
+    if (!ep)
+      continue;
+    const Geometry::Point_3& q = ep->exact();
+    fout << kExactVertexTag << " " << vidx + 1
+      << " " << CGAL::exact(q.x())
+      << " " << CGAL::exact(q.y())
+      << " " << CGAL::exact(q.z()) << "\n";
+    exact_vertices++;
+  }
+  fout.close();
+  if (fout.fail())
+  {
+    Logger::user_logger->warn("fail to write cage OBJ: {}", path);
+    return false;
+  }
+
+  if (exact_vertices > 0)
+  {
+    Logger::user_logger->info(
+      "{} stores exact coordinates of {} of {} cage vertices.",
+      path, exact_vertices, cage.n_vertices());
+  }
+  return true;
 }
 
 CageInitializer::CageInitializer()
@@ -218,21 +286,90 @@ void CageInitializer::generate()
   // step 2.2. retrieve cage from tetrahedral mesh.
   retrieveCage(outVMesh, outSMesh);
   if (param->phase1Mode == "topological_offset")
-    validateClosedManifoldCage(outSMesh);
+    validateClosedManifoldCage(outSMesh, "Phase 1 topological-offset cage");
   if (hasExactNonAdjacentSelfIntersection(outSMesh))
   {
     throw std::logic_error(
       "Phase 1 cage has an exact non-adjacent self-intersection.");
   }
 
+  // This file can be passed back with --cage to skip Phase 1.
   const std::string retrieve_cage_path =
     param->fileOutPath + param->fileName + "_debug_retrieve_cage.obj";
-  OpenMesh::IO::write_mesh(*outSMesh, retrieve_cage_path, OpenMesh::IO::Options::Default, 15);
-  Logger::user_logger->info("wrote retrieved cage OBJ: {}", retrieve_cage_path);
+  if (write_cage_obj(*outSMesh, retrieve_cage_path))
+    Logger::user_logger->info("wrote retrieved cage OBJ: {}", retrieve_cage_path);
   tetMeshTrimmer.reset();
   topologicalOffsetInitializer.reset();
   {Logger::user_logger->info("generating initial cage done!");}
   {Logger::user_logger->info("peak memory used: {} MB", getPeakMegabytesUsed());}
+}
+
+void CageInitializer::load(const std::string& cage_path)
+{
+  Logger::user_logger->info("skip Phase 1 and load initial cage: {}", cage_path);
+
+  if (!OpenMesh::IO::read_mesh(*outSMesh, cage_path) ||
+    outSMesh->n_vertices() == 0 || outSMesh->n_faces() == 0)
+  {
+    Logger::user_logger->critical("fail to read initial cage: {}", cage_path);
+    throw std::runtime_error("fail to read initial cage");
+  }
+  // Restore the exact coordinates write_cage_obj kept as comment lines.
+  Geometry::Vec3d lo(DBL_MAX, DBL_MAX, DBL_MAX);
+  Geometry::Vec3d hi(-DBL_MAX, -DBL_MAX, -DBL_MAX);
+  for (SM::VertexHandle vh : outSMesh->vertices())
+  {
+    lo.minimize(outSMesh->point(vh));
+    hi.maximize(outSMesh->point(vh));
+  }
+  const double cage_scale = (hi - lo).length();
+  std::ifstream fin(cage_path.c_str());
+  std::string line;
+  size_t exact_vertices = 0;
+  while (std::getline(fin, line))
+  {
+    std::istringstream fields(line);
+    std::string tag;
+    if (!(fields >> tag) || tag != kExactVertexTag)
+      continue;
+    long long index = 0;
+    Geometry::ET x, y, z;
+    if (!(fields >> index >> x >> y >> z) ||
+      index < 1 || index > static_cast<long long>(outSMesh->n_vertices()))
+    {
+      Logger::user_logger->critical(
+        "invalid exact vertex line in initial cage {}: {}", cage_path, line);
+      throw std::runtime_error("invalid exact vertex line in initial cage");
+    }
+    const SM::VertexHandle vh(static_cast<int>(index - 1));
+    auto ep = std::make_unique<Geometry::ExactPoint>(Geometry::Point_3(x, y, z));
+    // The v line is the double approximation of the same point.
+    const Geometry::Vec3d& p = outSMesh->point(vh);
+    const double magnitude = std::max(
+      std::abs(p[0]), std::max(std::abs(p[1]), std::abs(p[2])));
+    if ((ep->approx() - p).length() > 1e-9 * (cage_scale + magnitude))
+    {
+      Logger::user_logger->critical(
+        "exact coordinates of vertex {} in initial cage {} do not match its v line.",
+        index, cage_path);
+      throw std::runtime_error("exact coordinates do not match the initial cage");
+    }
+    outSMesh->data(vh).ep = std::move(ep);
+    exact_vertices++;
+  }
+  Logger::user_logger->info(
+    "loaded initial cage: {} vertices ({} with exact coordinates), {} faces.",
+    outSMesh->n_vertices(), exact_vertices, outSMesh->n_faces());
+
+  // The checks that ended Phase 1 are repeated on what was actually read.  A
+  // non-manifold vertex would have been split by the reader, which shows up
+  // here as boundary edges.
+  validateClosedManifoldCage(outSMesh, "loaded initial cage");
+  if (hasExactNonAdjacentSelfIntersection(outSMesh))
+  {
+    throw std::logic_error(
+      "loaded initial cage has an exact non-adjacent self-intersection.");
+  }
 }
 
 ///@brief get bounding box for tri_mesh

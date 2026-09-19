@@ -11,6 +11,12 @@ using namespace SimpleUtils;
 namespace SM = SurfaceMesh;
 namespace VM = VolumeMesh;
 
+// Write a cage as OBJ with round-trip double precision so that it can be read
+// back as an initial cage.  OpenMesh's OBJ writer converts points to float,
+// which would move the vertices of a cage that a later run resumes from.
+// Vertex i of the file is the cage vertex with index i - 1.
+bool write_cage_obj(SM::SMeshT& cage, const std::string& path);
+
 class CageInitializer
 {
 public:
@@ -37,6 +43,9 @@ public:
   );
 
   void generate();
+  // Skip Phase 1: read the initial cage of an earlier run into outSMesh and
+  // apply the Phase 1 exit checks to it.
+  void load(const std::string& cage_path);
 
 private:
   BoundingBox bbox;

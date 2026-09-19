@@ -247,7 +247,8 @@ std::string relocate_mode_label(const Cage::ParamRelocateStage& param)
   return "relocate_" + sanitize_path_component(param.priorityMode);
 }
 
-std::string build_run_dir_name(const Cage::ParamCageGenerator& param)
+std::string build_run_dir_name(
+  const Cage::ParamCageGenerator& param, bool from_cage, bool from_rails)
 {
   const auto& simplifier = param.paramCageSimplifier;
   std::ostringstream oss;
@@ -257,6 +258,11 @@ std::string build_run_dir_name(const Cage::ParamCageGenerator& param)
     oss << "__phase1_" <<
       sanitize_path_component(param.paramCageInitializer.phase1Mode);
   }
+  // Only resumed runs are named, so existing run folder names are unchanged.
+  if (from_rails)
+    oss << "__from_rail_cage";
+  else if (from_cage)
+    oss << "__from_initial_cage";
   if (simplifier.boundaryRailAnchorMode == "compare")
   {
     oss << "__boundary_rail_anchor_compare";
@@ -371,15 +377,18 @@ void write_boundary_rail_benchmark_meshes(
   const bf::path& file_out_dir,
   const std::string& file_name,
   Cage::SM::SMeshT& initial_cage,
+  Cage::SM::SMeshT& edge_source,
   Cage::SM::SMeshT& edge_cage,
+  Cage::SM::SMeshT& vertex_source,
   Cage::SM::SMeshT& vertex_cage)
 {
+  // Full double precision, so each cage/rail pair can be passed back with
+  // --cage/--rails.
   const auto write_cage = [&](Cage::SM::SMeshT& mesh, const std::string& suffix)
   {
     bf::path cage_path = file_out_dir;
     cage_path.append(file_name + suffix + ".obj");
-    if (!OpenMesh::IO::write_mesh(
-        mesh, cage_path.string(), OpenMesh::IO::Options::Default, 15))
+    if (!Cage::CageInit::write_cage_obj(mesh, cage_path.string()))
     {
       Logger::user_logger->warn(
         "fail to write boundary-rail benchmark cage: {}", cage_path.string());
@@ -398,7 +407,7 @@ void write_boundary_rail_benchmark_meshes(
   edge_rail_txt.append(file_name + "_edge_rails.txt");
   write_boundary_rail_files(
     edge_cage, edge_rail_obj.string(), edge_rail_txt.string(),
-    edge_cage_path.filename().string());
+    edge_cage_path.filename().string(), &edge_source);
 
   bf::path vertex_rail_obj = file_out_dir;
   vertex_rail_obj.append(file_name + "_vertex_rails.obj");
@@ -406,7 +415,7 @@ void write_boundary_rail_benchmark_meshes(
   vertex_rail_txt.append(file_name + "_vertex_rails.txt");
   write_boundary_rail_files(
     vertex_cage, vertex_rail_obj.string(), vertex_rail_txt.string(),
-    vertex_cage_path.filename().string());
+    vertex_cage_path.filename().string(), &vertex_source);
 }
 
 void run_boundary_rail_anchor_benchmark(
@@ -415,7 +424,10 @@ void run_boundary_rail_anchor_benchmark(
   const std::string& file_name)
 {
   const auto phase1_start = std::chrono::steady_clock::now();
-  cage_generator.stageInitialize();
+  if (cage_generator.inputCagePath.empty())
+    cage_generator.stageInitialize();
+  else
+    cage_generator.stageLoadInitialCage();
   const double phase1_seconds = std::chrono::duration<double>(
     std::chrono::steady_clock::now() - phase1_start).count();
 
@@ -457,7 +469,8 @@ void run_boundary_rail_anchor_benchmark(
     phase1_seconds, edge_seconds, vertex_seconds);
 
   write_boundary_rail_benchmark_meshes(
-    file_out_dir, file_name, initial_cage, edge_cage, vertex_cage);
+    file_out_dir, file_name, initial_cage,
+    edge_source, edge_cage, vertex_source, vertex_cage);
   bf::path csv_path = file_out_dir;
   csv_path.append("boundary_rail_anchor_benchmark.csv");
   if (write_boundary_rail_benchmark_csv(
@@ -473,7 +486,9 @@ void generate_cages(
   Cage::ParamCageGenerator param,
   bf::path in_model_path,
   bf::path out_data_path,
-  std::vector<size_t> target_vn
+  std::vector<size_t> target_vn,
+  const std::string& input_cage_path,
+  const std::string& input_rail_path
 )
 {
   // parse file name
@@ -486,6 +501,8 @@ void generate_cages(
   CageGenerator cage_generator;
   cage_generator.param = param;
   cage_generator.originalMesh = std::make_unique<SMeshT>();
+  cage_generator.inputCagePath = input_cage_path;
+  cage_generator.inputRailPath = input_rail_path;
   try
   {
     // create output directory
@@ -498,7 +515,8 @@ void generate_cages(
 
     bf::path file_out_dir = create_unique_output_dir(
       input_out_dir,
-      build_run_dir_name(param));
+      build_run_dir_name(
+        param, !input_cage_path.empty(), !input_rail_path.empty()));
     // create log file
     bf::path log_path = file_out_dir;
     log_path.append("log.txt");
@@ -570,7 +588,9 @@ void generate_cages(
 
       bf::path mesh_out_file = file_out_dir;
       mesh_out_file.append(file_name + "_cage_" + std::to_string(it) + ".obj");
-      OpenMesh::IO::write_mesh(*cage_generator.cage, mesh_out_file.string(), OpenMesh::IO::Options::Default, 15);
+      // Double precision: OpenMesh's writer would round the cage to float and
+      // could move it into the source it was checked against.
+      Cage::CageInit::write_cage_obj(*cage_generator.cage, mesh_out_file.string());
 
       // export the final boundary rails on their own for separate
       // visualization; the rails Phase 1 handed to Phase 2 were already written
@@ -582,7 +602,7 @@ void generate_cages(
       const Cage::CageInit::BoundaryRailExport rail_export =
         write_boundary_rail_files(
           *cage_generator.cage, rail_obj_file.string(), rail_txt_file.string(),
-          mesh_out_file.filename().string());
+          mesh_out_file.filename().string(), cage_generator.originalMesh.get());
       if (rail_export.rail_count > 0)
       {
         Logger::user_logger->info(
@@ -597,6 +617,10 @@ void generate_cages(
       }
 
       *cage_generator.originalMesh = *cage_generator.cage;
+      // The input cage and rails belong to cage 0; each nested cage runs
+      // Phase 1 on the previous cage.
+      cage_generator.inputCagePath.clear();
+      cage_generator.inputRailPath.clear();
     }
   }
   catch (BreakoutExcept be)
@@ -811,8 +835,29 @@ bool parse_parameter_arg(const std::string& arg_param, Cage::ParamCageGenerator&
 
 int main(int argc, char* argv[])
 {
+  // Options of an earlier run may appear anywhere; the remaining arguments
+  // keep their positional meaning.
+  std::vector<std::string> args;
+  std::string input_cage_path;
+  std::string input_rail_path;
+  for (int i = 1; i < argc; i++)
+  {
+    const std::string arg(argv[i]);
+    if (arg == "--cage" || arg == "--rails")
+    {
+      if (i + 1 >= argc)
+      {
+        printf("missing path after %s\n", arg.c_str());
+        return 1;
+      }
+      (arg == "--cage" ? input_cage_path : input_rail_path) = argv[++i];
+    }
+    else
+      args.push_back(arg);
+  }
+
   // args tips
-  if (argc < 4)
+  if (args.size() < 3)
   {
     printf("Need args:\n");
     printf("arg[0]: parameters.\n");
@@ -834,6 +879,9 @@ int main(int argc, char* argv[])
     printf("(optional)arg[4]: target vertices number of nested cage 1.\n");
     printf("(optional)arg[n + 3]: target vertices number of nested cage n.\n");
     printf("For linear_solve, omit targets or use 0 to repeat collapse/flip/rail update until no further progress.\n");
+    printf("options:\n");
+    printf("--cage <initial_cage.obj>: skip Phase 1 and start from this cage, e.g. <model>_debug_retrieve_cage.obj of an earlier run.\n");
+    printf("--rails <rails.txt>: with --cage <model>_cage_<i>_initial.obj, also skip boundary rail construction and use <model>_cage_<i>_initial_rails.txt.\n");
     return 1;
   }
 
@@ -842,12 +890,12 @@ int main(int argc, char* argv[])
   srand((unsigned)time(NULL));
 
   // parse parameters
-  std::string arg_param(argv[1]);
+  const std::string& arg_param = args[0];
   Cage::ParamCageGenerator param;
   if (!parse_parameter_arg(arg_param, param))
     return 1;
 
-  if (argc == 4 && param.paramCageSimplifier.phase2Mode != "linear_solve")
+  if (args.size() == 3 && param.paramCageSimplifier.phase2Mode != "linear_solve")
   {
     Logger::user_logger->error(
       "a target vertex count is required; targets may be omitted only for linear_solve.");
@@ -855,13 +903,58 @@ int main(int argc, char* argv[])
   }
 
   // parse input/output file/directory.
-  bf::path in_model_path(argv[2]);
-  bf::path out_data_path(argv[3]);
+  bf::path in_model_path(args[1]);
+  bf::path out_data_path(args[2]);
 
   if (!bf::is_regular_file(in_model_path))
   {
     Logger::user_logger->error("error input file: {}", in_model_path.string());
     return 1;
+  }
+
+  // parse the files of an earlier run.
+  if (!input_cage_path.empty() && !bf::is_regular_file(input_cage_path))
+  {
+    Logger::user_logger->error("error initial cage file: {}", input_cage_path);
+    return 1;
+  }
+  if (!input_rail_path.empty())
+  {
+    const auto& simplifier = param.paramCageSimplifier;
+    if (input_cage_path.empty())
+    {
+      Logger::user_logger->error(
+        "--rails needs --cage with the cage its indices refer to (<model>_cage_<i>_initial.obj).");
+      return 1;
+    }
+    if (!simplifier.enableBoundaryRails ||
+      simplifier.boundaryRailAnchorMode == "compare")
+    {
+      Logger::user_logger->error(
+        "--rails needs boundary_rail or boundary_rail_vertex; boundary_rail_compare always builds its rails.");
+      return 1;
+    }
+    // A rail OBJ has no cage indices; its index file is written next to it.
+    bf::path rail_path(input_rail_path);
+    if (boost::algorithm::iequals(rail_path.extension().string(), ".obj"))
+    {
+      rail_path.replace_extension(".txt");
+      Logger::user_logger->info(
+        "--rails {} is a rail OBJ; reading its index file {} instead.",
+        input_rail_path, rail_path.string());
+      input_rail_path = rail_path.string();
+    }
+    if (!bf::is_regular_file(rail_path))
+    {
+      Logger::user_logger->error("error rail file: {}", input_rail_path);
+      return 1;
+    }
+  }
+  else if (!input_cage_path.empty() &&
+    param.paramCageSimplifier.enableBoundaryRails)
+  {
+    Logger::user_logger->info(
+      "boundary rails will be constructed on the loaded cage; to reuse the rails of a <model>_cage_<i>_initial.obj, pass its rail file with --rails.");
   }
 
   if (!bf::exists(out_data_path))
@@ -880,13 +973,13 @@ int main(int argc, char* argv[])
   }
 
   // parse target vertices numbers.
-  int cage_number = argc - 4;
+  size_t cage_number = args.size() - 3;
   std::vector<size_t> target_vn;
   try
   {
-    for (int i = 0;i < cage_number;i++)
+    for (size_t i = 0;i < cage_number;i++)
     {
-      std::string vn_str(argv[4 + i]);
+      std::string vn_str(args[3 + i]);
       size_t vn = std::stol(vn_str);
       target_vn.push_back(vn);
     }
@@ -901,6 +994,8 @@ int main(int argc, char* argv[])
     target_vn.push_back(0);
 
   // generate!
-  generate_cages(param, in_model_path, out_data_path, target_vn);
+  generate_cages(
+    param, in_model_path, out_data_path, target_vn,
+    input_cage_path, input_rail_path);
   return 0;
 }

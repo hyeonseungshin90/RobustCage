@@ -3,7 +3,7 @@
 `exeCageGenerator.exe`는 위치 기반 명령 인수를 사용합니다. `linear_solve`에서는 목표 정점 수를 생략할 수 있으며, 다른 모드에서는 최소 1개가 필요합니다.
 
 ```text
-exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path> [target_Nv_0 target_Nv_1 ... target_Nv_n]
+exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path> [target_Nv_0 target_Nv_1 ... target_Nv_n] [--cage <initial_cage.obj>] [--rails <rails.txt>]
 ```
 
 ## Arguments
@@ -15,6 +15,10 @@ exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path>
 | 2 | `<input_model_path>` | 예 | 입력 메쉬 파일 경로입니다. 코드에서 일반 파일인지 검사합니다. |
 | 3 | `<output_dir_path>` | 예 | 출력 디렉터리 경로입니다. 없으면 자동으로 생성합니다. |
 | 4+ | `<target_Nv_i>` | 조건부 | 생성할 cage의 목표 정점 수입니다. `linear_solve`에서는 `0` 또는 생략 시 더 이상 진행할 수 없을 때까지 실행합니다. 다른 모드에서는 필수입니다. 여러 개를 넘기면 nested cage를 순서대로 생성합니다. |
+| 옵션 | `--cage <initial_cage.obj>` | 아니오 | 이전 실행의 initial cage에서 시작하고 Phase 1을 건너뜁니다. 아래 [Resuming From an Earlier Run](#resuming-from-an-earlier-run)을 참고하세요. |
+| 옵션 | `--rails <rails.txt>` | 아니오 | `--cage`와 함께 rail이 삽입된 cage의 rail을 읽고 rail construction을 건너뜁니다. `boundary_rail` 또는 `boundary_rail_vertex`가 필요합니다. |
+
+두 옵션은 위치와 무관하게 어디에나 둘 수 있으며, 나머지 인수는 위 순서를 그대로 따릅니다.
 
 ## Parameter Argument
 
@@ -266,6 +270,50 @@ nested cage 생성:
 이 모드는 `<run>/boundary_rail_anchor_benchmark.csv`에 detected, ray-valid,
 built loop 수와 model별 winner를 쓰고, `<model>_initial_cage.obj`,
 `<model>_edge_anchor_cage.obj`, `<model>_vertex_anchor_cage.obj` 및 두 rail 파일을 저장합니다.
+`--cage`를 주면 Phase 1 대신 그 cage에서 두 방식을 비교합니다. `--rails`와는 함께 쓸 수 없습니다.
+
+## Resuming From an Earlier Run
+
+3D 모델만 입력하면 Phase 1, rail construction, Phase 2가 모두 실행됩니다. 이전 실행의
+출력을 함께 넘기면 앞 단계를 건너뜁니다. Phase 2와 rail은 원본 표면을 사용하므로
+`<input_model_path>`에는 항상 같은 3D 모델을 넘깁니다.
+
+| 입력 | 건너뛰는 단계 | 실행하는 단계 |
+|---|---|---|
+| 3D 모델 | 없음 | Phase 1 → rail construction → Phase 2 |
+| 3D 모델 + `--cage <model>_debug_retrieve_cage.obj` | Phase 1 | rail construction → Phase 2 |
+| 3D 모델 + `--cage <model>_cage_0_initial.obj --rails <model>_cage_0_initial_rails.txt` | Phase 1, rail construction | Phase 2 |
+
+```powershell
+# 1) 전체 실행
+.\exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve+boundary_rail C:\models\open.obj C:\out
+# 2) Phase 1 건너뛰기
+.\exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve+boundary_rail C:\models\open.obj C:\out --cage C:\out\open\<run>\open_debug_retrieve_cage.obj
+# 3) Phase 1과 rail construction 건너뛰기
+.\exeCageGenerator.exe phase1_topological_offset+phase2_linear_solve+boundary_rail C:\models\open.obj C:\out --cage C:\out\open\<run>\open_cage_0_initial.obj --rails C:\out\open\<run>\open_cage_0_initial_rails.txt
+```
+
+- Anchor 삽입과 geodesic embedding은 Phase 1 cage의 edge와 face를 분할하므로
+  `_initial_rails.txt`의 정점 번호는 `_debug_retrieve_cage.obj`가 아니라 같은 실행의
+  `_cage_<i>_initial.obj`를 가리킵니다. 짝이 맞지 않으면 범위 밖 정점이나 좌표 불일치로
+  중단합니다. `--rails`에 rail OBJ(`_initial_rails.obj`)를 넘기면 옆의 `.txt`를 읽습니다.
+- `--cage`만 주고 `boundary_rail`을 켜면 불러온 cage 위에 rail을 새로 만듭니다. rail이
+  이미 삽입된 `_cage_<i>_initial.obj`에는 `--rails`도 함께 넘기세요.
+- 불러온 cage에는 Phase 1 종료 시와 같은 검사(닫힌 2-manifold, exact non-adjacent
+  self-intersection 없음)를 다시 적용하고, 실패하면 중단합니다.
+- Rail 파일은 cage rail뿐 아니라 source boundary edge의 rail id와 outward co-normal(`S` 줄)도
+  복원합니다. Phase 2의 rail collapse는 이 half-strip에 투영하므로, `S` 줄이 없는 예전
+  rail 파일은 읽지 않고 오류로 중단합니다. 다시 전체 실행하여 rail 파일을 만드세요.
+- Cage OBJ의 `v` 줄은 double을 17자리로 기록하고, exact 좌표를 가진 정점은 `#ev` 주석 줄에
+  유리수 좌표를 함께 기록해 그대로 복원합니다. 따라서 이어서 실행한 Phase 2는 전체 실행과 같은
+  cage, rail, source support 상태에서 시작합니다. Rail embedding이 남기는 면적 0에 가까운
+  삼각형은 double 좌표만으로는 self-intersection이 될 수 있으므로 `#ev` 줄을 지우면 안 됩니다.
+- 이 기능 이전에 기록된 `_debug_retrieve_cage.obj`는 OpenMesh가 float로 저장한 파일이라
+  원래 cage와 좌표가 다릅니다. 이어서 실행하려면 다시 전체 실행으로 cage를 만드세요.
+- `--cage`와 `--rails`는 첫 번째 cage(`cage_0`)에만 적용되며, nested cage는 이전처럼
+  앞 cage에서 Phase 1을 수행합니다.
+- 로그에는 `Phase 1 elapsed time` 대신 `initial cage stage elapsed time`이 기록되고,
+  실행 폴더 이름에 `__from_initial_cage` 또는 `__from_rail_cage`가 붙습니다.
 
 JSON 설정 파일 사용:
 
@@ -279,7 +327,7 @@ JSON 설정 파일 사용:
 
 ```text
 <output_dir_path>\<input_name>\
-  <run_timestamp>[__phase1_topological_offset]__phase2_<mode>[__<mode-specific-details>]\
+  <run_timestamp>[__phase1_topological_offset][__from_initial_cage|__from_rail_cage]__phase2_<mode>[__<mode-specific-details>]\
 ```
 
 기존 출력 경로와의 호환성을 위해 `default` 모드에는 Phase 1 접미사를 추가하지 않으며, 기존 `__collapse_hausdorff__flip_<mode>__relocate_<mode>` 접미사도 유지합니다. 새 모드에만 `__phase1_topological_offset`이 추가됩니다.
@@ -290,11 +338,19 @@ JSON 설정 파일 사용:
 |---|---|
 | `log.txt` | 실행 로그입니다. |
 | `<input_name>_debug_topological_offset.obj` | 새 Phase 1이 생성한 offset-inserted tetrahedral mesh의 face dump입니다. |
-| `<input_name>_debug_retrieve_cage.obj` | Phase 1 boundary extraction 직후의 initial cage입니다. |
+| `<input_name>_debug_retrieve_cage.obj` | Phase 1 boundary extraction 직후의 initial cage입니다. `--cage`로 넘기면 Phase 1을 건너뜁니다. |
+| `<input_name>_cage_<i>_initial.obj` | Boundary rail을 켠 경우, anchor 삽입과 geodesic embedding으로 분할된 Phase 2 직전의 cage입니다. `_initial_rails.txt`의 정점 번호가 이 파일을 가리킵니다. |
+| `<input_name>_cage_<i>_initial_rails.obj` / `.txt` | 위 cage에 삽입된 Phase 2 직전의 rail입니다. 형식은 아래 `_rails.obj` / `.txt`와 같으며, `.txt`를 `_cage_<i>_initial.obj`와 함께 `--rails`로 넘기면 rail construction을 건너뜁니다. |
 | `<input_name>_cage_0.obj` | 첫 번째 cage 결과입니다. |
 | `<input_name>_cage_1.obj` | 두 번째 nested cage 결과입니다. 목표 정점 수를 여러 개 넘긴 경우 생성됩니다. |
 | `<input_name>_cage_<i>_rails.obj` | cage `<i>`의 boundary rail만 담은 파일입니다. rail edge는 OBJ line element(`l`), rail vertex는 point element(`p`)로 기록되고 rail id마다 `o rail_<id>` / `g rail_<id>` 그룹으로 나뉩니다. rail이 하나도 없으면 생성되지 않습니다. |
-| `<input_name>_cage_<i>_rails.txt` | 같은 rail을 cage OBJ의 1-based vertex index로 적은 목록입니다. `V <rail_id> <cage_vertex> <x> <y> <z>`와 `E <rail_id> <cage_vertex_a> <cage_vertex_b>` 두 종류의 줄로 구성되며, cage를 불러온 뒤 rail 정점/간선을 그 안에서 찾아 강조할 때 사용합니다. |
+| `<input_name>_cage_<i>_rails.txt` | 같은 rail을 cage OBJ의 1-based vertex index로 적은 목록입니다. `V <rail_id> <cage_vertex> <x> <y> <z>`와 `E <rail_id> <cage_vertex_a> <cage_vertex_b>` 줄로 구성되며, cage를 불러온 뒤 rail 정점/간선을 그 안에서 찾아 강조할 때 사용합니다. `S <rail_id> <source_vertex_a> <source_vertex_b> <outer_x> <outer_y> <outer_z>` 줄은 rail과 같은 id를 가진 원본 boundary edge(프로그램이 읽은 원본 메쉬의 1-based vertex index)와 Phase 2 rail support에 쓰는 outward co-normal입니다. |
+
+최종 결과 `_cage_<i>.obj`, `_debug_retrieve_cage.obj`, `_cage_<i>_initial.obj`와
+`boundary_rail_compare`의 cage들은 좌표를 17자리 double로 기록하고, exact 좌표를 가진 정점은
+`#ev <vertex> <x> <y> <z>` 주석 줄에 유리수 좌표를 추가로 기록합니다. 일반 OBJ 뷰어는 주석 줄을
+무시합니다. 그 밖의 OBJ 출력(예: 최종 cage와 같은 메쉬의 디버그 복사본 `_debug_phase2_<mode>.obj`)은
+기존처럼 OpenMesh writer로 기록하며, OpenMesh는 좌표를 float로 변환해 저장합니다.
 
 ## Notes
 
