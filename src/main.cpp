@@ -188,18 +188,37 @@ void log_triangle_quality_stats(Cage::SM::SMeshT& mesh, const std::string& label
     stats.face_count);
 }
 
-std::string sanitize_path_component(std::string value)
+// Short label of a mode value for the run folder name, e.g.
+// topological_offset -> TO.  Values without a fixed label use the initials of
+// their words, which also keeps the label a valid path component.
+std::string abbreviate_mode(const std::string& value)
 {
-  if (value.empty())
-    return "unknown";
+  static const std::map<std::string, std::string> labels = {
+    { "topological_offset", "TO" },
+    { "linear_solve", "LS" },
+    { "newton_solve", "NS" },
+    { "qem_original", "QEM" },
+    { "fast", "FS" },
+  };
+  const auto found = labels.find(value);
+  if (found != labels.end())
+    return found->second;
 
-  for (char& ch : value)
+  std::string initials;
+  bool word_start = true;
+  for (char ch : value)
   {
     const unsigned char uch = static_cast<unsigned char>(ch);
-    if (!std::isalnum(uch) && ch != '_' && ch != '-')
-      ch = '_';
+    if (!std::isalnum(uch))
+    {
+      word_start = true;
+      continue;
+    }
+    if (word_start)
+      initials += static_cast<char>(std::toupper(uch));
+    word_start = false;
   }
-  return value;
+  return initials.empty() ? "unknown" : initials;
 }
 
 std::string format_timestamp(std::time_t time_value)
@@ -219,71 +238,54 @@ std::string format_timestamp(std::time_t time_value)
   return oss.str();
 }
 
-std::string phase2_mode_label(const Cage::ParamCageSimplifier& param)
-{
-  return "phase2_" + sanitize_path_component(param.phase2Mode);
-}
-
-std::string newton_solve_phase2_detail_label(const Cage::ParamCollapseStage& param)
-{
-  std::string mode = "newton";
-  mode += "_" + sanitize_path_component(param.phase2PlacementStrategy);
-  mode += "_" + sanitize_path_component(param.newtonSolverMode);
-  mode += "_" + sanitize_path_component(param.robustnessMode);
-  if (param.curvatureMode != "none")
-    mode += "_curv_" + sanitize_path_component(param.curvatureMode);
-  if (param.uniformityMode != "none")
-    mode += "_uniform_" + sanitize_path_component(param.uniformityMode);
-  return mode;
-}
-
-std::string flip_mode_label(const Cage::ParamFlipStage& param)
-{
-  return "flip_" + sanitize_path_component(param.priorityMode);
-}
-
-std::string relocate_mode_label(const Cage::ParamRelocateStage& param)
-{
-  return "relocate_" + sanitize_path_component(param.priorityMode);
-}
-
+// <timestamp>__<labels joined by '_'>, e.g. 20260919_182543__phase1_TO_phase2_LS.
+// COMMAND_ARGUMENTS.md lists the abbreviations.
 std::string build_run_dir_name(
   const Cage::ParamCageGenerator& param, bool from_cage, bool from_rails)
 {
   const auto& simplifier = param.paramCageSimplifier;
-  std::ostringstream oss;
-  oss << format_timestamp(std::time(nullptr));
+  const auto& collapse = simplifier.paramCollapse;
+  std::vector<std::string> labels;
+  // The default subdivision Phase 1 is not named.
   if (param.paramCageInitializer.phase1Mode != "subdivision")
-  {
-    oss << "__phase1_" <<
-      sanitize_path_component(param.paramCageInitializer.phase1Mode);
-  }
-  // Only resumed runs are named, so existing run folder names are unchanged.
+    labels.push_back("phase1_" + abbreviate_mode(param.paramCageInitializer.phase1Mode));
   if (from_rails)
-    oss << "__from_rail_cage";
+    labels.push_back("from_RC");
   else if (from_cage)
-    oss << "__from_initial_cage";
+    labels.push_back("from_IC");
   if (simplifier.boundaryRailAnchorMode == "compare")
   {
-    oss << "__boundary_rail_anchor_compare";
-    return oss.str();
+    labels.push_back("BRC");
   }
-  oss << "__" << phase2_mode_label(simplifier);
-  if (simplifier.phase2Mode == "newton_solve")
+  else
   {
-    oss << "__" << newton_solve_phase2_detail_label(simplifier.paramCollapse);
+    labels.push_back("phase2_" + abbreviate_mode(simplifier.phase2Mode));
+    if (simplifier.phase2Mode == "newton_solve")
+    {
+      labels.push_back(abbreviate_mode(collapse.phase2PlacementStrategy));
+      labels.push_back(abbreviate_mode(collapse.newtonSolverMode));
+      labels.push_back(abbreviate_mode(collapse.robustnessMode));
+      if (collapse.curvatureMode != "none")
+        labels.push_back("curv" + abbreviate_mode(collapse.curvatureMode));
+      if (collapse.uniformityMode != "none")
+        labels.push_back("unif" + abbreviate_mode(collapse.uniformityMode));
+    }
+    else if (simplifier.phase2Mode != "linear_solve" &&
+      simplifier.phase2Mode != "qem_original")
+    {
+      labels.push_back("colH");
+      labels.push_back("flip" + abbreviate_mode(simplifier.paramFlip.priorityMode));
+      labels.push_back("reloc" + abbreviate_mode(simplifier.paramRelocate.priorityMode));
+    }
+    // Only the disabled case is named.
+    if (simplifier.enableBoundaryRails && !simplifier.enableRailUpdate)
+      labels.push_back("noRU");
   }
-  else if (simplifier.phase2Mode != "linear_solve" &&
-    simplifier.phase2Mode != "qem_original")
-  {
-    oss
-      << "__collapse_hausdorff"
-      << "__" << flip_mode_label(simplifier.paramFlip)
-      << "__" << relocate_mode_label(simplifier.paramRelocate);
-  }
-  // Only the disabled case is named, so existing run folder names are unchanged.
-  if (simplifier.enableBoundaryRails && !simplifier.enableRailUpdate)
-    oss << "__no_rail_update";
+
+  std::ostringstream oss;
+  oss << format_timestamp(std::time(nullptr));
+  for (size_t i = 0; i < labels.size(); i++)
+    oss << (i == 0 ? "__" : "_") << labels[i];
   return oss.str();
 }
 

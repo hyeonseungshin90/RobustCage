@@ -50,7 +50,7 @@ config.json
 | `phase1_topological_offset` | phase1 | Zint et al.의 simplicial embedding과 offset insertion을 수행한 뒤 기존 `retrieveCage()`로 boundary를 추출합니다. `topological_offset`도 같은 별칭으로 사용할 수 있습니다. |
 | `boundary_rail` | phase1.5/phase2 | Source-boundary anchor를 삽입하고 Dijkstra로 초기 loop를 구성한 뒤, anchor를 고정한 intrinsic flip geodesics와 실제 mesh split으로 rail 경로를 단축합니다. 이후 rail collapse는 source boundary tangent와 outward co-normal의 ruled half-strip으로 제약합니다. 네 가지 energy Phase 2 preset 중 하나와 조합해야 합니다. |
 | `boundary_rail_vertex` | phase1.5/phase2 | `boundary_rail`과 동일하지만 ray를 boundary vertex에서 인접한 두 edge co-normal의 bisector 방향으로 쏩니다. 비교 실험용이며 source-edge support에는 평균 전의 edge co-normal을 저장합니다. Energy Phase 2 preset과 조합해야 합니다. |
-| `no_rail_update` | phase2 | `enableRailUpdate = false`; `linear_solve` 반복에서 flip 뒤의 `update_boundary_rails()` 호출만 생략합니다. Collapse, flip, relocation과 초기 rail 구성은 그대로이므로 rail update의 효과만 분리해 비교할 수 있습니다. `boundary_rail` 계열 토큰과 함께 사용하며, 이 경우 실행 폴더 이름에 `__no_rail_update`가 붙습니다. |
+| `no_rail_update` | phase2 | `enableRailUpdate = false`; `linear_solve` 반복에서 flip 뒤의 `update_boundary_rails()` 호출만 생략합니다. Collapse, flip, relocation과 초기 rail 구성은 그대로이므로 rail update의 효과만 분리해 비교할 수 있습니다. `boundary_rail` 계열 토큰과 함께 사용하며, 이 경우 실행 폴더 이름에 `_noRU`가 붙습니다. |
 | `boundary_rail_compare` | phase1/benchmark | Phase 1을 한 번만 실행한 뒤 동일 initial cage와 source의 독립 복사본에서 edge-midpoint 방식과 vertex-bisector 방식을 각각 실행합니다. simplification은 생략하고 run-local CSV와 두 결과 cage/rail을 기록합니다. |
 | `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; repeat linear-solve collapses with Armijo backtracking and quality-priority flips, then run final relocation sweeps combining Voronoi tangential smoothing with source-surface attraction |
 | `phase2_linear_solve_collision_reject` | phase2 | Same defaults as `phase2_linear_solve` plus `phase2LinearSolveCollisionReject = true`; reject an invalid raw linear-solve point instead of backtracking |
@@ -313,7 +313,7 @@ built loop 수와 model별 winner를 쓰고, `<model>_initial_cage.obj`,
 - `--cage`와 `--rails`는 첫 번째 cage(`cage_0`)에만 적용되며, nested cage는 이전처럼
   앞 cage에서 Phase 1을 수행합니다.
 - 로그에는 `Phase 1 elapsed time` 대신 `initial cage stage elapsed time`이 기록되고,
-  실행 폴더 이름에 `__from_initial_cage` 또는 `__from_rail_cage`가 붙습니다.
+  실행 폴더 이름에 `from_IC` 또는 `from_RC`가 붙습니다.
 
 JSON 설정 파일 사용:
 
@@ -327,10 +327,29 @@ JSON 설정 파일 사용:
 
 ```text
 <output_dir_path>\<input_name>\
-  <run_timestamp>[__phase1_topological_offset][__from_initial_cage|__from_rail_cage]__phase2_<mode>[__<mode-specific-details>]\
+  <run_timestamp>__[phase1_TO_][from_IC_|from_RC_]phase2_<mode>[_<mode-specific-details>][_noRU]\
 ```
 
-기존 출력 경로와의 호환성을 위해 `default` 모드에는 Phase 1 접미사를 추가하지 않으며, 기존 `__collapse_hausdorff__flip_<mode>__relocate_<mode>` 접미사도 유지합니다. 새 모드에만 `__phase1_topological_offset`이 추가됩니다.
+예: `phase1_topological_offset+phase2_linear_solve+boundary_rail` → `20260919_182543__phase1_TO_phase2_LS`
+
+폴더 이름은 다음 약자를 사용합니다. 기본 subdivision Phase 1은 이름에 넣지 않습니다.
+
+| 약자 | 의미 |
+|---|---|
+| `phase1_TO` | `phase1Mode = "topological_offset"` |
+| `from_IC` / `from_RC` | `--cage`로 initial cage에서 시작 / `--cage --rails`로 rail cage에서 시작 |
+| `BRC` | `boundary_rail_compare` (Phase 2 없음) |
+| `phase2_LS`, `phase2_NS`, `phase2_QEM`, `phase2_FS` | `phase2Mode` = `linear_solve`, `newton_solve`, `qem_original`, `fast` |
+| `noRU` | `no_rail_update` |
+
+`phase2_NS`에는 placement, solver, robustness 모드와 curvature(`curv`), uniformity(`unif`) 모드가,
+`phase2_FS`에는 `colH`(Hausdorff collapse), flip(`flip`), relocate(`reloc`) 우선순위가 이어서 붙습니다.
+이 값들과 위 표에 없는 값은 `_`/`-`로 나뉜 단어의 첫 글자로 줄입니다. 예:
+`newton_solve` → `NS`, `damped` → `D`, `exact_backtracking` → `EB`, `exact_reject` → `ER`,
+`weighted_plane` → `WP`, `source` → `S`, `global` → `G`, `valence` → `V`, `hausdorff` → `H`,
+`triangle_quality_hard` → `TQH`. 따라서 `phase2_newton_solve` 기본값은
+`phase2_NS_NS_D_EB_curvWP_unifS`, `default`는 `phase2_FS_colH_flipV_relocH`가 됩니다.
+실행 설정 전체는 각 폴더의 `log.txt`에 기록됩니다.
 
 같은 하위 폴더명이 이미 있으면 `_001`, `_002`처럼 번호를 붙여 기존 결과를 덮어쓰지 않습니다. 날짜는 실행 시점의 시스템 날짜/시간이며 `YYYYMMDD_HHMMSS` 형식입니다.
 
