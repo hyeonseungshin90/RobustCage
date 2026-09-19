@@ -203,19 +203,26 @@ Outputs are written under a unique run directory inside the input-name folder:
 
 If that directory already exists, the program appends `_001`, `_002`, and so on to avoid overwriting previous results.
 
-With `+phase2_boundary_rail`, the rails are exported next to each cage OBJ in two
-states:
+Each phase writes its cage. With several targets, the files of the second and
+later nested cages end in `_1`, `_2`, ... (e.g. `input_name_phase3_cage_1.obj`):
 
-* `input_name_cage_<label>_initial_rails.obj` / `.txt`: the constructed rails,
+* `input_name_phase1_cage.obj`: the initial cage from Phase 1.
+* `input_name_phase2_cage.obj`: with `+phase2_boundary_rail`, the Phase 1
+  cage after anchor insertion and geodesic embedding; same surface, more vertices.
+* `input_name_phase3_cage.obj`: the final cage.
+
+With `+phase2_boundary_rail`, the rails are exported in two states:
+
+* `input_name_phase2_rails.obj` / `.txt`: the constructed rails,
   including successful geodesic embedding, written before Phase 3 starts.
-* `input_name_cage_<label>_rails.obj` / `.txt`: the rails carried by the final
+* `input_name_phase3_rails.obj` / `.txt`: the rails carried by the final
   cage.
 
 Each OBJ holds the rail vertices as OBJ points and the rail edges as OBJ line
 elements, one object/group per rail id. Each TXT lists the same rails with the
-1-based vertex indices of the mesh named in its header: the final rails index
-`input_name_cage_<label>.obj`, while the initial rails index the cage after
-Phase 2 and before Phase 3, so the two index spaces differ.
+1-based vertex indices of the mesh named in its header: the Phase 3 rails index
+`input_name_phase3_cage.obj`, while the Phase 2 rails index
+`input_name_phase2_cage.obj`, so the two index spaces differ.
 Rail ids are shared between both states.
 
 The quality and boundary-rail geodesic regression tests can be built and run with:

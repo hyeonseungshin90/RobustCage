@@ -293,11 +293,6 @@ void CageInitializer::generate()
       "Phase 1 cage has an exact non-adjacent self-intersection.");
   }
 
-  // This file can be passed back with --cage to skip Phase 1.
-  const std::string retrieve_cage_path =
-    param->fileOutPath + param->fileName + "_debug_retrieve_cage.obj";
-  if (write_cage_obj(*outSMesh, retrieve_cage_path))
-    Logger::user_logger->info("wrote retrieved cage OBJ: {}", retrieve_cage_path);
   tetMeshTrimmer.reset();
   topologicalOffsetInitializer.reset();
   {Logger::user_logger->info("generating initial cage done!");}

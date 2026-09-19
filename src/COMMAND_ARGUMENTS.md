@@ -3,7 +3,7 @@
 `exeCageGenerator.exe`는 위치 기반 명령 인수를 사용합니다. `linear_solve`에서는 목표 정점 수를 생략할 수 있으며, 다른 모드에서는 최소 1개가 필요합니다.
 
 ```text
-exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path> [target_Nv_0 target_Nv_1 ... target_Nv_n] [--cage <initial_cage.obj>] [--rails <rails.txt>]
+exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path> [target_Nv_0 target_Nv_1 ... target_Nv_n] [--cage <cage.obj>] [--rails <rails.txt>]
 ```
 
 ## Phases
@@ -23,7 +23,7 @@ exeCageGenerator.exe <parameters_or_config> <input_model_path> <output_dir_path>
 | 2 | `<input_model_path>` | 예 | 입력 메쉬 파일 경로입니다. 코드에서 일반 파일인지 검사합니다. |
 | 3 | `<output_dir_path>` | 예 | 출력 디렉터리 경로입니다. 없으면 자동으로 생성합니다. |
 | 4+ | `<target_Nv_i>` | 조건부 | 생성할 cage의 목표 정점 수입니다. `linear_solve`에서는 `0` 또는 생략 시 더 이상 진행할 수 없을 때까지 실행합니다. 다른 모드에서는 필수입니다. 여러 개를 넘기면 nested cage를 순서대로 생성합니다. |
-| 옵션 | `--cage <initial_cage.obj>` | 아니오 | 이전 실행의 initial cage에서 시작하고 Phase 1을 건너뜁니다. 아래 [Resuming From an Earlier Run](#resuming-from-an-earlier-run)을 참고하세요. |
+| 옵션 | `--cage <cage.obj>` | 아니오 | 이전 실행의 initial cage에서 시작하고 Phase 1을 건너뜁니다. 아래 [Resuming From an Earlier Run](#resuming-from-an-earlier-run)을 참고하세요. |
 | 옵션 | `--rails <rails.txt>` | 아니오 | `--cage`와 함께 rail이 삽입된 cage의 rail을 읽고 Phase 2(rail construction)를 건너뜁니다. `phase2_boundary_rail` 또는 `phase2_boundary_rail_vertex`가 필요합니다. |
 
 두 옵션은 위치와 무관하게 어디에나 둘 수 있으며, 나머지 인수는 위 순서를 그대로 따릅니다.
@@ -296,9 +296,10 @@ Rail update와 rail support까지 켜기:
 ```
 
 이 모드는 `<run>/boundary_rail_anchor_benchmark.csv`에 detected, ray-valid,
-built loop 수와 model별 winner를 쓰고, `<model>_initial_cage.obj`,
-`<model>_edge_anchor_cage.obj`, `<model>_vertex_anchor_cage.obj` 및 두 rail 파일을 저장합니다.
-`--cage`를 주면 Phase 1 대신 그 cage에서 두 방식을 비교합니다. `--rails`와는 함께 쓸 수 없습니다.
+built loop 수와 model별 winner를 쓰고, 공유하는 Phase 1 cage `<model>_phase1_cage.obj`와 두 방식의
+Phase 2 결과 `<model>_phase2_cage_edge.obj` / `_vertex.obj`, `<model>_phase2_rails_edge.obj/.txt` /
+`_vertex.obj/.txt`를 저장합니다. `--cage`를 주면 Phase 1 대신 그 cage에서 두 방식을 비교하며,
+이때 Phase 1 cage 파일은 따로 쓰지 않습니다. `--rails`와는 함께 쓸 수 없습니다.
 
 ## Resuming From an Earlier Run
 
@@ -309,24 +310,24 @@ built loop 수와 model별 winner를 쓰고, `<model>_initial_cage.obj`,
 | 입력 | 건너뛰는 단계 | 실행하는 단계 |
 |---|---|---|
 | 3D 모델 | 없음 | Phase 1 → Phase 2 → Phase 3 |
-| 3D 모델 + `--cage <model>_debug_retrieve_cage.obj` | Phase 1 | Phase 2 → Phase 3 |
-| 3D 모델 + `--cage <model>_cage_0_initial.obj --rails <model>_cage_0_initial_rails.txt` | Phase 1, Phase 2 | Phase 3 |
+| 3D 모델 + `--cage <model>_phase1_cage.obj` | Phase 1 | Phase 2 → Phase 3 |
+| 3D 모델 + `--cage <model>_phase2_cage.obj --rails <model>_phase2_rails.txt` | Phase 1, Phase 2 | Phase 3 |
 
 ```powershell
 # 1) 전체 실행
 .\exeCageGenerator.exe phase1_topological_offset+phase2_boundary_rail+phase3_linear_solve C:\models\open.obj C:\out
 # 2) Phase 1 건너뛰기
-.\exeCageGenerator.exe phase1_topological_offset+phase2_boundary_rail+phase3_linear_solve C:\models\open.obj C:\out --cage C:\out\open\<run>\open_debug_retrieve_cage.obj
+.\exeCageGenerator.exe phase1_topological_offset+phase2_boundary_rail+phase3_linear_solve C:\models\open.obj C:\out --cage C:\out\open\<run>\open_phase1_cage.obj
 # 3) Phase 1과 Phase 2 건너뛰기
-.\exeCageGenerator.exe phase1_topological_offset+phase2_boundary_rail+phase3_linear_solve C:\models\open.obj C:\out --cage C:\out\open\<run>\open_cage_0_initial.obj --rails C:\out\open\<run>\open_cage_0_initial_rails.txt
+.\exeCageGenerator.exe phase1_topological_offset+phase2_boundary_rail+phase3_linear_solve C:\models\open.obj C:\out --cage C:\out\open\<run>\open_phase2_cage.obj --rails C:\out\open\<run>\open_phase2_rails.txt
 ```
 
 - Anchor 삽입과 geodesic embedding은 Phase 1 cage의 edge와 face를 분할하므로
-  `_initial_rails.txt`의 정점 번호는 `_debug_retrieve_cage.obj`가 아니라 같은 실행의
-  `_cage_<i>_initial.obj`를 가리킵니다. 짝이 맞지 않으면 범위 밖 정점이나 좌표 불일치로
-  중단합니다. `--rails`에 rail OBJ(`_initial_rails.obj`)를 넘기면 옆의 `.txt`를 읽습니다.
+  `_phase2_rails.txt`의 정점 번호는 `_phase1_cage.obj`가 아니라 같은 실행의
+  `_phase2_cage.obj`를 가리킵니다. 짝이 맞지 않으면 범위 밖 정점이나 좌표 불일치로
+  중단합니다. `--rails`에 rail OBJ(`_phase2_rails.obj`)를 넘기면 옆의 `.txt`를 읽습니다.
 - `--cage`만 주고 `phase2_boundary_rail`을 켜면 불러온 cage 위에 rail을 새로 만듭니다. rail이
-  이미 삽입된 `_cage_<i>_initial.obj`에는 `--rails`도 함께 넘기세요.
+  이미 삽입된 `_phase2_cage.obj`에는 `--rails`도 함께 넘기세요.
 - 불러온 cage에는 Phase 1 종료 시와 같은 검사(닫힌 2-manifold, exact non-adjacent
   self-intersection 없음)를 다시 적용하고, 실패하면 중단합니다.
 - Rail 파일은 cage rail뿐 아니라 source boundary edge의 rail id와 outward co-normal(`S` 줄)도
@@ -336,8 +337,9 @@ built loop 수와 model별 winner를 쓰고, `<model>_initial_cage.obj`,
   유리수 좌표를 함께 기록해 그대로 복원합니다. 따라서 이어서 실행한 Phase 3는 전체 실행과 같은
   cage, rail, source support 상태에서 시작합니다. Rail embedding이 남기는 면적 0에 가까운
   삼각형은 double 좌표만으로는 self-intersection이 될 수 있으므로 `#ev` 줄을 지우면 안 됩니다.
-- 이 기능 이전에 기록된 `_debug_retrieve_cage.obj`는 OpenMesh가 float로 저장한 파일이라
-  원래 cage와 좌표가 다릅니다. 이어서 실행하려면 다시 전체 실행으로 cage를 만드세요.
+- 이전 이름(`_debug_retrieve_cage.obj`, `_cage_<i>_initial.obj`, `_cage_<i>_initial_rails.txt`)으로
+  기록된 파일도 그대로 넘길 수 있습니다. 단, exact 좌표 기록 기능 이전의 `_debug_retrieve_cage.obj`는
+  OpenMesh가 float로 저장한 파일이라 원래 cage와 좌표가 다르므로, 다시 전체 실행으로 cage를 만드세요.
 - `--cage`와 `--rails`는 첫 번째 cage(`cage_0`)에만 적용되며, nested cage는 이전처럼
   앞 cage에서 Phase 1과 Phase 2를 수행합니다.
 - 로그에는 `Phase 1 elapsed time` 대신 `Phase 1 skipped: initial cage loaded from file ...`이,
@@ -389,15 +391,14 @@ JSON 설정 파일 사용:
 |---|---|
 | `log.txt` | 실행 로그입니다. |
 | `<input_name>_debug_topological_offset.obj` | 새 Phase 1이 생성한 offset-inserted tetrahedral mesh의 face dump입니다. |
-| `<input_name>_debug_retrieve_cage.obj` | Phase 1 boundary extraction 직후의 initial cage입니다. `--cage`로 넘기면 Phase 1을 건너뜁니다. |
-| `<input_name>_cage_<i>_initial.obj` | Phase 2를 실행한 경우, anchor 삽입과 geodesic embedding으로 분할된 Phase 3 직전의 cage입니다. `_initial_rails.txt`의 정점 번호가 이 파일을 가리킵니다. |
-| `<input_name>_cage_<i>_initial_rails.obj` / `.txt` | 위 cage에 삽입된 Phase 3 직전의 rail입니다. 형식은 아래 `_rails.obj` / `.txt`와 같으며, `.txt`를 `_cage_<i>_initial.obj`와 함께 `--rails`로 넘기면 Phase 2를 건너뜁니다. |
-| `<input_name>_cage_0.obj` | 첫 번째 cage 결과입니다. |
-| `<input_name>_cage_1.obj` | 두 번째 nested cage 결과입니다. 목표 정점 수를 여러 개 넘긴 경우 생성됩니다. |
-| `<input_name>_cage_<i>_rails.obj` | cage `<i>`의 boundary rail만 담은 파일입니다. rail edge는 OBJ line element(`l`), rail vertex는 point element(`p`)로 기록되고 rail id마다 `o rail_<id>` / `g rail_<id>` 그룹으로 나뉩니다. rail이 하나도 없으면 생성되지 않습니다. |
-| `<input_name>_cage_<i>_rails.txt` | 같은 rail을 cage OBJ의 1-based vertex index로 적은 목록입니다. `V <rail_id> <cage_vertex> <x> <y> <z>`와 `E <rail_id> <cage_vertex_a> <cage_vertex_b>` 줄로 구성되며, cage를 불러온 뒤 rail 정점/간선을 그 안에서 찾아 강조할 때 사용합니다. `S <rail_id> <source_vertex_a> <source_vertex_b> <outer_x> <outer_y> <outer_z>` 줄은 rail과 같은 id를 가진 원본 boundary edge(프로그램이 읽은 원본 메쉬의 1-based vertex index)와 Phase 3 rail support(`phase3_rail_support`)에 쓰는 outward co-normal입니다. |
+| `<input_name>_phase1_cage.obj` | Phase 1이 만든 initial cage입니다. `--cage`로 넘기면 Phase 1을 건너뜁니다. `--cage`로 시작한 실행에서는 쓰지 않습니다. |
+| `<input_name>_phase2_cage.obj` | Phase 2를 실행한 경우, anchor 삽입과 geodesic embedding으로 분할된 Phase 3 직전의 cage입니다. 표면은 Phase 1 cage와 같고 정점·삼각형만 늘어납니다. `_phase2_rails.txt`의 정점 번호가 이 파일을 가리킵니다. |
+| `<input_name>_phase2_rails.obj` / `.txt` | 위 cage에 삽입된 Phase 3 직전의 rail입니다. 형식은 아래 `_phase3_rails`와 같으며, `.txt`를 `_phase2_cage.obj`와 함께 `--rails`로 넘기면 Phase 2를 건너뜁니다. |
+| `<input_name>_phase3_cage.obj` | Phase 3가 만든 최종 cage입니다. 목표 정점 수를 여러 개 넘기면 두 번째 nested cage부터 모든 단계 파일 이름 끝에 `_1`, `_2`, ...가 붙습니다 (예: `_phase3_cage_1.obj`, `_phase2_rails_1.txt`). |
+| `<input_name>_phase3_rails.obj` | 최종 cage의 boundary rail만 담은 파일입니다. rail edge는 OBJ line element(`l`), rail vertex는 point element(`p`)로 기록되고 rail id마다 `o rail_<id>` / `g rail_<id>` 그룹으로 나뉩니다. rail이 하나도 없으면 생성되지 않습니다. |
+| `<input_name>_phase3_rails.txt` | 같은 rail을 cage OBJ의 1-based vertex index로 적은 목록입니다. `V <rail_id> <cage_vertex> <x> <y> <z>`와 `E <rail_id> <cage_vertex_a> <cage_vertex_b>` 줄로 구성되며, cage를 불러온 뒤 rail 정점/간선을 그 안에서 찾아 강조할 때 사용합니다. `S <rail_id> <source_vertex_a> <source_vertex_b> <outer_x> <outer_y> <outer_z>` 줄은 rail과 같은 id를 가진 원본 boundary edge(프로그램이 읽은 원본 메쉬의 1-based vertex index)와 Phase 3 rail support(`phase3_rail_support`)에 쓰는 outward co-normal입니다. |
 
-최종 결과 `_cage_<i>.obj`, `_debug_retrieve_cage.obj`, `_cage_<i>_initial.obj`와
+`_phase1_cage.obj`, `_phase2_cage.obj`, `_phase3_cage.obj`와
 `phase2_boundary_rail_compare`의 cage들은 좌표를 17자리 double로 기록하고, exact 좌표를 가진 정점은
 `#ev <vertex> <x> <y> <z>` 주석 줄에 유리수 좌표를 추가로 기록합니다. 일반 OBJ 뷰어는 주석 줄을
 무시합니다. 그 밖의 OBJ 출력(예: 최종 cage와 같은 메쉬의 디버그 복사본 `_debug_phase3_<mode>.obj`)은
@@ -407,5 +408,5 @@ JSON 설정 파일 사용:
 
 - `<output_dir_path>`가 없으면 자동으로 생성합니다. 프로그램은 그 아래에 입력 파일 이름의 하위 디렉터리와 실행별 결과 디렉터리를 만듭니다.
 - `<target_Nv_i>`는 정수로 파싱됩니다. 양의 정수는 기존 목표 정점 수와 반복 한도를 사용합니다. `linear_solve`에서만 `0` 또는 인수 생략을 무제한 모드로 사용하세요. 충돌 검사와 boundary rail 제약, 마지막 relocation의 sweep 및 line-search 한도는 유지됩니다.
-- rail 파일(`*_rails.obj`, `*_rails.txt`)은 `phase2_boundary_rail` 계열 프리셋으로 실행해 rail이 실제로 만들어졌을 때만 생성됩니다. rail은 입력 메쉬의 boundary loop에서 나오므로 watertight 입력에서는 생성되지 않습니다.
+- rail 파일(`*_rails_<i>.obj`, `*_rails_<i>.txt`)은 `phase2_boundary_rail` 계열 프리셋으로 실행해 rail이 실제로 만들어졌을 때만 생성됩니다. rail은 입력 메쉬의 boundary loop에서 나오므로 watertight 입력에서는 생성되지 않습니다.
 - 입력 메쉬가 non-manifold이거나 non-watertight이면 경고를 남기고 계속 진행합니다. 단, 읽기 실패 또는 vertex/face가 없는 입력은 `invalid mesh`로 중단됩니다.

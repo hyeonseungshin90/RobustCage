@@ -39,10 +39,17 @@ public:
   void stageLoadInitialCage();
   void stageBuildBoundaryRails();
   void stageLoadBoundaryRails();
-  void stageExportInitialBoundaryRails();
+  void stageExportPhase2();
   void stageSimplify();
 
   void generate();
+
+  // Output path without extension for one stage of the current cage label,
+  // e.g. <out dir>/bunny_phase2_rails, or bunny_phase2_rails_1 for the
+  // second nested cage.
+  std::string stageOutputPath(const std::string& stage) const;
+  // Its file name part, e.g. bunny_phase2_rails.
+  std::string stageOutputName(const std::string& stage) const;
 };
 
 

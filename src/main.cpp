@@ -377,49 +377,38 @@ bool write_boundary_rail_benchmark_csv(
   return true;
 }
 
+// Phase 2 outputs of both anchor modes, named like the regular Phase 2 cage
+// and rails with an _edge/_vertex suffix.  stageInitialize already wrote the
+// shared Phase 1 cage.
 void write_boundary_rail_benchmark_meshes(
-  const bf::path& file_out_dir,
-  const std::string& file_name,
-  Cage::SM::SMeshT& initial_cage,
+  const CageGenerator& cage_generator,
   Cage::SM::SMeshT& edge_source,
   Cage::SM::SMeshT& edge_cage,
   Cage::SM::SMeshT& vertex_source,
   Cage::SM::SMeshT& vertex_cage)
 {
-  // Full double precision, so each cage/rail pair can be passed back with
-  // --cage/--rails.
-  const auto write_cage = [&](Cage::SM::SMeshT& mesh, const std::string& suffix)
+  const auto write_mode = [&](Cage::SM::SMeshT& source, Cage::SM::SMeshT& cage,
+    const std::string& mode)
   {
-    bf::path cage_path = file_out_dir;
-    cage_path.append(file_name + suffix + ".obj");
-    if (!Cage::CageInit::write_cage_obj(mesh, cage_path.string()))
+    // Full double precision, so each cage/rail pair can be passed back with
+    // --cage/--rails.
+    const std::string cage_name =
+      cage_generator.stageOutputName("phase2_cage") + "_" + mode + ".obj";
+    const std::string cage_path =
+      cage_generator.stageOutputPath("phase2_cage") + "_" + mode + ".obj";
+    if (!Cage::CageInit::write_cage_obj(cage, cage_path))
     {
       Logger::user_logger->warn(
-        "fail to write boundary-rail benchmark cage: {}", cage_path.string());
+        "fail to write boundary-rail benchmark cage: {}", cage_path);
     }
-    return cage_path;
+    const std::string rail_path =
+      cage_generator.stageOutputPath("phase2_rails") + "_" + mode;
+    write_boundary_rail_files(
+      cage, rail_path + ".obj", rail_path + ".txt", cage_name, &source);
   };
 
-  write_cage(initial_cage, "_initial_cage");
-  const bf::path edge_cage_path = write_cage(edge_cage, "_edge_anchor_cage");
-  const bf::path vertex_cage_path =
-    write_cage(vertex_cage, "_vertex_anchor_cage");
-
-  bf::path edge_rail_obj = file_out_dir;
-  edge_rail_obj.append(file_name + "_edge_rails.obj");
-  bf::path edge_rail_txt = file_out_dir;
-  edge_rail_txt.append(file_name + "_edge_rails.txt");
-  write_boundary_rail_files(
-    edge_cage, edge_rail_obj.string(), edge_rail_txt.string(),
-    edge_cage_path.filename().string(), &edge_source);
-
-  bf::path vertex_rail_obj = file_out_dir;
-  vertex_rail_obj.append(file_name + "_vertex_rails.obj");
-  bf::path vertex_rail_txt = file_out_dir;
-  vertex_rail_txt.append(file_name + "_vertex_rails.txt");
-  write_boundary_rail_files(
-    vertex_cage, vertex_rail_obj.string(), vertex_rail_txt.string(),
-    vertex_cage_path.filename().string(), &vertex_source);
+  write_mode(edge_source, edge_cage, "edge");
+  write_mode(vertex_source, vertex_cage, "vertex");
 }
 
 void run_boundary_rail_anchor_benchmark(
@@ -438,11 +427,10 @@ void run_boundary_rail_anchor_benchmark(
   // Both alternatives start from independent deep copies of exactly the same
   // source and Phase 1 cage.  This isolates the anchor choice from Phase 1 and
   // avoids counting initialization twice.
-  Cage::SM::SMeshT initial_cage(*cage_generator.cage);
   Cage::SM::SMeshT edge_source(*cage_generator.originalMesh);
   Cage::SM::SMeshT vertex_source(*cage_generator.originalMesh);
-  Cage::SM::SMeshT edge_cage(initial_cage);
-  Cage::SM::SMeshT vertex_cage(initial_cage);
+  Cage::SM::SMeshT edge_cage(*cage_generator.cage);
+  Cage::SM::SMeshT vertex_cage(*cage_generator.cage);
 
   const auto edge_start = std::chrono::steady_clock::now();
   Cage::CageInit::BoundaryRailBuilder edge_builder(
@@ -473,8 +461,7 @@ void run_boundary_rail_anchor_benchmark(
     phase1_seconds, edge_seconds, vertex_seconds);
 
   write_boundary_rail_benchmark_meshes(
-    file_out_dir, file_name, initial_cage,
-    edge_source, edge_cage, vertex_source, vertex_cage);
+    cage_generator, edge_source, edge_cage, vertex_source, vertex_cage);
   bf::path csv_path = file_out_dir;
   csv_path.append("boundary_rail_anchor_benchmark.csv");
   if (write_boundary_rail_benchmark_csv(
@@ -586,33 +573,29 @@ void generate_cages(
       cage_generator.param.setCageLabel(it);
       cage_generator.param.setTargetNumber(target_vn[it]);
       cage_generator.generate();
-      log_triangle_quality_stats(
-        *cage_generator.cage,
-        file_name + "_cage_" + std::to_string(it));
+      const std::string cage_name = cage_generator.stageOutputName("phase3_cage");
+      log_triangle_quality_stats(*cage_generator.cage, cage_name);
 
-      bf::path mesh_out_file = file_out_dir;
-      mesh_out_file.append(file_name + "_cage_" + std::to_string(it) + ".obj");
+      const std::string cage_path =
+        cage_generator.stageOutputPath("phase3_cage") + ".obj";
       // Double precision: OpenMesh's writer would round the cage to float and
       // could move it into the source it was checked against.
-      Cage::CageInit::write_cage_obj(*cage_generator.cage, mesh_out_file.string());
+      Cage::CageInit::write_cage_obj(*cage_generator.cage, cage_path);
 
       // export the final boundary rails on their own for separate
       // visualization; the rails Phase 2 handed to Phase 3 were already written
-      // as <file>_cage_<label>_initial_rails.obj/.txt.
-      bf::path rail_obj_file = file_out_dir;
-      rail_obj_file.append(file_name + "_cage_" + std::to_string(it) + "_rails.obj");
-      bf::path rail_txt_file = file_out_dir;
-      rail_txt_file.append(file_name + "_cage_" + std::to_string(it) + "_rails.txt");
+      // as <file>_phase2_rails.obj/.txt.
+      const std::string rail_path = cage_generator.stageOutputPath("phase3_rails");
       const Cage::CageInit::BoundaryRailExport rail_export =
         write_boundary_rail_files(
-          *cage_generator.cage, rail_obj_file.string(), rail_txt_file.string(),
-          mesh_out_file.filename().string(), cage_generator.originalMesh.get());
+          *cage_generator.cage, rail_path + ".obj", rail_path + ".txt",
+          cage_name + ".obj", cage_generator.originalMesh.get());
       if (rail_export.rail_count > 0)
       {
         Logger::user_logger->info(
-          "wrote {} boundary rails ({} rail vertices, {} rail edges) to {} and {}.",
+          "wrote {} Phase 3 boundary rails ({} rail vertices, {} rail edges) to {}.obj and .txt.",
           rail_export.rail_count, rail_export.vertex_count, rail_export.edge_count,
-          rail_obj_file.string(), rail_txt_file.string());
+          rail_path);
       }
       else if (cage_generator.param.paramCageSimplifier.enableBoundaryRails)
       {
@@ -896,8 +879,8 @@ int main(int argc, char* argv[])
     printf("(optional)arg[n + 3]: target vertices number of nested cage n.\n");
     printf("For linear_solve, omit targets or use 0 to repeat collapse/flip (and rail update with phase3_rail_update) until no further progress.\n");
     printf("options:\n");
-    printf("--cage <initial_cage.obj>: skip Phase 1 and start from this cage, e.g. <model>_debug_retrieve_cage.obj of an earlier run.\n");
-    printf("--rails <rails.txt>: with --cage <model>_cage_<i>_initial.obj, also skip Phase 2 and use <model>_cage_<i>_initial_rails.txt.\n");
+    printf("--cage <cage.obj>: skip Phase 1 and start from this cage, e.g. <model>_phase1_cage.obj of an earlier run.\n");
+    printf("--rails <rails.txt>: with --cage <model>_phase2_cage.obj, also skip Phase 2 and use <model>_phase2_rails.txt.\n");
     return 1;
   }
 
@@ -940,7 +923,7 @@ int main(int argc, char* argv[])
     if (input_cage_path.empty())
     {
       Logger::user_logger->error(
-        "--rails needs --cage with the cage its indices refer to (<model>_cage_<i>_initial.obj).");
+        "--rails needs --cage with the cage its indices refer to (<model>_phase2_cage.obj).");
       return 1;
     }
     if (!simplifier.enableBoundaryRails ||
@@ -970,7 +953,7 @@ int main(int argc, char* argv[])
     param.paramCageSimplifier.enableBoundaryRails)
   {
     Logger::user_logger->info(
-      "boundary rails will be constructed on the loaded cage; to reuse the rails of a <model>_cage_<i>_initial.obj, pass its rail file with --rails.");
+      "boundary rails will be constructed on the loaded cage; to reuse the rails of a <model>_phase2_cage.obj, pass its rail file with --rails.");
   }
 
   if (!bf::exists(out_data_path))

@@ -14,6 +14,15 @@ void CageGenerator::stageInitialize()
     VMesh.get(), cage.get());
 
   cageInitializer->generate();
+
+  // This file can be passed back with --cage to skip Phase 1.
+  const std::string cage_path = stageOutputPath("phase1_cage") + ".obj";
+  if (write_cage_obj(*cage, cage_path))
+  {
+    Logger::user_logger->info(
+      "wrote Phase 1 cage ({} vertices, {} faces) to {}.",
+      cage->n_vertices(), cage->n_faces(), cage_path);
+  }
 }
 
 void CageGenerator::stageLoadInitialCage()
@@ -62,38 +71,35 @@ void CageGenerator::stageLoadBoundaryRails()
 // them only exist here.  Write them next to the final rails of the cage so that
 // both states of the same rail ids can be compared.  Anchor insertion and the
 // geodesic embedding split the Phase 1 cage, so the rail indices refer to the
-// cage written here, not to the retrieved cage; the pair can be passed back
-// with --cage/--rails to skip Phases 1 and 2.
-void CageGenerator::stageExportInitialBoundaryRails()
+// Phase 2 cage written here, not to the Phase 1 cage; the pair can be passed
+// back with --cage/--rails to skip Phases 1 and 2.
+void CageGenerator::stageExportPhase2()
 {
-  const ParamCageSimplifier& simplifier_param = param.paramCageSimplifier;
-  const std::string name = simplifier_param.fileName + "_cage_" +
-    std::to_string(simplifier_param.cageLabel) + "_initial";
-  const std::string prefix = simplifier_param.fileOutPath + name;
-  const std::string cage_obj_name = name + ".obj";
-  const std::string cage_obj_path = prefix + ".obj";
+  const std::string cage_obj_name = stageOutputName("phase2_cage") + ".obj";
+  const std::string cage_obj_path = stageOutputPath("phase2_cage") + ".obj";
   if (write_cage_obj(*cage, cage_obj_path))
   {
     Logger::user_logger->info(
-      "wrote initial cage with boundary rails inserted ({} vertices, {} faces) to {}.",
+      "wrote Phase 2 cage with boundary rails inserted ({} vertices, {} faces) to {}.",
       cage->n_vertices(), cage->n_faces(), cage_obj_path);
   }
 
-  const std::string rail_obj_path = prefix + "_rails.obj";
-  const std::string rail_txt_path = prefix + "_rails.txt";
+  const std::string rail_path = stageOutputPath("phase2_rails");
+  const std::string rail_obj_path = rail_path + ".obj";
+  const std::string rail_txt_path = rail_path + ".txt";
   const BoundaryRailExport rail_export = write_boundary_rail_files(
     *cage, rail_obj_path, rail_txt_path, cage_obj_name, originalMesh.get());
   if (rail_export.rail_count > 0)
   {
     Logger::user_logger->info(
-      "wrote {} initial boundary rails ({} rail vertices, {} rail edges, {} source boundary edges) to {} and {}.",
+      "wrote {} Phase 2 boundary rails ({} rail vertices, {} rail edges, {} source boundary edges) to {} and {}.",
       rail_export.rail_count, rail_export.vertex_count, rail_export.edge_count,
       rail_export.support_edge_count, rail_obj_path, rail_txt_path);
   }
   else
   {
     Logger::user_logger->warn(
-      "boundary rails were enabled but Phase 2 produced no rail vertex or edge; no initial rail file written.");
+      "boundary rails were enabled but Phase 2 produced no rail vertex or edge; no Phase 2 rail file written.");
   }
 }
 
@@ -133,7 +139,7 @@ void CageGenerator::generate()
       stageBuildBoundaryRails();
     else
       stageLoadBoundaryRails();
-    stageExportInitialBoundaryRails();
+    stageExportPhase2();
     phase2_seconds = seconds_since(phase2_start);
   }
 
@@ -171,6 +177,22 @@ void CageGenerator::generate()
   }
   Logger::user_logger->info(
     "Phase 3 elapsed time: {:.6f} seconds.", phase3_seconds);
+}
+
+std::string CageGenerator::stageOutputName(const std::string& stage) const
+{
+  // Only nested cages after the first carry their index, so that they do not
+  // overwrite each other's files.
+  const ParamCageSimplifier& simplifier_param = param.paramCageSimplifier;
+  std::string name = simplifier_param.fileName + "_" + stage;
+  if (simplifier_param.cageLabel > 0)
+    name += "_" + std::to_string(simplifier_param.cageLabel);
+  return name;
+}
+
+std::string CageGenerator::stageOutputPath(const std::string& stage) const
+{
+  return param.paramCageSimplifier.fileOutPath + stageOutputName(stage);
 }
 
 }// namespace Cage
