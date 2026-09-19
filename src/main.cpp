@@ -277,9 +277,9 @@ std::string build_run_dir_name(
       labels.push_back("flip" + abbreviate_mode(simplifier.paramFlip.priorityMode));
       labels.push_back("reloc" + abbreviate_mode(simplifier.paramRelocate.priorityMode));
     }
-    // Only the disabled case is named.
-    if (simplifier.enableBoundaryRails && !simplifier.enableRailUpdate)
-      labels.push_back("noRU");
+    // Only the enabled case is named.
+    if (simplifier.enableBoundaryRails && simplifier.enableRailUpdate)
+      labels.push_back("RU");
   }
 
   std::ostringstream oss;
@@ -735,9 +735,9 @@ bool apply_parameter_token(const std::string& raw_token, Cage::ParamCageGenerato
     param.paramCageSimplifier.boundaryRailAnchorMode = "compare";
     return true;
   }
-  if (token == "no_rail_update")
+  if (token == "rail_update")
   {
-    param.paramCageSimplifier.enableRailUpdate = false;
+    param.paramCageSimplifier.enableRailUpdate = true;
     return true;
   }
 
@@ -872,6 +872,7 @@ int main(int argc, char* argv[])
     printf("input \"boundary_rail\" with a Phase 2 energy preset to build and preserve closed boundary rails\n");
     printf("input \"boundary_rail_vertex\" with a Phase 2 energy preset to use vertex-bisector anchor rays\n");
     printf("input \"boundary_rail_compare\" to compare edge and vertex anchor rays on one shared Phase 1 cage and skip simplification\n");
+    printf("input \"rail_update\" with boundary_rail or boundary_rail_vertex to relabel rails after each linear-solve flip stage (off by default)\n");
     printf("combine presets with '+' or ',', for example \"phase2_linear_solve+boundary_rail\".\n");
     printf("or a json file to set parameters.\n");
     printf("arg[1]: input model path.\n");
@@ -880,7 +881,7 @@ int main(int argc, char* argv[])
     printf("arg[3]: target vertices number of cage 0 (optional for linear_solve).\n");
     printf("(optional)arg[4]: target vertices number of nested cage 1.\n");
     printf("(optional)arg[n + 3]: target vertices number of nested cage n.\n");
-    printf("For linear_solve, omit targets or use 0 to repeat collapse/flip/rail update until no further progress.\n");
+    printf("For linear_solve, omit targets or use 0 to repeat collapse/flip (and rail update with rail_update) until no further progress.\n");
     printf("options:\n");
     printf("--cage <initial_cage.obj>: skip Phase 1 and start from this cage, e.g. <model>_debug_retrieve_cage.obj of an earlier run.\n");
     printf("--rails <rails.txt>: with --cage <model>_cage_<i>_initial.obj, also skip boundary rail construction and use <model>_cage_<i>_initial_rails.txt.\n");

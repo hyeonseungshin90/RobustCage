@@ -38,6 +38,7 @@ phase2_newton_solve
 phase2_qem_original
 phase1_topological_offset+phase2_linear_solve
 phase2_linear_solve+boundary_rail
+phase1_topological_offset+phase2_linear_solve+boundary_rail+rail_update
 phase1_topological_offset+boundary_rail_compare
 config.json
 ```
@@ -50,7 +51,7 @@ config.json
 | `phase1_topological_offset` | phase1 | Zint et al.의 simplicial embedding과 offset insertion을 수행한 뒤 기존 `retrieveCage()`로 boundary를 추출합니다. `topological_offset`도 같은 별칭으로 사용할 수 있습니다. |
 | `boundary_rail` | phase1.5/phase2 | Source-boundary anchor를 삽입하고 Dijkstra로 초기 loop를 구성한 뒤, anchor를 고정한 intrinsic flip geodesics와 실제 mesh split으로 rail 경로를 단축합니다. 이후 rail collapse는 source boundary tangent와 outward co-normal의 ruled half-strip으로 제약합니다. 네 가지 energy Phase 2 preset 중 하나와 조합해야 합니다. |
 | `boundary_rail_vertex` | phase1.5/phase2 | `boundary_rail`과 동일하지만 ray를 boundary vertex에서 인접한 두 edge co-normal의 bisector 방향으로 쏩니다. 비교 실험용이며 source-edge support에는 평균 전의 edge co-normal을 저장합니다. Energy Phase 2 preset과 조합해야 합니다. |
-| `no_rail_update` | phase2 | `enableRailUpdate = false`; `linear_solve` 반복에서 flip 뒤의 `update_boundary_rails()` 호출만 생략합니다. Collapse, flip, relocation과 초기 rail 구성은 그대로이므로 rail update의 효과만 분리해 비교할 수 있습니다. `boundary_rail` 계열 토큰과 함께 사용하며, 이 경우 실행 폴더 이름에 `_noRU`가 붙습니다. |
+| `rail_update` | phase2 | `enableRailUpdate = true`; `linear_solve` 반복에서 flip 뒤에 `update_boundary_rails()`를 호출합니다. 기본값은 꺼져 있으므로 이 토큰 없이 `boundary_rail` 계열 토큰만 쓰면 rail은 초기 구성 경로를 유지하고 collapse, flip, relocation만 수행합니다. 나머지 단계는 같으므로 rail update의 효과만 분리해 비교할 수 있습니다. `boundary_rail` 계열 토큰과 함께 사용하며, 이 경우 실행 폴더 이름에 `_RU`가 붙습니다. |
 | `boundary_rail_compare` | phase1/benchmark | Phase 1을 한 번만 실행한 뒤 동일 initial cage와 source의 독립 복사본에서 edge-midpoint 방식과 vertex-bisector 방식을 각각 실행합니다. simplification은 생략하고 run-local CSV와 두 결과 cage/rail을 기록합니다. |
 | `phase2_linear_solve` | phase2 | `phase2Mode = "linear_solve"`; repeat linear-solve collapses with Armijo backtracking and quality-priority flips, then run final relocation sweeps combining Voronoi tangential smoothing with source-surface attraction |
 | `phase2_linear_solve_collision_reject` | phase2 | Same defaults as `phase2_linear_solve` plus `phase2LinearSolveCollisionReject = true`; reject an invalid raw linear-solve point instead of backtracking |
@@ -70,7 +71,7 @@ Flip과 rail 라벨 갱신 이후 collapse 후보 큐를 다시 만들어 새롭
 재시도하며, global target edge length는 최초 값으로 유지합니다. 목표가 `0`이면
 초기 cage의 평균 edge length를 고정 기준으로 사용합니다. 양의 목표 정점 수에
 도달하면 collapse를 생략하고 flip과 rail update는 계속할 수 있습니다.
-Rail update는 boundary rail이 활성화된 경우에만 실행합니다. Collapse, flip,
+Rail update는 boundary rail과 `rail_update`를 모두 활성화한 경우에만 실행합니다. Collapse, flip,
 rail update가 모두 없으면 반복을 조기 종료합니다. 반복 종료 후 relocation을 수행하며,
 그 뒤에는 collapse, flip, rail update를 다시 실행하지 않습니다. Flip은 boundary rail
 활성화 여부와 관계없이 두 삼각형의 최소 quality 증가량이 큰 순서로 수행합니다.
@@ -111,8 +112,8 @@ cage 표면은 바뀔 수 있습니다.
 실제 rail edge collapse와 기존 projection 및 line search는 유지합니다.
 
 C++ 진입점은 `do_quality_flip()`이며, chord 정책을 선택하는 인수나 별도의
-chord-aware 모드는 없습니다. Boundary rail을 활성화하면 flip 뒤의 삼각형 단위
-rail update를 실행합니다.
+chord-aware 모드는 없습니다. Boundary rail과 `rail_update`를 함께 활성화하면
+flip 뒤의 삼각형 단위 rail update를 실행합니다.
 
 초기 rail 구성은 Phase 2 이전에 `Dijkstra → intrinsic flip geodesics → 실제 mesh split`
 순서로 수행합니다. Source-boundary anchor를 cage에 삽입한 뒤 기존 Dijkstra 경로
@@ -132,7 +133,7 @@ Flip geodesics는 locally shortest path를 구하며 전역 최단 경로를 보
 Phase 2 중 rail을 다시 geodesic으로 단축하지 않습니다. 이후 collapse가 초기 경로의
 geodesic 성질을 유지한다는 보장도 없습니다.
 
-Boundary rail을 활성화한 `linear_solve`에서는 매 quality-flip 단계 뒤에
+Boundary rail과 `rail_update`를 활성화한 `linear_solve`에서는 매 quality-flip 단계 뒤에
 삼각형 단위 `update_boundary_rails()`를 호출합니다. 이 함수는 더 이상 가능한
 갱신이 없을 때까지 삼각형의 rail 경로 `A-B-C`를 `A-C`로 반복 교체하고 `B`의 라벨을
 해제하며, 최소 3정점의 단일 폐곡선을 보존합니다. 라벨만 변경하는 함수이고
@@ -203,7 +204,7 @@ JSON 파일을 첫 번째 인수로 넘기면 `ParamCageGenerator` 설정을 덮
 |---|---|---:|
 | `paramCageInitializer.phase1Mode` | Phase 1 방식: `"subdivision"` 또는 `"topological_offset"` | `"subdivision"` |
 | `paramCageSimplifier.maxIter` | 기존 일반 cage simplifier 최대 반복 횟수 | `30` |
-| `paramCageSimplifier.enableRailUpdate` | `false`이면 `linear_solve` 반복에서 flip 뒤의 rail update만 생략. `enableBoundaryRails`가 `true`일 때만 의미가 있음 | `true` |
+| `paramCageSimplifier.enableRailUpdate` | `true`이면 `linear_solve` 반복에서 flip 뒤에 rail update 실행. `enableBoundaryRails`가 `true`일 때만 의미가 있음 | `false` |
 | `paramCageSimplifier.phase2QualityPolishIterations` | linear-solve의 collapse/flip/rail-update 반복 한도. 목표 정점 수가 `0`이면 양의 한도는 무시. 설정 자체가 `0`이면 collapse 단계만 한 번 호출하고 flip, rail update, 마지막 relocation 생략 | `30` |
 | `paramCageSimplifier.relaxErrorIterStep` | 에러 완화 반복 간격 | `5` |
 | `paramCageSimplifier.maxErrorRelaxIter` | 최대 에러 완화 단계 | `4` |
@@ -327,10 +328,11 @@ JSON 설정 파일 사용:
 
 ```text
 <output_dir_path>\<input_name>\
-  <run_timestamp>__[phase1_TO_][from_IC_|from_RC_]phase2_<mode>[_<mode-specific-details>][_noRU]\
+  <run_timestamp>__[phase1_TO_][from_IC_|from_RC_]phase2_<mode>[_<mode-specific-details>][_RU]\
 ```
 
-예: `phase1_topological_offset+phase2_linear_solve+boundary_rail` → `20260919_182543__phase1_TO_phase2_LS`
+예: `phase1_topological_offset+phase2_linear_solve+boundary_rail` → `20260919_182543__phase1_TO_phase2_LS`,
+`phase1_topological_offset+phase2_linear_solve+boundary_rail+rail_update` → `20260919_182543__phase1_TO_phase2_LS_RU`
 
 폴더 이름은 다음 약자를 사용합니다. 기본 subdivision Phase 1은 이름에 넣지 않습니다.
 
@@ -340,7 +342,7 @@ JSON 설정 파일 사용:
 | `from_IC` / `from_RC` | `--cage`로 initial cage에서 시작 / `--cage --rails`로 rail cage에서 시작 |
 | `BRC` | `boundary_rail_compare` (Phase 2 없음) |
 | `phase2_LS`, `phase2_NS`, `phase2_QEM`, `phase2_FS` | `phase2Mode` = `linear_solve`, `newton_solve`, `qem_original`, `fast` |
-| `noRU` | `no_rail_update` |
+| `RU` | `rail_update` |
 
 `phase2_NS`에는 placement, solver, robustness 모드와 curvature(`curv`), uniformity(`unif`) 모드가,
 `phase2_FS`에는 `colH`(Hausdorff collapse), flip(`flip`), relocate(`reloc`) 우선순위가 이어서 붙습니다.

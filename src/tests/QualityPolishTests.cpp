@@ -586,6 +586,8 @@ void quality_configuration_roundtrip()
     defaults.paramCageSimplifier.paramRelocate.surfaceWeight == 1.0 &&
     defaults.paramCageSimplifier.paramRelocate.minTriangleQuality == 0.2,
     "relocation must default to equal energy weights and a 0.2 quality floor");
+  require(!defaults.paramCageSimplifier.enableRailUpdate,
+    "rail update must be opt-in");
   auto& configured = defaults.paramCageSimplifier;
   configured.phase2QualityPolishIterations = 5;
   configured.paramRelocate.qualitySweeps = 7;
@@ -1898,6 +1900,7 @@ void production_rail_updates_keep_the_cycle_running()
     parameters.phase2Mode = "linear_solve";
     parameters.targetVerticesNum = 6;
     parameters.enableBoundaryRails = true;
+    parameters.enableRailUpdate = true;
     parameters.phase2QualityPolishIterations = outer_cycles;
     parameters.paramRelocate.qualitySweeps = 0;
     ScopedUserLogCapture captured_log;
@@ -1971,6 +1974,7 @@ void production_rail_flips_use_triangle_quality()
     parameters.phase2Mode = "linear_solve";
     parameters.targetVerticesNum = 6;
     parameters.enableBoundaryRails = true;
+    parameters.enableRailUpdate = true;
     parameters.phase2QualityPolishIterations = 3;
     parameters.paramRelocate.qualitySweeps = 0;
     ScopedUserLogCapture captured_log;
