@@ -39,9 +39,16 @@ public:
   PhaseTimer phase1Timer;
   PhaseTimer phase2Timer;
   PhaseTimer phase3Timer;
+  // Degeneracy cleanup runs before Phase 2 and again at the start of Phase 3.
+  // Both are reported on their own and left out of the phase times.
+  double cleanupBeforePhase2Seconds = 0.0;
+  size_t cleanupBeforePhase2Cases = 0;
 public:
   void stageInitialize();
   void stageLoadInitialCage();
+  // Removes near-degenerate triangles of the Phase 1 cage before Phase 2
+  // builds rails on it.  Returns the number of eliminated cases.
+  size_t stageCleanupCage();
   void stageBuildBoundaryRails();
   void stageLoadBoundaryRails();
   void stageExportPhase2();

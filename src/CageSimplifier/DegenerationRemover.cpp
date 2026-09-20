@@ -5,13 +5,14 @@ namespace Cage
 namespace CageSimp
 {
 
-void DegenerationRemover::perform()
+size_t DegenerationRemover::perform()
 {
-  eliminate_almost_degeneration();
+  const size_t eliminated = eliminate_almost_degeneration();
 
   rm->garbage_collection();
   lrt->collect_garbage();
   init_one_ring_faces(rm);
+  return eliminated;
 }
 
 bool DegenerationRemover::is_face_almost_degenerate(FaceHandle fh)

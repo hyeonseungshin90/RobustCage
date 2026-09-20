@@ -162,7 +162,19 @@ void CageSimplifier::simplify()
       param->enableRailSupport ? "on" : "off");
   }
 
-  degeneration_remover->perform();
+  {
+    // The cage needs this repair, but it is not part of the simplification:
+    // it removes the near-degenerate triangles that Phase 1 and the rail
+    // embedding of Phase 2 leave behind.  CageGenerator reports it on its own.
+    PhaseTimer::Exclusion exclusion("cleanup");
+    const auto cleanup_start = PhaseTimer::Clock::now();
+    degeneracyCleanupCases = degeneration_remover->perform();
+    degeneracyCleanupSeconds = std::chrono::duration<double>(
+      PhaseTimer::Clock::now() - cleanup_start).count();
+    Logger::user_logger->info(
+      "degeneracy cleanup in Phase 3: {} cases in {:.6f} seconds (not counted in the phase time).",
+      degeneracyCleanupCases, degeneracyCleanupSeconds);
+  }
   // Rail topology verification is disabled; the cage does not need it.
   // if (param->enableBoundaryRails &&
   //   !validate_and_log_boundary_rails(rm, "after degeneration removal"))

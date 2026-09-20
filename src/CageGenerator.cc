@@ -36,6 +36,38 @@ void CageGenerator::stageLoadInitialCage()
   cageInitializer->load(inputCagePath);
 }
 
+size_t CageGenerator::stageCleanupCage()
+{
+  SM::pre_calculate_edge_length(originalMesh.get());
+  SM::pre_calculate_face_area(originalMesh.get());
+  SM::pre_calculate_edge_length(cage.get());
+  SM::pre_calculate_face_area(cage.get());
+  CageSimp::init_one_ring_faces(cage.get());
+  if (!cage->has_face_normals())
+    cage->request_face_normals();
+  if (!cage->has_vertex_normals())
+    cage->request_vertex_normals();
+  cage->update_normals();
+
+  VertexTree vertex_tree(*originalMesh);
+  DFaceTree source_tree(*originalMesh);
+  FaceGrid source_grid(*originalMesh);
+  LightDFaceTree cage_tree(*cage);
+  Vec3d lo(DBL_MAX, DBL_MAX, DBL_MAX);
+  Vec3d hi(-DBL_MAX, -DBL_MAX, -DBL_MAX);
+  for (SM::VertexHandle vh : originalMesh->vertices())
+  {
+    lo.minimize(originalMesh->point(vh));
+    hi.maximize(originalMesh->point(vh));
+  }
+
+  CageSimp::DegenerationRemover remover(
+    originalMesh.get(), cage.get(), &vertex_tree, &source_tree, &cage_tree,
+    &source_grid);
+  remover.original_diagonal_length = (hi - lo).norm();
+  return remover.perform();
+}
+
 void CageGenerator::stageBuildBoundaryRails()
 {
   const BoundaryRailAnchorMode anchor_mode =
@@ -128,6 +160,21 @@ void CageGenerator::generate()
     stageLoadInitialCage();
   }
   phase1Timer.stop();
+
+  // The rails are built on the cleaned cage, so this runs before Phase 2.
+  // Loaded rails refer to the cage they were built on, so it is skipped then.
+  cleanupBeforePhase2Seconds = 0.0;
+  cleanupBeforePhase2Cases = 0;
+  if (inputRailPath.empty())
+  {
+    const auto cleanup_start = PhaseTimer::Clock::now();
+    cleanupBeforePhase2Cases = stageCleanupCage();
+    cleanupBeforePhase2Seconds = std::chrono::duration<double>(
+      PhaseTimer::Clock::now() - cleanup_start).count();
+    Logger::user_logger->info(
+      "degeneracy cleanup before Phase 2: {} cases in {:.6f} seconds (not counted in the phase time).",
+      cleanupBeforePhase2Cases, cleanupBeforePhase2Seconds);
+  }
 
   // Phase 2: boundary rails.
   if (param.paramCageSimplifier.enableBoundaryRails)
@@ -225,6 +272,18 @@ void CageGenerator::reportPhaseTimes() const
   timing["phase2"] = phase_json(
     phase2Timer, !rails_enabled ? "disabled" : (phase2_loaded ? "loaded" : "run"));
   timing["phase3"] = phase_json(phase3Timer, "run");
+  boost::json::object cleanup;
+  boost::json::object before_phase2;
+  before_phase2["seconds"] = cleanupBeforePhase2Seconds;
+  before_phase2["cases"] = cleanupBeforePhase2Cases;
+  boost::json::object in_phase3;
+  in_phase3["seconds"] = cageSimplifier ? cageSimplifier->degeneracyCleanupSeconds : 0.0;
+  in_phase3["cases"] = cageSimplifier ? cageSimplifier->degeneracyCleanupCases : size_t(0);
+  cleanup["before_phase2"] = before_phase2;
+  cleanup["phase3"] = in_phase3;
+  cleanup["note"] =
+    "degeneracy cleanup of the cage; reported on its own and not part of the phase times";
+  timing["cleanup"] = cleanup;
   timing["total_seconds"] =
     (phase1_loaded ? 0.0 : phase1Timer.seconds()) +
     (rails_enabled && !phase2_loaded ? phase2Timer.seconds() : 0.0) +

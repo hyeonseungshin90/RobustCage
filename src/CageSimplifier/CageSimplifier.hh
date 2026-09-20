@@ -30,6 +30,9 @@ public:
   CageSimplifier(SMeshT* original, SMeshT* cage, ParamCageSimplifier* p);
 
   void simplify();
+  // Degeneracy cleanup at the start of simplify(), left out of the phase time.
+  double degeneracyCleanupSeconds = 0.0;
+  size_t degeneracyCleanupCases = 0;
 private:
   /* Bounding error */
 

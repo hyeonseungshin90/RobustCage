@@ -45,7 +45,8 @@ public:
   {}
   ~DegenerationRemover() {}
 
-  void perform();
+  // Returns the number of eliminated degenerate cases.
+  size_t perform();
 public:
   // almost degenerate
   bool is_face_almost_degenerate(FaceHandle fh);
