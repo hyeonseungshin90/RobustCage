@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <queue>
 #include <set>
 #include <sstream>
@@ -301,6 +302,7 @@ struct AnchorRequest
   size_t loop_index = 0;
   size_t order_index = 0;
   Vec3d point;
+  std::optional<Geometry::Point_3> exact_point;
   // This is always the co-normal of the corresponding source edge.  In the
   // vertex benchmark the ray itself follows the bisector of two co-normals,
   // so keeping the support direction separate is essential for Phase 3.
@@ -1185,6 +1187,26 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
         request.edge_parameter = clamp01(
           ((request.point - cage->point(request.edge_start)) | edge_vector) /
           std::max(edge_vector.squaredNorm(), 1e-300));
+        const auto exact_vertex = [&](VertexHandle vertex)
+        {
+          const auto* ep = cage->data(vertex).ep.get();
+          const Vec3d& p = cage->point(vertex);
+          return ep ? ep->exact() : Geometry::Point_3(p[0], p[1], p[2]);
+        };
+        const Geometry::Point_3 exact_start = exact_vertex(request.edge_start);
+        const Geometry::Point_3 exact_end = exact_vertex(request.edge_end);
+        // Preserve the original exact edge, including offsets too small to
+        // retain in a double ray hit. Use the original endpoints before any
+        // requests split this edge; edge_parameter is relative to those ends.
+        request.exact_point = exact_start +
+          (exact_end - exact_start) * Geometry::ET(request.edge_parameter);
+        request.point = Geometry::ExactPoint(*request.exact_point).approx();
+        if (request.edge_parameter == 0.0 || request.edge_parameter == 1.0)
+        {
+          request.location = AnchorRequest::Location::Vertex;
+          request.vertex = request.edge_parameter == 0.0 ?
+            request.edge_start : request.edge_end;
+        }
       }
       else
         request.location = AnchorRequest::Location::Face;
@@ -1275,6 +1297,8 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
         break;
       }
       const VertexHandle inserted = cage->add_vertex(request.point);
+      cage->data(inserted).ep =
+        std::make_unique<Geometry::ExactPoint>(*request.exact_point);
       cage->split_copy(current_edge, inserted);
       request.inserted_vertex = inserted;
       previous_inserted = inserted;
