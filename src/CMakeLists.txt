@@ -133,4 +133,15 @@ if(CAGE_BUILD_TESTS)
     endif()
     add_test(NAME boundary_rail_geodesics COMMAND cageBoundaryRailGeodesicTests)
     set_tests_properties(boundary_rail_geodesics PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1")
+    add_executable(cageBoundaryRailNumericsTests tests/BoundaryRailNumericsTests.cpp)
+    target_link_libraries(cageBoundaryRailNumericsTests PRIVATE lib${PROJECT_NAME} ${Boost_LIBRARIES})
+    if(WIN32)
+        add_custom_command(TARGET cageBoundaryRailNumericsTests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/ThirdPartyLib/gmp/lib/libgmp-10.dll"
+                "${CMAKE_CURRENT_SOURCE_DIR}/ThirdPartyLib/mpfr/lib/libmpfr-4.dll"
+                "$<TARGET_FILE_DIR:cageBoundaryRailNumericsTests>")
+    endif()
+    add_test(NAME boundary_rail_numerics COMMAND cageBoundaryRailNumericsTests)
+    set_tests_properties(boundary_rail_numerics PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=1")
 endif()

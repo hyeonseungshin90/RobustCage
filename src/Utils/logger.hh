@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <chrono>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <string>
 // spdlog
@@ -36,6 +37,60 @@ public:
   static void updateFileLog(bool file_log, spdlog::level::level_enum file_level, const std::string& file_path);
 
   static void StopProgram();
+
+  // Seconds all log sinks have spent formatting and writing messages so far.
+  static double loggingSeconds();
+};
+
+/****************************/
+/******** Phase time ********/
+/****************************/
+
+// Computation time of one pipeline phase: the wall time while it runs, minus
+// the time the log sinks spent and minus the sections excluded with
+// PhaseTimer::Exclusion (file output and verification that the cage does not
+// need).
+class PhaseTimer
+{
+public:
+  using Clock = std::chrono::steady_clock;
+
+  // Excludes its lifetime from the running timer, if any, under a label such
+  // as "output" or "check".  Nested exclusions count once, under the
+  // outermost label.
+  class Exclusion
+  {
+  public:
+    explicit Exclusion(const char* label);
+    ~Exclusion();
+    Exclusion(const Exclusion&) = delete;
+    Exclusion& operator=(const Exclusion&) = delete;
+  private:
+    PhaseTimer* timer;
+    const char* label;
+    Clock::time_point start;
+    double loggingAtStart;
+  };
+
+  // A started timer is the one exclusions apply to until it stops.
+  void start();
+  void stop();
+  bool wasStarted() const { return everStarted; }
+  // Wall time minus logging and exclusions.
+  double seconds() const;
+  double loggingSeconds() const { return logging; }
+  const std::map<std::string, double>& excludedSeconds() const { return excluded; }
+
+private:
+  static PhaseTimer* active;
+  static int exclusionDepth;
+  bool running = false;
+  bool everStarted = false;
+  Clock::time_point startTime;
+  double loggingAtStart = 0.0;
+  double wall = 0.0;
+  double logging = 0.0;
+  std::map<std::string, double> excluded;
 };
 
 /****************************/

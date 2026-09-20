@@ -416,13 +416,18 @@ void run_boundary_rail_anchor_benchmark(
   const bf::path& file_out_dir,
   const std::string& file_name)
 {
-  const auto phase1_start = std::chrono::steady_clock::now();
+  // Computation times, as in CageGenerator::generate (see PhaseTimer).
+  PhaseTimer phase1_timer;
+  phase1_timer.start();
   if (cage_generator.inputCagePath.empty())
     cage_generator.stageInitialize();
   else
+  {
+    PhaseTimer::Exclusion exclusion("input");
     cage_generator.stageLoadInitialCage();
-  const double phase1_seconds = std::chrono::duration<double>(
-    std::chrono::steady_clock::now() - phase1_start).count();
+  }
+  phase1_timer.stop();
+  const double phase1_seconds = phase1_timer.seconds();
 
   // Both alternatives start from independent deep copies of exactly the same
   // source and Phase 1 cage.  This isolates the anchor choice from Phase 1 and
@@ -432,23 +437,25 @@ void run_boundary_rail_anchor_benchmark(
   Cage::SM::SMeshT edge_cage(*cage_generator.cage);
   Cage::SM::SMeshT vertex_cage(*cage_generator.cage);
 
-  const auto edge_start = std::chrono::steady_clock::now();
+  PhaseTimer edge_timer;
+  edge_timer.start();
   Cage::CageInit::BoundaryRailBuilder edge_builder(
     &edge_source, &edge_cage,
     Cage::CageInit::BoundaryRailAnchorMode::EdgeMidpoint);
   const Cage::CageInit::BoundaryRailBuildStats edge =
     edge_builder.build_with_stats();
-  const double edge_seconds = std::chrono::duration<double>(
-    std::chrono::steady_clock::now() - edge_start).count();
+  edge_timer.stop();
+  const double edge_seconds = edge_timer.seconds();
 
-  const auto vertex_start = std::chrono::steady_clock::now();
+  PhaseTimer vertex_timer;
+  vertex_timer.start();
   Cage::CageInit::BoundaryRailBuilder vertex_builder(
     &vertex_source, &vertex_cage,
     Cage::CageInit::BoundaryRailAnchorMode::VertexBisector);
   const Cage::CageInit::BoundaryRailBuildStats vertex =
     vertex_builder.build_with_stats();
-  const double vertex_seconds = std::chrono::duration<double>(
-    std::chrono::steady_clock::now() - vertex_start).count();
+  vertex_timer.stop();
+  const double vertex_seconds = vertex_timer.seconds();
 
   const std::string winner = boundary_rail_benchmark_winner(edge, vertex);
   Logger::user_logger->info(

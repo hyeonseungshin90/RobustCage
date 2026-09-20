@@ -76,6 +76,7 @@ size_t DegenerationRemover::eliminate_almost_degeneration()
   // record number of eliminated degeneration each iteration
   size_t eliminate_case = 1;
   size_t total_eliminate_case = 0;
+  size_t pass = 0;
   while (eliminate_case > 0)
   {
     eliminate_case = 0;
@@ -120,6 +121,10 @@ size_t DegenerationRemover::eliminate_almost_degeneration()
       }
     }
     total_eliminate_case += eliminate_case;
+    // One pass over a large cage takes minutes, so report progress.
+    Logger::user_logger->info(
+      "degeneration removal pass {}: eliminated {} cases ({} total), {} vertices, {} faces.",
+      ++pass, eliminate_case, total_eliminate_case, rm->n_vertices(), rm->n_faces());
   }
 #undef HE
 #undef COS

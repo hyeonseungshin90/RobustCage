@@ -573,6 +573,41 @@ void relocation_preserves_quality_below_floor()
     "energy descent must not worsen a fan that already lies below the quality floor");
 }
 
+void spin_for(double seconds)
+{
+  const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+  while (std::chrono::steady_clock::now() < end) {}
+}
+
+void phase_timer_counts_only_computation()
+{
+  PhaseTimer timer;
+  {
+    // No running timer: nothing to exclude from.
+    PhaseTimer::Exclusion ignored("output");
+    spin_for(0.005);
+  }
+  timer.start();
+  spin_for(0.02);
+  {
+    PhaseTimer::Exclusion output("output");
+    spin_for(0.03);
+  }
+  {
+    PhaseTimer::Exclusion check("check");
+    PhaseTimer::Exclusion nested("output");
+    spin_for(0.01);
+  }
+  timer.stop();
+  spin_for(0.02);
+  const auto& excluded = timer.excludedSeconds();
+  require(excluded.size() == 2 && excluded.at("output") >= 0.029 && excluded.at("output") < 0.045 &&
+    excluded.at("check") >= 0.009 && excluded.at("check") < 0.025,
+    "exclusions must be recorded once, under the outermost label");
+  require(timer.wasStarted() && timer.seconds() >= 0.019 && timer.seconds() < 0.035,
+    "phase time must leave out exclusions and time after stop");
+}
+
 void quality_configuration_roundtrip()
 {
   ParamCageGenerator defaults;
@@ -1066,8 +1101,6 @@ double linear_solve_integration(bool enable_polish, size_t sweeps = 20, size_t l
     require(halfedge.is_valid() && fixture.cage.data(fixture.cage.edge_handle(halfedge)).boundary_rail_id == 3,
       "integrated polish must preserve the labeled rail cycle");
   }
-  require(std::filesystem::exists(output_directory / "octahedron_debug_phase3_linear_solve.obj"),
-    "integration must complete the production Phase 3 output path");
   fixture.initialize();
   fixture.require_source_clear();
   return min_quality(fixture.cage);
@@ -2140,8 +2173,8 @@ size_t full_topological_offset_rail_pipeline(size_t outer_cycles = 3,
   require(require_closed_rail_cycles(*generator.cage) == 2,
     "both generated rail cycles must survive collapse and quality polish");
   require_clear_closed_mesh(*generator.cage, *generator.originalMesh);
-  require(std::filesystem::exists(output_directory / "open_tube_debug_phase3_linear_solve.obj"),
-    "full pipeline must write the final linear-solve cage OBJ");
+  require(std::filesystem::exists(output_directory / "open_tube_phase1_cage.obj"),
+    "full pipeline must write the Phase 1 cage OBJ");
   if (snapshot)
   {
     *snapshot = PipelineSnapshot();
@@ -2271,6 +2304,7 @@ int main()
     {"relocation weights disable terms and distance-only moves backtrack on contact", relocation_weights_and_source_collision},
     {"relocation backtracks to preserve its configured quality floor", relocation_quality_floor_backtracks},
     {"relocation cannot worsen fans already below the quality floor", relocation_preserves_quality_below_floor},
+    {"phase timer leaves out exclusions and stopped time", phase_timer_counts_only_computation},
     {"quality configuration round-trips and supports legacy JSON", quality_configuration_roundtrip},
     {"triangle shape directional weights round-trip and support legacy JSON", triangle_shape_configuration_roundtrip},
     {"directional triangle costs share their reference minimum and placement/queue energy", directional_triangle_shape_costs_and_minimum},

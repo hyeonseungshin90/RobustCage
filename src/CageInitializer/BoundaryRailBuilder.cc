@@ -1,4 +1,5 @@
 #include "BoundaryRailBuilder.hh"
+#include "BoundaryRailNumerics.hh"
 
 #include <algorithm>
 #include <array>
@@ -6,10 +7,13 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <iomanip>
 #include <limits>
 #include <numeric>
 #include <queue>
 #include <set>
+#include <sstream>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -313,6 +317,7 @@ struct AnchorRequest
 
 struct BoundaryLoop
 {
+  size_t detected_loop_index = 0;
   std::vector<HalfedgeHandle> halfedges;
   std::vector<size_t> request_indices;
   std::vector<VertexHandle> anchors;
@@ -404,14 +409,21 @@ std::unordered_map<uint64_t, int> count_welded_edge_faces(
 
 bool get_boundary_edge_outer_direction(
   SMeshT& source, HalfedgeHandle boundary_halfedge,
-  double length_epsilon, Vec3d& outer)
+  double length_epsilon, Vec3d& outer, const char*& failure_reason)
 {
+  failure_reason = "none";
   if (!source.is_boundary(boundary_halfedge))
+  {
+    failure_reason = "not_boundary_halfedge";
     return false;
+  }
   const HalfedgeHandle inner = source.opposite_halfedge_handle(boundary_halfedge);
   const FaceHandle face = source.face_handle(inner);
   if (!face.is_valid())
+  {
+    failure_reason = "missing_incident_face";
     return false;
+  }
 
   const VertexHandle v0 = source.from_vertex_handle(boundary_halfedge);
   const VertexHandle v1 = source.to_vertex_handle(boundary_halfedge);
@@ -425,44 +437,108 @@ bool get_boundary_edge_outer_direction(
     }
   }
   if (!opposite.is_valid())
+  {
+    failure_reason = "missing_opposite_vertex";
     return false;
+  }
 
   const Vec3d p0 = source.point(v0);
   const Vec3d p1 = source.point(v1);
   const Vec3d edge = p1 - p0;
   const double edge_sqr = edge.squaredNorm();
   if (edge_sqr <= length_epsilon * length_epsilon)
+  {
+    failure_reason = "degenerate_edge";
     return false;
+  }
 
   const Vec3d midpoint = (p0 + p1) * 0.5;
   const Vec3d toward_opposite = source.point(opposite) - midpoint;
   Vec3d inward = toward_opposite - edge * ((toward_opposite | edge) / edge_sqr);
   if (inward.length() <= length_epsilon)
+  {
+    failure_reason = "degenerate_triangle";
     return false;
+  }
   inward.normalize();
   outer = -inward;
   return true;
 }
 
-bool barycentric_coordinates(
-  const Vec3d& p, const Vec3d& a, const Vec3d& b, const Vec3d& c,
-  double weights[3])
+// These helpers are called only after an existing acceptance test fails.
+// Missing rays, vertices, and hits are omitted rather than read uninitialized.
+void append_diagnostic_vector(
+  std::ostream& out, const std::string& name, const Vec3d& value)
 {
-  const Vec3d v0 = b - a;
-  const Vec3d v1 = c - a;
-  const Vec3d v2 = p - a;
-  const double d00 = v0 | v0;
-  const double d01 = v0 | v1;
-  const double d11 = v1 | v1;
-  const double d20 = v2 | v0;
-  const double d21 = v2 | v1;
-  const double denom = d00 * d11 - d01 * d01;
-  if (std::abs(denom) <= 1e-30 * std::max(d00 * d11, 1.0))
-    return false;
-  weights[1] = (d11 * d20 - d01 * d21) / denom;
-  weights[2] = (d00 * d21 - d01 * d20) / denom;
-  weights[0] = 1.0 - weights[1] - weights[2];
-  return true;
+  out << ' ' << name << "=(" << value.x() << ',' << value.y() << ','
+      << value.z() << ')';
+}
+
+void append_source_edge_diagnostics(
+  std::ostream& out, SMeshT& source, HalfedgeHandle halfedge,
+  const std::string& role)
+{
+  out << ' ' << role << "_halfedge=" << halfedge.idx();
+  if (!halfedge.is_valid() ||
+    static_cast<size_t>(halfedge.idx()) >= source.n_halfedges())
+    return;
+  const VertexHandle from = source.from_vertex_handle(halfedge);
+  const VertexHandle to = source.to_vertex_handle(halfedge);
+  out << ' ' << role << "_from_vertex=" << from.idx()
+      << ' ' << role << "_to_vertex=" << to.idx();
+  if (!from.is_valid() || !to.is_valid())
+    return;
+  const Vec3d p0 = source.point(from);
+  const Vec3d p1 = source.point(to);
+  append_diagnostic_vector(out, role + "_from_point", p0);
+  append_diagnostic_vector(out, role + "_to_point", p1);
+  const Vec3d edge = p1 - p0;
+  const double edge_sqr = edge.squaredNorm();
+  out << ' ' << role << "_edge_squared_length=" << edge_sqr;
+  const FaceHandle face = source.face_handle(
+    source.opposite_halfedge_handle(halfedge));
+  out << ' ' << role << "_incident_face=" << face.idx();
+  if (!face.is_valid())
+    return;
+  for (VertexHandle opposite : source.fv_range(face))
+  {
+    if (opposite == from || opposite == to)
+      continue;
+    out << ' ' << role << "_opposite_vertex=" << opposite.idx();
+    const Vec3d p2 = source.point(opposite);
+    append_diagnostic_vector(out, role + "_opposite_point", p2);
+    if (edge_sqr > 0.0 && std::isfinite(edge_sqr))
+    {
+      const Vec3d toward_opposite = p2 - (p0 + p1) * 0.5;
+      const Vec3d inward =
+        toward_opposite - edge * ((toward_opposite | edge) / edge_sqr);
+      out << ' ' << role << "_triangle_height=" << inward.length();
+    }
+    break;
+  }
+}
+
+void append_ray_hit_diagnostics(
+  std::ostream& out, const RayTriangleBvh& ray_tree, const RayHit& hit,
+  const std::string& role)
+{
+  out << ' ' << role << "_found=" << hit.hit;
+  if (!hit.hit)
+    return;
+  out << ' ' << role << "_t=" << hit.t
+      << ' ' << role << "_finite_point=" << finite_vec(hit.point)
+      << ' ' << role << "_weights=(" << hit.weights[0] << ','
+      << hit.weights[1] << ',' << hit.weights[2] << ')';
+  append_diagnostic_vector(out, role + "_point", hit.point);
+  const RayTriangle& triangle = ray_tree.triangle(hit.triangle);
+  out << ' ' << role << "_triangle=" << hit.triangle
+      << ' ' << role << "_cage_face=" << triangle.face.idx();
+  for (size_t i = 0; i < 3; i++)
+  {
+    const std::string vertex_name = role + "_cage_vertex" + std::to_string(i);
+    out << ' ' << vertex_name << "_id=" << triangle.vertices[i].idx();
+    append_diagnostic_vector(out, vertex_name + "_point", triangle.p[i]);
+  }
 }
 
 EdgeHandle edge_between(SMeshT& mesh, VertexHandle a, VertexHandle b)
@@ -837,7 +913,9 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
   const double source_scale = std::max((source_box.hi - source_box.lo).length(), 1.0);
   const double cage_scale = std::max((cage_box.hi - cage_box.lo).length(), 1.0);
   const double length_epsilon = source_scale * 1e-12;
-  const double intersection_epsilon = cage_scale * 1e-10;
+  // Source rays can meet the enclosing cage arbitrarily close to their origin.
+  // ray_triangle still rejects t <= 0 and non-finite intersection distances.
+  const double min_ray_t = 0.0;
   const double anchor_merge_epsilon = cage_scale * 1e-9;
 
   // A half-edge mesh cannot represent a non-manifold vertex, so OpenMesh's
@@ -929,17 +1007,46 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
   for (size_t loop_index = 0; loop_index < loops.size(); loop_index++)
   {
     BoundaryLoop candidate = loops[loop_index];
+    candidate.detected_loop_index = loop_index;
     std::vector<AnchorRequest> loop_requests;
     loop_requests.reserve(candidate.halfedges.size());
     bool valid = true;
     for (size_t i = 0; i < candidate.halfedges.size(); i++)
     {
       const HalfedgeHandle boundary_halfedge = candidate.halfedges[i];
+      const auto failure_context = [&](const char* reason)
+      {
+        std::ostringstream out;
+        out << std::setprecision(17)
+            << "boundary rail anchor failure: mode="
+            << (mode == BoundaryRailAnchorMode::EdgeMidpoint ?
+                "edge-midpoint" : "vertex-bisector")
+            << " detected_loop=" << loop_index << " anchor=" << i
+            << " loop_anchor_count=" << candidate.halfedges.size()
+            << " reason=" << reason
+            << " source_scale=" << source_scale << " cage_scale=" << cage_scale
+            << " length_epsilon=" << length_epsilon
+            << " min_ray_t=" << min_ray_t
+            << " anchor_merge_epsilon=" << anchor_merge_epsilon;
+        append_source_edge_diagnostics(out, *source, boundary_halfedge, "current");
+        if (mode != BoundaryRailAnchorMode::EdgeMidpoint)
+        {
+          const HalfedgeHandle incoming = candidate.halfedges[
+            (i + candidate.halfedges.size() - 1) % candidate.halfedges.size()];
+          append_source_edge_diagnostics(out, *source, incoming, "incoming");
+        }
+        return out;
+      };
       Vec3d support_outer_direction;
+      const char* conormal_failure = "none";
       if (!get_boundary_edge_outer_direction(
           *source, boundary_halfedge, length_epsilon,
-          support_outer_direction))
+          support_outer_direction, conormal_failure))
       {
+        PhaseTimer::Exclusion exclusion("diagnostic");
+        auto diagnostic = failure_context("current_edge_conormal_failed");
+        diagnostic << " conormal_failure=" << conormal_failure;
+        Logger::user_logger->warn("{}", diagnostic.str());
         valid = false;
         break;
       }
@@ -967,8 +1074,13 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
         Vec3d incoming_outer_direction;
         if (!get_boundary_edge_outer_direction(
             *source, incoming, length_epsilon,
-            incoming_outer_direction))
+            incoming_outer_direction, conormal_failure))
         {
+          PhaseTimer::Exclusion exclusion("diagnostic");
+          auto diagnostic = failure_context("incoming_edge_conormal_failed");
+          diagnostic << " conormal_failure=" << conormal_failure;
+          append_diagnostic_vector(diagnostic, "current_conormal", support_outer_direction);
+          Logger::user_logger->warn("{}", diagnostic.str());
           valid = false;
           break;
         }
@@ -978,6 +1090,15 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
         // condition and must not depend on the source mesh's physical scale.
         if (ray_direction.length() <= 1e-12)
         {
+          PhaseTimer::Exclusion exclusion("diagnostic");
+          auto diagnostic = failure_context("vertex_conormal_cancellation");
+          diagnostic << " cancellation_epsilon=" << 1e-12
+                     << " conormal_sum_length=" << ray_direction.length();
+          append_diagnostic_vector(diagnostic, "current_conormal", support_outer_direction);
+          append_diagnostic_vector(diagnostic, "incoming_conormal", incoming_outer_direction);
+          append_diagnostic_vector(diagnostic, "conormal_sum", ray_direction);
+          append_diagnostic_vector(diagnostic, "ray_origin", source->point(source_from));
+          Logger::user_logger->warn("{}", diagnostic.str());
           valid = false;
           break;
         }
@@ -987,9 +1108,26 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
 
       RayHit hit;
       if (!ray_tree.first_intersection(
-          origin, ray_direction, intersection_epsilon, hit) ||
-        !finite_vec(hit.point))
+          origin, ray_direction, min_ray_t, hit))
       {
+        PhaseTimer::Exclusion exclusion("diagnostic");
+        auto diagnostic = failure_context("ray_no_hit");
+        append_diagnostic_vector(diagnostic, "ray_origin", origin);
+        append_diagnostic_vector(diagnostic, "ray_direction", ray_direction);
+        append_diagnostic_vector(diagnostic, "cage_box_min", cage_box.lo);
+        append_diagnostic_vector(diagnostic, "cage_box_max", cage_box.hi);
+        Logger::user_logger->warn("{}", diagnostic.str());
+        valid = false;
+        break;
+      }
+      if (!finite_vec(hit.point))
+      {
+        PhaseTimer::Exclusion exclusion("diagnostic");
+        auto diagnostic = failure_context("ray_nonfinite_hit");
+        append_diagnostic_vector(diagnostic, "ray_origin", origin);
+        append_diagnostic_vector(diagnostic, "ray_direction", ray_direction);
+        append_ray_hit_diagnostics(diagnostic, ray_tree, hit, "hit");
+        Logger::user_logger->warn("{}", diagnostic.str());
         valid = false;
         break;
       }
@@ -1027,6 +1165,15 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
         request.edge = edge_between(*cage, triangle.vertices[a], triangle.vertices[b]);
         if (!request.edge.is_valid())
         {
+          PhaseTimer::Exclusion exclusion("diagnostic");
+          auto diagnostic = failure_context("cage_edge_lookup_failed");
+          diagnostic << " cage_edge_from_vertex=" << triangle.vertices[a].idx()
+                     << " cage_edge_to_vertex=" << triangle.vertices[b].idx()
+                     << " bary_epsilon=" << bary_epsilon;
+          append_diagnostic_vector(diagnostic, "ray_origin", origin);
+          append_diagnostic_vector(diagnostic, "ray_direction", ray_direction);
+          append_ray_hit_diagnostics(diagnostic, ray_tree, hit, "hit");
+          Logger::user_logger->warn("{}", diagnostic.str());
           valid = false;
           break;
         }
@@ -1045,14 +1192,7 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
     }
 
     if (!valid)
-    {
-      Logger::user_logger->warn(
-        "boundary rail construction skipped source boundary component {} because a {} anchor ray was undefined or missed the cage.",
-        loop_index,
-        mode == BoundaryRailAnchorMode::EdgeMidpoint ?
-          "edge-midpoint" : "vertex-bisector");
       continue;
-    }
     candidate.request_indices.clear();
     for (AnchorRequest& request : loop_requests)
     {
@@ -1067,6 +1207,23 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
 
   if (valid_loops.empty())
     return stats;
+
+  const auto insertion_failure_context = [&](const char* reason, size_t request_index)
+  {
+    const AnchorRequest& request = requests[request_index];
+    std::ostringstream out;
+    out << std::setprecision(17)
+        << "boundary rail insertion failure: mode="
+        << (mode == BoundaryRailAnchorMode::EdgeMidpoint ?
+            "edge-midpoint" : "vertex-bisector")
+        << " reason=" << reason << " request=" << request_index
+        << " detected_loop=" << valid_loops[request.loop_index].detected_loop_index
+        << " anchor=" << request.order_index
+        << " source_cage_face=" << request.source_face.idx()
+        << " anchor_merge_epsilon=" << anchor_merge_epsilon;
+    append_diagnostic_vector(out, "anchor_point", request.point);
+    return out;
+  };
 
   OpenMesh::FPropHandleT<int> source_face_property;
   cage->add_property(source_face_property, "boundary_rail_source_face");
@@ -1109,6 +1266,11 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
       const EdgeHandle current_edge = edge_between(*cage, left, right);
       if (!current_edge.is_valid())
       {
+        PhaseTimer::Exclusion exclusion("diagnostic");
+        auto diagnostic = insertion_failure_context("split_edge_not_found", request_index);
+        diagnostic << " original_cage_edge=" << request.edge.idx()
+                   << " from_vertex=" << left.idx() << " to_vertex=" << right.idx();
+        Logger::user_logger->error("{}", diagnostic.str());
         insertion_ok = false;
         break;
       }
@@ -1162,6 +1324,10 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
     const int source_face = request.source_face.idx();
     if (source_face < 0 || static_cast<size_t>(source_face) >= descendants.size())
     {
+      PhaseTimer::Exclusion exclusion("diagnostic");
+      auto diagnostic = insertion_failure_context("source_face_out_of_range", request_index);
+      diagnostic << " descendants_size=" << descendants.size();
+      Logger::user_logger->error("{}", diagnostic.str());
       insertion_ok = false;
       break;
     }
@@ -1176,7 +1342,7 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
       for (VertexHandle vh : cage->fv_range(fh))
         containing_vertices[i++] = vh;
       double weights[3] = {};
-      if (!barycentric_coordinates(
+      if (!detail::rail_barycentric_coordinates(
           request.point,
           cage->point(containing_vertices[0]),
           cage->point(containing_vertices[1]),
@@ -1194,6 +1360,40 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
     }
     if (!containing_face.is_valid())
     {
+      PhaseTimer::Exclusion exclusion("diagnostic");
+      auto diagnostic = insertion_failure_context("containing_face_not_found", request_index);
+      diagnostic << " descendants_count=" << descendants[source_face].size()
+                 << " bary_epsilon=" << 1e-8;
+      for (FaceHandle fh : descendants[source_face])
+      {
+        diagnostic << " candidate_face=" << fh.idx();
+        if (!fh.is_valid() || cage->status(fh).deleted())
+        {
+          diagnostic << " candidate_unavailable=1";
+          continue;
+        }
+        std::array<Vec3d, 3> points;
+        size_t count = 0;
+        for (VertexHandle vh : cage->fv_range(fh))
+        {
+          if (count < points.size())
+            points[count] = cage->point(vh);
+          diagnostic << " candidate_vertex" << count << '=' << vh.idx();
+          append_diagnostic_vector(diagnostic,
+            "candidate_point" + std::to_string(count), cage->point(vh));
+          count++;
+        }
+        if (count != points.size())
+          continue;
+        double weights[3] = {};
+        const bool bary_valid = detail::rail_barycentric_coordinates(
+          request.point, points[0], points[1], points[2], weights);
+        diagnostic << " candidate_bary_valid=" << bary_valid;
+        if (bary_valid)
+          diagnostic << " candidate_weights=(" << weights[0] << ','
+                     << weights[1] << ',' << weights[2] << ')';
+      }
+      Logger::user_logger->error("{}", diagnostic.str());
       insertion_ok = false;
       break;
     }
@@ -1219,6 +1419,11 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
       const EdgeHandle edge = edge_between(*cage, a, b);
       if (!edge.is_valid())
       {
+        PhaseTimer::Exclusion exclusion("diagnostic");
+        auto diagnostic = insertion_failure_context("containing_face_edge_not_found", request_index);
+        diagnostic << " containing_face=" << containing_face.idx()
+                   << " from_vertex=" << a.idx() << " to_vertex=" << b.idx();
+        Logger::user_logger->error("{}", diagnostic.str());
         insertion_ok = false;
         break;
       }
@@ -1251,7 +1456,12 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
     {
       const VertexHandle anchor = requests[request_index].inserted_vertex;
       if (!anchor.is_valid())
+      {
+        PhaseTimer::Exclusion exclusion("diagnostic");
+        auto diagnostic = insertion_failure_context("missing_inserted_vertex", request_index);
+        Logger::user_logger->error("{}", diagnostic.str());
         return stats;
+      }
       loop.anchors.push_back(anchor);
       all_anchor_vertices.insert(anchor.idx());
     }
@@ -1288,8 +1498,10 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
     else
     {
       Logger::user_logger->warn(
-        "boundary rail construction could not form a simple closed cage edge loop for source boundary component {}.",
-        built_rails);
+        "boundary rail construction ({}) could not form a simple closed cage edge loop for source boundary component {}.",
+        mode == BoundaryRailAnchorMode::EdgeMidpoint ?
+          "edge-midpoint" : "vertex-bisector",
+        loop.detected_loop_index);
     }
   }
 
@@ -1323,30 +1535,31 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
   stats.builtLoopCount = built_rails;
   stats.railVertexCount = rail_vertices;
   stats.railEdgeCount = rail_edges;
-  double min_quality = DBL_MAX;
-  for (FaceHandle fh : cage->faces())
-  {
-    std::array<Vec3d, 3> points;
-    size_t i = 0;
-    for (VertexHandle vh : cage->fv_range(fh))
-      points[i++] = cage->point(vh);
-    const double a = (points[1] - points[0]).length();
-    const double b = (points[2] - points[1]).length();
-    const double c = (points[0] - points[2]).length();
-    const double denominator = a * a + b * b + c * c;
-    const double quality = denominator > 0.0 ?
-      2.0 * std::sqrt(3.0) *
-      (points[1] - points[0]).cross(points[2] - points[0]).length() /
-      denominator : 0.0;
-    min_quality = std::min(min_quality, quality);
-  }
+  // The minimum triangle quality was only reported; disabled because the
+  // rails do not need it.
+  // double min_quality = DBL_MAX;
+  // for (FaceHandle fh : cage->faces())
+  // {
+  //   std::array<Vec3d, 3> points;
+  //   size_t i = 0;
+  //   for (VertexHandle vh : cage->fv_range(fh))
+  //     points[i++] = cage->point(vh);
+  //   const double a = (points[1] - points[0]).length();
+  //   const double b = (points[2] - points[1]).length();
+  //   const double c = (points[0] - points[2]).length();
+  //   const double denominator = a * a + b * b + c * c;
+  //   const double quality = denominator > 0.0 ?
+  //     2.0 * std::sqrt(3.0) *
+  //     (points[1] - points[0]).cross(points[2] - points[0]).length() /
+  //     denominator : 0.0;
+  //   min_quality = std::min(min_quality, quality);
+  // }
   Logger::user_logger->info(
-    "boundary rail construction ({}) built {} closed rails from {} detected loops ({} ray-valid), with {} anchor requests, {} rail vertices, and {} rail edges; cage min triangle quality {}.",
+    "boundary rail construction ({}) built {} closed rails from {} detected loops ({} ray-valid), with {} anchor requests, {} rail vertices, and {} rail edges.",
     mode == BoundaryRailAnchorMode::EdgeMidpoint ?
       "edge-midpoint" : "vertex-bisector",
     built_rails, stats.detectedLoopCount, stats.rayValidLoopCount,
-    requests.size(), rail_vertices, rail_edges,
-    min_quality == DBL_MAX ? 0.0 : min_quality);
+    requests.size(), rail_vertices, rail_edges);
   // Match the pre-benchmark return semantics: ray-invalid source loops are
   // reported but do not make a partially successful build fail.
   stats.successful = built_rails == valid_loops.size();

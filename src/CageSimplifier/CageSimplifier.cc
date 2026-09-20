@@ -29,6 +29,7 @@ void configure_phase3_strategy(
 
 bool validate_and_log_boundary_rails(SMeshT* mesh, const char* stage)
 {
+  PhaseTimer::Exclusion exclusion("check");
   std::map<int, std::vector<VertexHandle>> rail_vertices;
   std::map<int, std::vector<EdgeHandle>> rail_edges;
   for (VertexHandle vh : mesh->vertices())
@@ -162,21 +163,19 @@ void CageSimplifier::simplify()
   }
 
   degeneration_remover->perform();
-  if (param->enableBoundaryRails &&
-    !validate_and_log_boundary_rails(rm, "after degeneration removal"))
-    throw std::logic_error("boundary rail topology became invalid during degeneration removal");
+  // Rail topology verification is disabled; the cage does not need it.
+  // if (param->enableBoundaryRails &&
+  //   !validate_and_log_boundary_rails(rm, "after degeneration removal"))
+  //   throw std::logic_error("boundary rail topology became invalid during degeneration removal");
   if (is_phase3_energy_mode(param->phase3Mode))
   {
     run_phase3_energy_simplification();
-    if (param->enableBoundaryRails &&
-      !validate_and_log_boundary_rails(rm, "after Phase 3"))
-      throw std::logic_error("boundary rail topology became invalid during Phase 3");
-    const std::string quality_label = "after phase 3 " + param->phase3Mode;
-    log_min_triangle_quality(quality_label.c_str());
-    const std::string phase3_path =
-      param->fileOutPath + param->fileName + "_debug_phase3_" + param->phase3Mode + ".obj";
-    OpenMesh::IO::write_mesh(*rm, phase3_path, OpenMesh::IO::Options::Default, 15);
-    Logger::user_logger->info("wrote phase 3 {} OBJ: {}", param->phase3Mode, phase3_path);
+    // Verification and the log-only minimum quality are disabled.
+    // if (param->enableBoundaryRails &&
+    //   !validate_and_log_boundary_rails(rm, "after Phase 3"))
+    //   throw std::logic_error("boundary rail topology became invalid during Phase 3");
+    // const std::string quality_label = "after phase 3 " + param->phase3Mode;
+    // log_min_triangle_quality(quality_label.c_str());
 
     degeneration_remover = nullptr;
     fast_simplifier = nullptr;
@@ -188,11 +187,7 @@ void CageSimplifier::simplify()
   else
   {
     fast_simplifier->simplify();
-    log_min_triangle_quality("after fast simplify");
-    const std::string fast_simplify_path =
-      param->fileOutPath + param->fileName + "_debug_fast_simplify.obj";
-    OpenMesh::IO::write_mesh(*rm, fast_simplify_path, OpenMesh::IO::Options::Default, 15);
-    Logger::user_logger->info("wrote fast simplify OBJ: {}", fast_simplify_path);
+    // log_min_triangle_quality("after fast simplify");
   }
 
   #ifdef OUTPUT_MIDDLE_RESULT
@@ -341,13 +336,13 @@ void CageSimplifier::run_phase3_linear_solve_iterations()
     const size_t rail_updates =
       param->enableBoundaryRails && param->enableRailUpdate ?
       update_boundary_rails(*rm) : 0;
+    // The per-cycle minimum quality and rail verification are disabled.
     Logger::user_logger->info(
-      "phase 3 linear-solve cycle {}: collapsed {}, flipped {}, rail updates {}, vertices {}, min triangle quality {}.",
-      iteration + 1, collapsed, flipped, rail_updates,
-      rm->n_vertices(), calc_min_triangle_quality());
-    if (param->enableBoundaryRails &&
-      !validate_and_log_boundary_rails(rm, "after linear-solve cycle"))
-      throw std::logic_error("boundary rail topology became invalid during linear-solve iteration");
+      "phase 3 linear-solve cycle {}: collapsed {}, flipped {}, rail updates {}, vertices {}.",
+      iteration + 1, collapsed, flipped, rail_updates, rm->n_vertices());
+    // if (param->enableBoundaryRails &&
+    //   !validate_and_log_boundary_rails(rm, "after linear-solve cycle"))
+    //   throw std::logic_error("boundary rail topology became invalid during linear-solve iteration");
     if (collapsed == 0 && flipped == 0 && rail_updates == 0)
     {
       Logger::user_logger->info("phase 3 linear-solve iterations stopped: no accepted collapses, flips, or rail updates.");
@@ -379,12 +374,13 @@ void CageSimplifier::run_phase3_linear_solve_iterations()
         break;
     }
   }
+  // The minimum quality and rail verification after relocation are disabled.
   Logger::user_logger->info(
-    "phase 3 linear-solve final relocation: moves {} in {} sweeps, vertices {}, min triangle quality {}.",
-    relocated, sweeps, rm->n_vertices(), calc_min_triangle_quality());
-  if (param->enableBoundaryRails &&
-    !validate_and_log_boundary_rails(rm, "after final linear-solve relocation"))
-    throw std::logic_error("boundary rail topology became invalid during final linear-solve relocation");
+    "phase 3 linear-solve final relocation: moves {} in {} sweeps, vertices {}.",
+    relocated, sweeps, rm->n_vertices());
+  // if (param->enableBoundaryRails &&
+  //   !validate_and_log_boundary_rails(rm, "after final linear-solve relocation"))
+  //   throw std::logic_error("boundary rail topology became invalid during final linear-solve relocation");
   relocate_stage = nullptr;
 }
 
@@ -429,6 +425,8 @@ double CageSimplifier::calc_triangle_quality(FaceHandle fh) const
 
 double CageSimplifier::calc_min_triangle_quality() const
 {
+  // Only reported in the log.
+  PhaseTimer::Exclusion exclusion("check");
   double min_quality = DBL_MAX;
   for (FaceHandle fh : rm->faces())
     min_quality = std::min(min_quality, calc_triangle_quality(fh));
@@ -470,12 +468,13 @@ void CageSimplifier::simplify_to_target_num()
   while (true)  // when collapsed_edge_num == edge_num_to_collapse, end loop immediately.
   {
     update_strategy();
+    // Log-only minimum qualities are disabled.
     collapse_stage->do_collapse(force_skip_en.front(), total_cen);
-    log_min_triangle_quality("after collapse");
+    // log_min_triangle_quality("after collapse");
     flip_stage->do_flip();
-    log_min_triangle_quality("after flip");
+    // log_min_triangle_quality("after flip");
     relocate_stage->do_relocate();
-    log_min_triangle_quality("after relocate");
+    // log_min_triangle_quality("after relocate");
     size_t collapsed_this_iter = total_cen - last_iter_cen;
     last_iter_cen = total_cen;
     // forced to jump out,

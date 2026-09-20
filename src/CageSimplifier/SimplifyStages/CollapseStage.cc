@@ -2575,12 +2575,14 @@ void CollapseStage::do_collapse(size_t edge_num_to_collapse, size_t& total_colla
     /*check_face_orientation_violation*/true, /*check_selfinter*/true, /*check_inter*/true);
 
   initialize_collapse_edges_reward();
-  log_edge_side_stats("collapse candidates", collect_candidate_edge_side_stats());
+  // Walked a copy of the whole queue for the log only; disabled.
+  // log_edge_side_stats("collapse candidates", collect_candidate_edge_side_stats());
 
   size_t n_vertices = rm->n_vertices();
   size_t collapsed_edge_num = 0;
-  EdgeSideStats attempted_stats;
-  EdgeSideStats collapsed_stats;
+  // Edge-side statistics were collected for the log only; disabled.
+  // EdgeSideStats attempted_stats;
+  // EdgeSideStats collapsed_stats;
   while (!edges_to_collapse.empty())
   {
     auto edge_reward = edges_to_collapse.top();
@@ -2592,12 +2594,12 @@ void CollapseStage::do_collapse(size_t edge_num_to_collapse, size_t& total_colla
     if (rm->status(edge_reward.eh).deleted())
       continue;
 
-    EdgeSide edge_side = classify_edge_side(edge_reward.eh);
-    add_edge_side(attempted_stats, edge_side);
+    // EdgeSide edge_side = classify_edge_side(edge_reward.eh);
+    // add_edge_side(attempted_stats, edge_side);
 
     if (edge_collapser.try_collapse_edge(edge_reward.eh, edge_reward.new_point, nullptr))
     {
-      add_edge_side(collapsed_stats, edge_side);
+      // add_edge_side(collapsed_stats, edge_side);
       VertexHandle center_v = edge_collapser.get_collapsed_center();
       update_after_collapsing(center_v);
 
@@ -2612,8 +2614,8 @@ void CollapseStage::do_collapse(size_t edge_num_to_collapse, size_t& total_colla
     }
   }
   Logger::user_logger->info("collapsed {} edges.", collapsed_edge_num);
-  log_edge_side_stats("collapse attempted edges", attempted_stats);
-  log_edge_side_stats("collapse succeeded edges", collapsed_stats);
+  // log_edge_side_stats("collapse attempted edges", attempted_stats);
+  // log_edge_side_stats("collapse succeeded edges", collapsed_stats);
   rm->garbage_collection();
   lrt->collect_garbage();
   init_one_ring_faces(rm);

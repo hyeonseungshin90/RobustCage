@@ -1,5 +1,5 @@
 #include "CageGenerator.hh"
-#include <chrono>
+#include <fstream>
 #include "omp.h"
 
 namespace Cage
@@ -114,69 +114,127 @@ void CageGenerator::stageSimplify()
 void CageGenerator::generate()
 {
   omp_set_num_threads(12);
-
-  const auto seconds_since = [](std::chrono::steady_clock::time_point start)
-  {
-    return std::chrono::duration<double>(
-      std::chrono::steady_clock::now() - start).count();
-  };
+  phase1Timer = PhaseTimer();
+  phase2Timer = PhaseTimer();
+  phase3Timer = PhaseTimer();
 
   // Phase 1: initial cage.
-  const auto phase1_start = std::chrono::steady_clock::now();
+  phase1Timer.start();
   if (inputCagePath.empty())
     stageInitialize();
   else
+  {
+    PhaseTimer::Exclusion exclusion("input");
     stageLoadInitialCage();
-  const double phase1_seconds = seconds_since(phase1_start);
+  }
+  phase1Timer.stop();
 
   // Phase 2: boundary rails.
-  const bool rails_enabled = param.paramCageSimplifier.enableBoundaryRails;
-  double phase2_seconds = 0.0;
-  if (rails_enabled)
+  if (param.paramCageSimplifier.enableBoundaryRails)
   {
-    const auto phase2_start = std::chrono::steady_clock::now();
+    phase2Timer.start();
     if (inputRailPath.empty())
       stageBuildBoundaryRails();
     else
+    {
+      PhaseTimer::Exclusion exclusion("input");
       stageLoadBoundaryRails();
+    }
+    phase2Timer.stop();
     stageExportPhase2();
-    phase2_seconds = seconds_since(phase2_start);
   }
 
   cageInitializer = nullptr;
   VMesh = nullptr;
 
   // Phase 3: simplification.
-  const auto phase3_start = std::chrono::steady_clock::now();
+  phase3Timer.start();
   stageSimplify();
-  const double phase3_seconds = seconds_since(phase3_start);
+  phase3Timer.stop();
 
-  if (inputCagePath.empty())
+  reportPhaseTimes();
+}
+
+void CageGenerator::reportPhaseTimes() const
+{
+  const auto excluded_text = [](const PhaseTimer& timer)
   {
-    Logger::user_logger->info(
-      "Phase 1 elapsed time: {:.6f} seconds.", phase1_seconds);
-  }
-  else
+    std::string text;
+    for (const auto& entry : timer.excludedSeconds())
+      text += fmt::format("{} {:.6f} s, ", entry.first, entry.second);
+    return text + fmt::format("logging {:.6f} s", timer.loggingSeconds());
+  };
+  const auto phase_json = [](const PhaseTimer& timer, const char* status)
+  {
+    boost::json::object excluded;
+    for (const auto& entry : timer.excludedSeconds())
+      excluded[entry.first] = entry.second;
+    excluded["logging"] = timer.loggingSeconds();
+    boost::json::object phase;
+    phase["status"] = status;
+    phase["seconds"] = timer.wasStarted() ? timer.seconds() : 0.0;
+    phase["excluded"] = excluded;
+    return phase;
+  };
+
+  const bool phase1_loaded = !inputCagePath.empty();
+  const bool rails_enabled = param.paramCageSimplifier.enableBoundaryRails;
+  const bool phase2_loaded = rails_enabled && !inputRailPath.empty();
+  const auto input_seconds = [](const PhaseTimer& timer)
+  {
+    const auto found = timer.excludedSeconds().find("input");
+    return found == timer.excludedSeconds().end() ? 0.0 : found->second;
+  };
+
+  if (phase1_loaded)
   {
     Logger::user_logger->info(
       "Phase 1 skipped: initial cage loaded from file in {:.6f} seconds.",
-      phase1_seconds);
-  }
-  if (!rails_enabled)
-    Logger::user_logger->info("Phase 2 skipped: boundary rails disabled.");
-  else if (inputRailPath.empty())
-  {
-    Logger::user_logger->info(
-      "Phase 2 elapsed time: {:.6f} seconds.", phase2_seconds);
+      input_seconds(phase1Timer));
   }
   else
   {
     Logger::user_logger->info(
+      "Phase 1 elapsed time: {:.6f} seconds; excluded: {}.",
+      phase1Timer.seconds(), excluded_text(phase1Timer));
+  }
+  if (!rails_enabled)
+    Logger::user_logger->info("Phase 2 skipped: boundary rails disabled.");
+  else if (phase2_loaded)
+  {
+    Logger::user_logger->info(
       "Phase 2 skipped: boundary rails loaded from file in {:.6f} seconds.",
-      phase2_seconds);
+      input_seconds(phase2Timer));
+  }
+  else
+  {
+    Logger::user_logger->info(
+      "Phase 2 elapsed time: {:.6f} seconds; excluded: {}.",
+      phase2Timer.seconds(), excluded_text(phase2Timer));
   }
   Logger::user_logger->info(
-    "Phase 3 elapsed time: {:.6f} seconds.", phase3_seconds);
+    "Phase 3 elapsed time: {:.6f} seconds; excluded: {}.",
+    phase3Timer.seconds(), excluded_text(phase3Timer));
+
+  boost::json::object timing;
+  timing["unit"] = "seconds";
+  timing["definition"] =
+    "computation time: wall time minus log output and the excluded sections "
+    "(file input/output and verification the cage does not need)";
+  timing["phase1"] = phase_json(phase1Timer, phase1_loaded ? "loaded" : "run");
+  timing["phase2"] = phase_json(
+    phase2Timer, !rails_enabled ? "disabled" : (phase2_loaded ? "loaded" : "run"));
+  timing["phase3"] = phase_json(phase3Timer, "run");
+  timing["total_seconds"] =
+    (phase1_loaded ? 0.0 : phase1Timer.seconds()) +
+    (rails_enabled && !phase2_loaded ? phase2Timer.seconds() : 0.0) +
+    phase3Timer.seconds();
+  const std::string timing_path = stageOutputPath("timing") + ".json";
+  std::ofstream timing_file(timing_path.c_str());
+  if (timing_file.is_open())
+    timing_file << boost::json::serialize(timing) << "\n";
+  else
+    Logger::user_logger->warn("fail to write phase times: {}", timing_path);
 }
 
 std::string CageGenerator::stageOutputName(const std::string& stage) const

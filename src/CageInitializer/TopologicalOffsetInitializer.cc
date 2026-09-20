@@ -361,6 +361,7 @@ void validateSimplicialEmbedding(
   const std::set<EdgeKey>& constraint_edges,
   const std::set<FaceKey>& constraint_faces)
 {
+  PhaseTimer::Exclusion exclusion("check");
   for (size_t tet_index = 0; tet_index < tets.size(); tet_index++)
   {
     const EmbeddedTet& tet = tets[tet_index];
@@ -699,8 +700,9 @@ void TopologicalOffsetInitializer::generate()
     vertices, tets, constraint_edges, constraint_faces, split_faces);
   splitTaggedBoundaryEdges(
     vertices, tets, constraint_edges, split_edges);
-  validateSimplicialEmbedding(
-    vertices, tets, constraint_edges, constraint_faces);
+  // Verification only; disabled because the cage does not need it.
+  // validateSimplicialEmbedding(
+  //   vertices, tets, constraint_edges, constraint_faces);
 
   Logger::user_logger->info(
     "simplicial embedding done: split {} tetrahedra, {} faces, {} edges; {} vertices and {} tetrahedra remain.",

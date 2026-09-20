@@ -70,6 +70,8 @@ bool VertexRounder::checkPositiveVolume(CellHandle ch, VertexHandle vh, const Po
 
 bool VertexRounder::checkAllTets(const char* stage)
 {
+  // Diagnostics for the log only.
+  PhaseTimer::Exclusion exclusion("check");
   // first we count rounded points.
   size_t rounded_vertices = 0;
   size_t unconstrained_vertices = 0;

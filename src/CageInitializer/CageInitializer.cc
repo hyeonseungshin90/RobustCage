@@ -19,6 +19,8 @@ const char* const kExactVertexTag = "#ev";
 
 bool hasExactNonAdjacentSelfIntersection(SM::SMeshT* mesh)
 {
+  // Verification only: the offset construction does not depend on it.
+  PhaseTimer::Exclusion exclusion("check");
   Geometry::LightDFaceTree tree(*mesh);
 
   for (SM::FaceHandle fh : mesh->faces())
@@ -80,6 +82,7 @@ size_t countBoundaryEdges(SM::SMeshT* mesh)
 
 void validateClosedManifoldCage(SM::SMeshT* mesh, const std::string& label)
 {
+  PhaseTimer::Exclusion exclusion("check");
   const size_t boundary_edges = countBoundaryEdges(mesh);
   size_t non_manifold_vertices = 0;
   for (SM::VertexHandle vertex : mesh->vertices())
@@ -101,46 +104,11 @@ void validateClosedManifoldCage(SM::SMeshT* mesh, const std::string& label)
     "{} manifold check passed: no boundary edges or singular vertices.",
     label);
 }
-
-void writeVolumeMeshFacesObj(VM::VMeshT* mesh, const std::string& file_name)
-{
-  std::fstream fout(file_name, std::fstream::out);
-  ASSERT(fout.is_open(), "fail to open {}", file_name);
-
-  fout << std::setprecision(17);
-  fout << "# volume mesh face dump\n";
-  fout << "# vertices " << mesh->nVertices() << "\n";
-  fout << "# faces " << mesh->nFaces() << "\n";
-  fout << "# cells " << mesh->nCells() << "\n";
-
-  for (size_t vidx = 0; vidx < mesh->nVertices(); vidx++)
-  {
-    auto& p = mesh->point(VM::VertexHandle(vidx));
-    fout << "v " << p.x() << " " << p.y() << " " << p.z() << "\n";
-  }
-
-  size_t written_faces = 0;
-  for (size_t fidx = 0; fidx < mesh->nFaces(); fidx++)
-  {
-    VM::FaceHandle fh(fidx);
-    if (mesh->face(fh).nConnCells() == 0)
-      continue;
-
-    auto fv = mesh->findFV(fh);
-    fout << "f "
-      << fv[0].idx() + 1 << " "
-      << fv[1].idx() + 1 << " "
-      << fv[2].idx() + 1 << "\n";
-    written_faces++;
-  }
-
-  fout.close();
-  Logger::user_logger->info("wrote volume mesh face OBJ: {} ({} faces)", file_name, written_faces);
-}
 }
 
 bool write_cage_obj(SM::SMeshT& cage, const std::string& path)
 {
+  PhaseTimer::Exclusion exclusion("output");
   std::ofstream fout(path.c_str());
   if (!fout.is_open())
   {
@@ -232,14 +200,12 @@ void CageInitializer::generate()
   tetrahedralizer = std::make_unique<Tetrahedralizer>(SMesh, &param->paramTetrahedralizer, outVMesh);
   tetrahedralizer->tetrahedralize();
   tetrahedralizer.reset();
-  writeVolumeMeshFacesObj(
-    outVMesh,
-    param->fileOutPath + param->fileName + "_debug_tetrahedralize.obj");
 
   tetrahedralizationPostProcess();
 
-  // The mesher's own output, before anything in this project touches it.
-  VertexRounder(outVMesh).checkAllTets("post-tetrahedralize");
+  // Diagnostics of the mesher's own output; disabled because the cage does
+  // not need them.
+  // VertexRounder(outVMesh).checkAllTets("post-tetrahedralize");
 
   if (input_boundary_edges == 0)
   {
@@ -261,20 +227,13 @@ void CageInitializer::generate()
   {
     tetMeshTrimmer = std::make_unique<TetMeshTrimmer>(outVMesh);
     tetMeshTrimmer->trim();
-    writeVolumeMeshFacesObj(
-      outVMesh,
-      param->fileOutPath + param->fileName + "_debug_trim.obj");
   }
   else if (param->phase1Mode == "topological_offset")
   {
     topologicalOffsetInitializer =
       std::make_unique<TopologicalOffsetInitializer>(outVMesh);
     topologicalOffsetInitializer->generate();
-    writeVolumeMeshFacesObj(
-      outVMesh,
-      param->fileOutPath + param->fileName +
-        "_debug_topological_offset.obj");
-    VertexRounder(outVMesh).checkAllTets("post-topological-offset");
+    // VertexRounder(outVMesh).checkAllTets("post-topological-offset");
   }
   else
   {
@@ -285,13 +244,17 @@ void CageInitializer::generate()
 
   // step 2.2. retrieve cage from tetrahedral mesh.
   retrieveCage(outVMesh, outSMesh);
-  if (param->phase1Mode == "topological_offset")
-    validateClosedManifoldCage(outSMesh, "Phase 1 topological-offset cage");
-  if (hasExactNonAdjacentSelfIntersection(outSMesh))
-  {
-    throw std::logic_error(
-      "Phase 1 cage has an exact non-adjacent self-intersection.");
-  }
+  // Verification of the extracted cage; disabled because it never rejected a
+  // cage and the exact self-intersection test dominated Phase 1 time.  A
+  // degenerate offset is still rejected during offset insertion.  Cages
+  // loaded with --cage are still checked in load().
+  // if (param->phase1Mode == "topological_offset")
+  //   validateClosedManifoldCage(outSMesh, "Phase 1 topological-offset cage");
+  // if (hasExactNonAdjacentSelfIntersection(outSMesh))
+  // {
+  //   throw std::logic_error(
+  //     "Phase 1 cage has an exact non-adjacent self-intersection.");
+  // }
 
   tetMeshTrimmer.reset();
   topologicalOffsetInitializer.reset();

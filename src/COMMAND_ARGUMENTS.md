@@ -328,8 +328,8 @@ Phase 2 결과 `<model>_phase2_cage_edge.obj` / `_vertex.obj`, `<model>_phase2_r
   중단합니다. `--rails`에 rail OBJ(`_phase2_rails.obj`)를 넘기면 옆의 `.txt`를 읽습니다.
 - `--cage`만 주고 `phase2_boundary_rail`을 켜면 불러온 cage 위에 rail을 새로 만듭니다. rail이
   이미 삽입된 `_phase2_cage.obj`에는 `--rails`도 함께 넘기세요.
-- 불러온 cage에는 Phase 1 종료 시와 같은 검사(닫힌 2-manifold, exact non-adjacent
-  self-intersection 없음)를 다시 적용하고, 실패하면 중단합니다.
+- 불러온 cage에는 닫힌 2-manifold 검사와 exact non-adjacent self-intersection 검사를 적용하고,
+  실패하면 중단합니다. (Phase 1에서 만든 cage에는 이 검사를 하지 않습니다.)
 - Rail 파일은 cage rail뿐 아니라 source boundary edge의 rail id와 outward co-normal(`S` 줄)도
   복원합니다. `phase3_rail_support`를 켠 Phase 3의 rail collapse는 이 half-strip에 투영하므로,
   `S` 줄이 없는 예전 rail 파일은 (rail support를 끈 경우에도) 읽지 않고 오류로 중단합니다. 다시 전체 실행하여 rail 파일을 만드세요.
@@ -351,6 +351,37 @@ JSON 설정 파일 사용:
 ```powershell
 .\exeCageGenerator.exe .\config.json C:\models\bunny.obj C:\out 500
 ```
+
+## Phase Time
+
+각 Phase의 시간은 cage 생성에 필요한 계산만 잽니다. Phase를 실행하는 동안의 wall-clock 시간에서
+로그 출력에 쓴 시간과 아래 제외 구간을 뺀 값입니다. 로그 출력 시간은 console·file log sink가 메시지를
+포맷하고 쓰는 데 걸린 시간을 직접 재서 뺍니다.
+
+| 제외 구간 | 해당 작업 |
+|---|---|
+| `output` | 파일 쓰기: Phase cage OBJ, rail 파일 |
+| `input` | `--cage` / `--rails`로 이전 결과를 읽는 시간 (이때 해당 Phase는 건너뜀으로 표시) |
+
+Collapse 중의 교차 검사처럼 알고리즘이 결과를 결정하는 데 쓰는 검사는 계산 시간에 포함됩니다.
+Offset 삽입 중 degenerate tetrahedron을 거르는 검사도 계산에 포함되어 그대로 실행됩니다.
+
+결과 cage에 필요 없는 검증과 로그용 계산은 코드에서 주석 처리해 실행하지 않습니다: Phase 1의 닫힌
+2-manifold 검사와 exact self-intersection 검사, tetrahedron volume 진단, simplicial embedding 검증,
+Phase 2·3의 rail topology 검증, 로그용 최소 triangle quality 계산. 이 검증들은 이번 실험에서 cage를
+거부한 적이 없고, 큰 cage에서는 self-intersection 검사만 수십 분이 걸렸습니다. `--cage`로 불러온 cage의
+검사는 유지하며 `input` 시간에 포함됩니다.
+실행이 끝나면 로그에 다음 형식으로 기록하고, 같은 값을 `<input_name>_timing.json`에 씁니다.
+
+```text
+Phase 1 elapsed time: 1.688031 seconds; excluded: output 0.173744 s, logging 0.000895 s.
+Phase 2 elapsed time: 0.057490 seconds; excluded: logging 0.000077 s.
+Phase 3 elapsed time: 101.428964 seconds; excluded: logging 0.006466 s.
+```
+
+`_timing.json`의 `phaseN.status`는 `run`, `loaded`(`--cage`/`--rails`), `disabled`(Phase 2를 쓰지 않음) 중
+하나이고, `total_seconds`는 실행한 Phase의 계산 시간 합입니다. `phase2_boundary_rail_compare`는
+CSV의 `phase1_seconds`, `edge_seconds`, `vertex_seconds`를 같은 방식으로 잽니다.
 
 ## Output
 
@@ -390,7 +421,7 @@ JSON 설정 파일 사용:
 | 파일 | 설명 |
 |---|---|
 | `log.txt` | 실행 로그입니다. |
-| `<input_name>_debug_topological_offset.obj` | 새 Phase 1이 생성한 offset-inserted tetrahedral mesh의 face dump입니다. |
+| `<input_name>_timing.json` | 각 Phase의 계산 시간입니다. 아래 [Phase Time](#phase-time)을 참고하세요. nested cage는 `_timing_1.json`, `_timing_2.json`, ...에 기록합니다. |
 | `<input_name>_phase1_cage.obj` | Phase 1이 만든 initial cage입니다. `--cage`로 넘기면 Phase 1을 건너뜁니다. `--cage`로 시작한 실행에서는 쓰지 않습니다. |
 | `<input_name>_phase2_cage.obj` | Phase 2를 실행한 경우, anchor 삽입과 geodesic embedding으로 분할된 Phase 3 직전의 cage입니다. 표면은 Phase 1 cage와 같고 정점·삼각형만 늘어납니다. `_phase2_rails.txt`의 정점 번호가 이 파일을 가리킵니다. |
 | `<input_name>_phase2_rails.obj` / `.txt` | 위 cage에 삽입된 Phase 3 직전의 rail입니다. 형식은 아래 `_phase3_rails`와 같으며, `.txt`를 `_phase2_cage.obj`와 함께 `--rails`로 넘기면 Phase 2를 건너뜁니다. |
@@ -401,8 +432,7 @@ JSON 설정 파일 사용:
 `_phase1_cage.obj`, `_phase2_cage.obj`, `_phase3_cage.obj`와
 `phase2_boundary_rail_compare`의 cage들은 좌표를 17자리 double로 기록하고, exact 좌표를 가진 정점은
 `#ev <vertex> <x> <y> <z>` 주석 줄에 유리수 좌표를 추가로 기록합니다. 일반 OBJ 뷰어는 주석 줄을
-무시합니다. 그 밖의 OBJ 출력(예: 최종 cage와 같은 메쉬의 디버그 복사본 `_debug_phase3_<mode>.obj`)은
-기존처럼 OpenMesh writer로 기록하며, OpenMesh는 좌표를 float로 변환해 저장합니다.
+무시합니다. 출력 cage는 위 표의 Phase 1·2·3 cage뿐이며, 중간 사면체 메쉬나 디버그용 OBJ는 쓰지 않습니다.
 
 ## Notes
 

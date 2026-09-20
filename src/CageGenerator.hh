@@ -34,6 +34,11 @@ public:
 
   // result
   std::unique_ptr<SM::SMeshT> cage;
+
+  // Computation time of each phase of the last generate(); see PhaseTimer.
+  PhaseTimer phase1Timer;
+  PhaseTimer phase2Timer;
+  PhaseTimer phase3Timer;
 public:
   void stageInitialize();
   void stageLoadInitialCage();
@@ -43,6 +48,9 @@ public:
   void stageSimplify();
 
   void generate();
+  // Logs the phase times of the last generate() and writes them to
+  // <model>_timing.json.
+  void reportPhaseTimes() const;
 
   // Output path without extension for one stage of the current cage label,
   // e.g. <out dir>/bunny_phase2_rails, or bunny_phase2_rails_1 for the

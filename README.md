@@ -203,6 +203,13 @@ Outputs are written under a unique run directory inside the input-name folder:
 
 If that directory already exists, the program appends `_001`, `_002`, and so on to avoid overwriting previous results.
 
+Each run logs the computation time of every phase and writes it to
+`input_name_timing.json`. The time is the wall-clock time of the phase minus the
+time spent writing log messages and files; the excluded times are reported
+separately. Verification the cage does not need (for example the exact
+self-intersection check of the Phase 1 cage) is commented out in the code and does
+not run. See `src/COMMAND_ARGUMENTS.md`.
+
 Each phase writes its cage. With several targets, the files of the second and
 later nested cages end in `_1`, `_2`, ... (e.g. `input_name_phase3_cage_1.obj`):
 
