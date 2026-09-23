@@ -140,7 +140,14 @@ void CageGenerator::stageSimplify()
   cageSimplifier = std::make_unique<CageSimplifier>(
     originalMesh.get(), cage.get(), &param.paramCageSimplifier);
 
-  cageSimplifier->simplify();
+  cageSimplifier->simplify(usesDefaultCleanup());
+}
+
+bool CageGenerator::usesDefaultCleanup() const
+{
+  return param.paramCageInitializer.phase1Mode == "subdivision" &&
+    param.paramCageSimplifier.phase3Mode == "fast" &&
+    !param.paramCageSimplifier.enableBoundaryRails;
 }
 
 void CageGenerator::generate()
@@ -161,11 +168,11 @@ void CageGenerator::generate()
   }
   phase1Timer.stop();
 
-  // The rails are built on the cleaned cage, so this runs before Phase 2.
-  // Loaded rails refer to the cage they were built on, so it is skipped then.
+  // Keep the original default pipeline's cleanup. Other phase combinations
+  // skip it; loaded rails must also retain the cage indices they refer to.
   cleanupBeforePhase2Seconds = 0.0;
   cleanupBeforePhase2Cases = 0;
-  if (inputRailPath.empty())
+  if (usesDefaultCleanup() && inputRailPath.empty())
   {
     const auto cleanup_start = PhaseTimer::Clock::now();
     cleanupBeforePhase2Cases = stageCleanupCage();
@@ -174,6 +181,11 @@ void CageGenerator::generate()
     Logger::user_logger->info(
       "degeneracy cleanup before Phase 2: {} cases in {:.6f} seconds (not counted in the phase time).",
       cleanupBeforePhase2Cases, cleanupBeforePhase2Seconds);
+  }
+  else if (!usesDefaultCleanup())
+  {
+    Logger::user_logger->info(
+      "degeneracy cleanup before Phase 2 disabled for non-default pipeline.");
   }
 
   // Phase 2: boundary rails.
@@ -274,9 +286,12 @@ void CageGenerator::reportPhaseTimes() const
   timing["phase3"] = phase_json(phase3Timer, "run");
   boost::json::object cleanup;
   boost::json::object before_phase2;
+  before_phase2["status"] = !usesDefaultCleanup() ? "disabled" :
+    (inputRailPath.empty() ? "run" : "skipped");
   before_phase2["seconds"] = cleanupBeforePhase2Seconds;
   before_phase2["cases"] = cleanupBeforePhase2Cases;
   boost::json::object in_phase3;
+  in_phase3["status"] = usesDefaultCleanup() ? "run" : "disabled";
   in_phase3["seconds"] = cageSimplifier ? cageSimplifier->degeneracyCleanupSeconds : 0.0;
   in_phase3["cases"] = cageSimplifier ? cageSimplifier->degeneracyCleanupCases : size_t(0);
   cleanup["before_phase2"] = before_phase2;

@@ -119,7 +119,7 @@ CageSimplifier::CageSimplifier(SMeshT* original, SMeshT* cage, ParamCageSimplifi
   :om(original), rm(cage), param(p)
 {}
 
-void CageSimplifier::simplify()
+void CageSimplifier::simplify(bool enable_degeneracy_cleanup)
 {
   Logger::user_logger->info("initializing simplifier.");
 
@@ -162,10 +162,13 @@ void CageSimplifier::simplify()
       param->enableRailSupport ? "on" : "off");
   }
 
+  degeneracyCleanupCases = 0;
+  degeneracyCleanupSeconds = 0.0;
+  if (enable_degeneracy_cleanup && param->phase3Mode == "fast" &&
+    !param->enableBoundaryRails)
   {
-    // The cage needs this repair, but it is not part of the simplification:
-    // it removes the near-degenerate triangles that Phase 1 and the rail
-    // embedding of Phase 2 leave behind.  CageGenerator reports it on its own.
+    // Preserve the default pipeline's near-degeneracy cleanup. It is timed
+    // separately from simplification.
     PhaseTimer::Exclusion exclusion("cleanup");
     const auto cleanup_start = PhaseTimer::Clock::now();
     degeneracyCleanupCases = degeneration_remover->perform();
@@ -174,6 +177,11 @@ void CageSimplifier::simplify()
     Logger::user_logger->info(
       "degeneracy cleanup in Phase 3: {} cases in {:.6f} seconds (not counted in the phase time).",
       degeneracyCleanupCases, degeneracyCleanupSeconds);
+  }
+  else
+  {
+    Logger::user_logger->info(
+      "degeneracy cleanup before Phase 3 disabled for non-default pipeline.");
   }
   // Rail topology verification is disabled; the cage does not need it.
   // if (param->enableBoundaryRails &&

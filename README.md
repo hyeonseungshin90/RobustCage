@@ -48,6 +48,12 @@ Phase 1 has two modes:
 * `default` keeps the original two rounds of global 1-to-12 tetrahedron subdivision.
 * `phase1_topological_offset` uses the simplicial embedding and offset insertion of Zint et al., then extracts the initial-cage boundary.
 
+Near-degeneracy cleanup before Phases 2 and 3 is retained only for the
+original `default` pipeline (subdivision, fast simplification, no rails).
+Other phase combinations skip both cleanup passes, including
+`phase1_topological_offset` alone. The same rule applies to JSON configurations.
+The timing JSON records each cleanup pass as `run`, `disabled`, or `skipped`.
+
 For example:
 
 `exeCageGenerator.exe phase1_topological_offset path-to-input path-to-out-dir target_Nv`

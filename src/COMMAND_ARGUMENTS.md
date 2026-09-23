@@ -74,6 +74,13 @@ config.json
 
 `phase1_topological_offset`을 명시한 경우에만 새 Phase 1을 사용합니다. `default`와 `phase3_*` 토큰만 사용한 명령은 이전과 동일하게 subdivision 기반 Phase 1을 수행하고 Phase 2는 건너뜁니다.
 
+Phase 2 직전과 Phase 3 직전의 near-degeneracy cleanup은 기존 `default`
+조합(Phase 1 `subdivision`, Phase 3 `fast`, boundary rails 꺼짐)에서만 유지합니다.
+그 외 조합에서는 두 cleanup을 모두 건너뜁니다. `phase1_topological_offset`만
+지정한 경우에도 cleanup은 꺼지며, JSON 설정에도 같은 기준을 적용합니다.
+Timing JSON의 각 cleanup 항목은 `status`에 `run`, `disabled`, 또는 `skipped`를
+기록하고, 실행하지 않은 cleanup의 시간과 처리 건수는 0입니다.
+
 양의 목표 정점 수를 지정한 `linear_solve`에서는 `collapse → flip → rail update`를 기본 최대 30회 반복한 뒤,
 마지막에 relocation 단계를 한 번 실행합니다.
 목표 정점 수를 `0`으로 지정하거나 생략하면 정점 수, collapse pass 횟수,

@@ -39,8 +39,8 @@ public:
   PhaseTimer phase1Timer;
   PhaseTimer phase2Timer;
   PhaseTimer phase3Timer;
-  // Degeneracy cleanup runs before Phase 2 and again at the start of Phase 3.
-  // Both are reported on their own and left out of the phase times.
+  // The default pipeline keeps cleanup before Phase 2 and at the start of
+  // Phase 3. Both are reported separately and excluded from the phase times.
   double cleanupBeforePhase2Seconds = 0.0;
   size_t cleanupBeforePhase2Cases = 0;
 public:
@@ -65,6 +65,8 @@ public:
   std::string stageOutputPath(const std::string& stage) const;
   // Its file name part, e.g. bunny_phase2_rails.
   std::string stageOutputName(const std::string& stage) const;
+private:
+  bool usesDefaultCleanup() const;
 };
 
 
