@@ -437,11 +437,17 @@ void run_boundary_rail_anchor_benchmark(
   Cage::SM::SMeshT edge_cage(*cage_generator.cage);
   Cage::SM::SMeshT vertex_cage(*cage_generator.cage);
 
+  Cage::CageInit::BoundaryRailSearchOptions search_options;
+  const auto& simplifier_options = cage_generator.param.paramCageSimplifier;
+  search_options.candidateLimit = simplifier_options.boundaryRailCandidateLimit;
+  search_options.retryCyclicStarts = simplifier_options.boundaryRailRetryCyclicStarts;
+  search_options.maxSeconds = simplifier_options.boundaryRailSearchSeconds;
+
   PhaseTimer edge_timer;
   edge_timer.start();
   Cage::CageInit::BoundaryRailBuilder edge_builder(
     &edge_source, &edge_cage,
-    Cage::CageInit::BoundaryRailAnchorMode::EdgeMidpoint);
+    Cage::CageInit::BoundaryRailAnchorMode::EdgeMidpoint, search_options);
   const Cage::CageInit::BoundaryRailBuildStats edge =
     edge_builder.build_with_stats();
   edge_timer.stop();
@@ -451,7 +457,7 @@ void run_boundary_rail_anchor_benchmark(
   vertex_timer.start();
   Cage::CageInit::BoundaryRailBuilder vertex_builder(
     &vertex_source, &vertex_cage,
-    Cage::CageInit::BoundaryRailAnchorMode::VertexBisector);
+    Cage::CageInit::BoundaryRailAnchorMode::VertexBisector, search_options);
   const Cage::CageInit::BoundaryRailBuildStats vertex =
     vertex_builder.build_with_stats();
   vertex_timer.stop();

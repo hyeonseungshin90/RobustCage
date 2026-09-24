@@ -6,6 +6,7 @@
 #include "CageSimplifier/Topo/BoundaryRailUpdater.h"
 #include "CageSimplifier/Topo/VertexRelocater.h"
 #include "CageSimplifier/CageSimplifier.hh"
+#include "CageInitializer/BoundaryRailBuilder.hh"
 #include "Geometry/Exact/TriTriIntersect.h"
 
 #include <algorithm>
@@ -1662,6 +1663,61 @@ void mixed_collapse_collision_is_rejected()
     require_closed_rail_cycles(fixture.cage) == 1, "collision rejection must preserve both endpoints and the rail");
 }
 
+void welded_boundary_ignores_non_manifold_seams()
+{
+  const std::array<Vec3d, 4> p = {
+    Vec3d(0.0, 0.0, 0.0), Vec3d(1.0, 0.0, 0.0), Vec3d(0.0, 1.0, 0.0), Vec3d(0.0, 0.0, 1.0)};
+  for (const bool torn : {true, false})
+  {
+    SMeshT mesh;
+    std::array<VertexHandle, 4> v;
+    for (size_t i = 0; i < 4; ++i)
+      v[i] = mesh.add_vertex(p[i]);
+    add_face(mesh, v[0], v[2], v[1]);
+    add_face(mesh, v[0], v[1], v[3]);
+    add_face(mesh, v[0], v[3], v[2]);
+    // OpenMesh's importer attaches a face it cannot link through copies of
+    // its vertices, which tears the closed surface open along that face.
+    if (torn)
+      add_face(mesh, mesh.add_vertex(p[1]), mesh.add_vertex(p[2]), mesh.add_vertex(p[3]));
+    size_t halfedge_boundary = 0;
+    for (EdgeHandle edge : mesh.edges())
+      halfedge_boundary += mesh.is_boundary(edge);
+    require(halfedge_boundary == (torn ? 6u : 3u), "fixture must have the expected half-edge boundary");
+    require(CageInit::count_welded_boundary_edges(mesh) == (torn ? 0u : 3u),
+      "welding by position must close seams but keep a real hole");
+  }
+}
+
+void tetrahedron_collapse_is_opt_out()
+{
+  Fixture fixture;
+  const auto a = fixture.cage.add_vertex(Vec3d(0.0, 0.0, 0.0));
+  const auto b = fixture.cage.add_vertex(Vec3d(1.0, 0.0, 0.0));
+  const auto c = fixture.cage.add_vertex(Vec3d(0.0, 1.0, 0.0));
+  const auto d = fixture.cage.add_vertex(Vec3d(0.0, 0.0, 1.0));
+  add_face(fixture.cage, a, c, b);
+  add_face(fixture.cage, a, b, d);
+  add_face(fixture.cage, a, d, c);
+  add_face(fixture.cage, b, c, d);
+  fixture.initialize();
+  const auto edge = fixture.cage.edge_handle(fixture.cage.find_halfedge(a, b));
+  require(fixture.cage.is_collapse_ok(fixture.cage.halfedge_handle(edge, 0)),
+    "OpenMesh accepts collapsing a tetrahedron edge into two coincident triangles");
+  auto collapser = collapse_operator(fixture);
+  require(collapser.init(edge), "without the guard a tetrahedron edge stays collapsible");
+  collapser.set_keep_tetrahedra(true);
+  require(!collapser.init(edge), "the guard must keep a closed tetrahedron");
+
+  Fixture larger;
+  const auto v = add_collapse_octahedron(larger.cage);
+  larger.initialize();
+  auto octahedron_collapser = collapse_operator(larger);
+  octahedron_collapser.set_keep_tetrahedra(true);
+  require(octahedron_collapser.init(larger.cage.edge_handle(larger.cage.find_halfedge(v[0], v[1]))),
+    "the guard must not reject edges of larger closed meshes");
+}
+
 void rail_support_projection_is_opt_in()
 {
   for (bool rail_support : {false, true})
@@ -2290,6 +2346,8 @@ int main()
     {"mixed collapse preserves rail cycles without promoting chords", [] { mixed_collapse_keeps_rail_vertex(true, true); }},
     {"minimal rail edges, chords, and cross-rail edges remain forbidden", prohibited_rail_collapses_stay_rejected},
     {"mixed collapse still rejects collisions at the fixed rail point", mixed_collapse_collision_is_rejected},
+    {"tetrahedron collapses are rejected only with the tetrahedron guard", tetrahedron_collapse_is_opt_out},
+    {"welded source boundary ignores seams of non-manifold vertices", welded_boundary_ignores_non_manifold_seams},
     {"rail-edge collapses use the source half-strips only with rail support", rail_support_projection_is_opt_in},
     {"linear solve queues and commits mixed edges with fixed rail positions", [] { linear_solve_collapses_only_mixed_edges(6); }},
     {"zero target collapses until constrained and retains its initial edge scale", [] { linear_solve_collapses_only_mixed_edges(0); }},

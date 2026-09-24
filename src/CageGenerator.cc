@@ -1,4 +1,5 @@
 #include "CageGenerator.hh"
+#include <cstdlib>
 #include <fstream>
 #include "omp.h"
 
@@ -9,6 +10,9 @@ void CageGenerator::stageInitialize()
   VMesh = std::make_unique<VM::VMeshT>();
   cage = std::make_unique<SM::SMeshT>();
 
+  // The default pipeline keeps judging watertightness on the imported
+  // half-edge mesh.
+  param.paramCageInitializer.watertightFromWeldedSource = !usesDefaultCleanup();
   cageInitializer = std::make_unique<CageInitializer>(
     originalMesh.get(), &param.paramCageInitializer,
     VMesh.get(), cage.get());
@@ -74,7 +78,12 @@ void CageGenerator::stageBuildBoundaryRails()
     param.paramCageSimplifier.boundaryRailAnchorMode == "vertex" ?
       BoundaryRailAnchorMode::VertexBisector :
       BoundaryRailAnchorMode::EdgeMidpoint;
-  BoundaryRailBuilder rail_builder(originalMesh.get(), cage.get(), anchor_mode);
+  BoundaryRailSearchOptions search_options;
+  search_options.candidateLimit = param.paramCageSimplifier.boundaryRailCandidateLimit;
+  search_options.retryCyclicStarts = param.paramCageSimplifier.boundaryRailRetryCyclicStarts;
+  search_options.maxSeconds = param.paramCageSimplifier.boundaryRailSearchSeconds;
+  BoundaryRailBuilder rail_builder(
+    originalMesh.get(), cage.get(), anchor_mode, search_options);
   if (!rail_builder.build())
   {
     Logger::user_logger->warn(
@@ -152,7 +161,17 @@ bool CageGenerator::usesDefaultCleanup() const
 
 void CageGenerator::generate()
 {
-  omp_set_num_threads(12);
+  // 12 OpenMP threads by default; the standard OMP_NUM_THREADS overrides it (e.g. 1 for
+  // timing runs that place one job per hardware thread).
+  int num_threads = 12;
+  if (const char* env = std::getenv("OMP_NUM_THREADS"))
+  {
+    const int requested = std::atoi(env);
+    if (requested > 0)
+      num_threads = requested;
+  }
+  omp_set_num_threads(num_threads);
+  Logger::user_logger->info("OpenMP threads: {}", num_threads);
   phase1Timer = PhaseTimer();
   phase2Timer = PhaseTimer();
   phase3Timer = PhaseTimer();

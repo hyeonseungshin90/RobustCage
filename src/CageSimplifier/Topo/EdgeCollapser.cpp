@@ -29,6 +29,13 @@ bool EdgeCollapser::init(EdgeHandle _e)
   // can't collapse
   if (!rm->is_collapse_ok(collapse_he))
     return false;
+  // is_collapse_ok() misses one case of the link condition: on a closed
+  // tetrahedron both endpoints have valence 3, and the collapse leaves the
+  // same triangle twice with opposite orientations.
+  if (f_keep_tetrahedra &&
+    rm->valence(rm->from_vertex_handle(collapse_he)) == 3 &&
+    rm->valence(rm->to_vertex_handle(collapse_he)) == 3)
+    return false;
   if (!initialize_rail_constraint(_e))
     return false;
 

@@ -2,6 +2,7 @@
 
 #include "Mesh/SurfaceMesh/SurfaceMeshDefinition.h"
 #include "BoundaryRailEmbedding.hh"
+#include "BoundaryRailSearch.hh"
 
 namespace Cage
 {
@@ -40,8 +41,9 @@ public:
   BoundaryRailBuilder(
     SurfaceMesh::SMeshT* source_mesh,
     SurfaceMesh::SMeshT* cage_mesh,
-    BoundaryRailAnchorMode anchor_mode = BoundaryRailAnchorMode::EdgeMidpoint)
-    : source(source_mesh), cage(cage_mesh), mode(anchor_mode)
+    BoundaryRailAnchorMode anchor_mode = BoundaryRailAnchorMode::EdgeMidpoint,
+    BoundaryRailSearchOptions search_options = {})
+    : source(source_mesh), cage(cage_mesh), mode(anchor_mode), searchOptions(search_options)
   {}
 
   bool build();
@@ -51,7 +53,14 @@ private:
   SurfaceMesh::SMeshT* source;
   SurfaceMesh::SMeshT* cage;
   BoundaryRailAnchorMode mode;
+  BoundaryRailSearchOptions searchOptions;
 };
+
+// Number of source edges that border a hole once vertices sharing a position
+// are welded, i.e. welded edges used by exactly one face.  OpenMesh's importer
+// tears a closed surface open around each non-manifold vertex; those seams
+// carry two or more faces after welding and are not counted.
+size_t count_welded_boundary_edges(SurfaceMesh::SMeshT& mesh);
 
 }// namespace CageInit
 }// namespace Cage

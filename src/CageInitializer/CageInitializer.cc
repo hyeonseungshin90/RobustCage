@@ -1,6 +1,8 @@
 #include "CageInitializer.hh"
+#include "BoundaryRailBuilder.hh"
 #include "CageSimplifier/SpaceSearch/DFaceTree.h"
 #include <algorithm>
+#include <array>
 #include <cfloat>
 #include <cmath>
 #include <fstream>
@@ -194,7 +196,17 @@ void CageInitializer::generate()
   SM::pre_calculate_edge_length(SMesh);
   SM::pre_calculate_face_area(SMesh);
   getBoundingBox();
-  const size_t input_boundary_edges = countBoundaryEdges(SMesh);
+  const size_t halfedge_boundary_edges = countBoundaryEdges(SMesh);
+  size_t input_boundary_edges = halfedge_boundary_edges;
+  if (param->watertightFromWeldedSource && halfedge_boundary_edges > 0)
+  {
+    // Seams around non-manifold vertices are not holes: a closed input keeps
+    // its inside/outside separation.
+    input_boundary_edges = count_welded_boundary_edges(*SMesh);
+    Logger::user_logger->info(
+      "input boundary after welding vertices by position: {} of {} boundary edges border a hole; the rest are seams of non-manifold vertices.",
+      input_boundary_edges, halfedge_boundary_edges);
+  }
 
   // step 1. tetrahedralize space around surface mesh.
   tetrahedralizer = std::make_unique<Tetrahedralizer>(SMesh, &param->paramTetrahedralizer, outVMesh);
@@ -426,11 +438,74 @@ void CageInitializer::separateMeshToInOut()
   std::vector<VM::CellHandle> cellsToDelete;
   cellsToDelete.reserve(outVMesh->nCells() / 2);
 
-  // collect inside tets in outVMesh
-  for (int cidx = 0;cidx < outVMesh->nCells();cidx++)
+  if (param->watertightFromWeldedSource)
   {
-    if (outVMesh->cells[cidx].prop.is_inside)
-      cellsToDelete.emplace_back(cidx);
+    // The mesher's inside flags can disagree with the constraint surface on
+    // non-manifold input; removing such tets leaves non-constraint faces on
+    // the boundary and breaks the offset extraction.  Classify by
+    // connectivity instead: a tet is outside when it is reachable from the
+    // boundary of the tet mesh without crossing a constraint face.
+    const size_t n_cells = outVMesh->nCells();
+    std::vector<std::array<int, 2>> face_cells(outVMesh->nFaces(), { -1, -1 });
+    for (size_t cidx = 0; cidx < n_cells; cidx++)
+    {
+      for (auto hfh : outVMesh->cells[cidx].halffaces)
+      {
+        auto& slots = face_cells[faceHdl(hfh).idx()];
+        slots[slots[0] < 0 ? 0 : 1] = (int)cidx;
+      }
+    }
+    std::vector<char> outside(n_cells, 0);
+    std::vector<int> stack;
+    for (size_t fidx = 0; fidx < face_cells.size(); fidx++)
+    {
+      const auto& slots = face_cells[fidx];
+      if (slots[0] >= 0 && slots[1] < 0 && !outVMesh->faces[fidx].prop.is_constraint &&
+        !outside[slots[0]])
+      {
+        outside[slots[0]] = 1;
+        stack.push_back(slots[0]);
+      }
+    }
+    while (!stack.empty())
+    {
+      const int cidx = stack.back();
+      stack.pop_back();
+      for (auto hfh : outVMesh->cells[cidx].halffaces)
+      {
+        const int fidx = faceHdl(hfh).idx();
+        if (outVMesh->faces[fidx].prop.is_constraint)
+          continue;
+        for (int next : face_cells[fidx])
+        {
+          if (next >= 0 && !outside[next])
+          {
+            outside[next] = 1;
+            stack.push_back(next);
+          }
+        }
+      }
+    }
+    size_t relabeled = 0;
+    for (size_t cidx = 0; cidx < n_cells; cidx++)
+    {
+      if (!outside[cidx])
+        cellsToDelete.emplace_back(cidx);
+      if ((outside[cidx] != 0) == outVMesh->cells[cidx].prop.is_inside)
+        relabeled++;
+    }
+    Logger::user_logger->info(
+      "inside/outside by connectivity: {} of {} tetrahedra inside; {} differ from the mesher's labels.",
+      cellsToDelete.size(), n_cells, relabeled);
+  }
+  else
+  {
+    // collect inside tets in outVMesh
+    for (int cidx = 0;cidx < outVMesh->nCells();cidx++)
+    {
+      if (outVMesh->cells[cidx].prop.is_inside)
+        cellsToDelete.emplace_back(cidx);
+    }
   }
   tetRemover->removeTet(cellsToDelete);
   Logger::user_logger->info("outside cage: {} vertices, {} faces.",

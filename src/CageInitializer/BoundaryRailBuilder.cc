@@ -5,6 +5,7 @@
 #include <array>
 #include <cfloat>
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <iomanip>
@@ -14,6 +15,7 @@
 #include <queue>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -557,11 +559,24 @@ struct GraphPath
   double cost = DBL_MAX;
 };
 
+struct RailSearchDeadline
+{
+  using Clock = std::chrono::steady_clock;
+  const Clock::time_point* until = nullptr;
+  bool timedOut = false;
+
+  bool expired()
+  {
+    if (until && Clock::now() >= *until) timedOut = true;
+    return timedOut;
+  }
+};
+
 bool shortest_path(
   SMeshT& mesh, VertexHandle source, VertexHandle target,
   const std::unordered_set<int>& blocked_vertices,
   const std::unordered_set<int>& blocked_edges,
-  GraphPath& path)
+  GraphPath& path, RailSearchDeadline& deadline)
 {
   const size_t vertex_capacity = mesh.n_vertices();
   std::vector<double> distance(vertex_capacity, DBL_MAX);
@@ -571,8 +586,11 @@ bool shortest_path(
   distance[source.idx()] = 0.0;
   queue.emplace(0.0, source.idx());
 
+  size_t queue_pops = 0;
   while (!queue.empty())
   {
+    if ((queue_pops++ & 255u) == 0u && deadline.expired())
+      return false;
     const auto entry = queue.top();
     queue.pop();
     const double current_distance = entry.first;
@@ -630,13 +648,14 @@ std::vector<GraphPath> candidate_paths(
   SMeshT& mesh, VertexHandle source, VertexHandle target,
   const std::unordered_set<int>& blocked_vertices,
   const std::unordered_set<int>& blocked_edges,
-  size_t max_candidates)
+  size_t max_candidates, RailSearchDeadline& deadline)
 {
   std::vector<GraphPath> result;
   GraphPath shortest;
   if (!shortest_path(
-    mesh, source, target, blocked_vertices, blocked_edges, shortest))
+    mesh, source, target, blocked_vertices, blocked_edges, shortest, deadline))
     return result;
+  if (deadline.expired()) return {};
   result.push_back(shortest);
 
   const size_t edge_count = shortest.vertices.size() > 0 ?
@@ -644,6 +663,7 @@ std::vector<GraphPath> candidate_paths(
   const size_t probes = std::min<size_t>(edge_count, 32);
   for (size_t probe = 0; probe < probes && result.size() < max_candidates; probe++)
   {
+    if (deadline.expired()) return {};
     const size_t i = probes == edge_count ? probe :
       (probe * edge_count) / probes;
     const EdgeHandle excluded = edge_between(
@@ -653,10 +673,11 @@ std::vector<GraphPath> candidate_paths(
     std::unordered_set<int> trial_blocked_edges = blocked_edges;
     trial_blocked_edges.insert(excluded.idx());
     GraphPath alternative;
-    if (!shortest_path(
+    const bool found = shortest_path(
       mesh, source, target, blocked_vertices,
-      trial_blocked_edges, alternative))
-      continue;
+      trial_blocked_edges, alternative, deadline);
+    if (deadline.expired()) return {};
+    if (!found) continue;
     bool duplicate = false;
     for (const GraphPath& existing : result)
     {
@@ -676,6 +697,7 @@ std::vector<GraphPath> candidate_paths(
     });
   if (result.size() > max_candidates)
     result.resize(max_candidates);
+  if (deadline.expired()) return {};
   return result;
 }
 
@@ -771,11 +793,13 @@ bool validate_cycle(
   return cyclic_order_matches(false) || cyclic_order_matches(true);
 }
 
-bool construct_rail(
+bool construct_rail_attempt(
   SMeshT& mesh, const std::vector<VertexHandle>& input_anchors,
   const std::unordered_set<int>& all_anchor_vertices,
-  int rail_id, BoundaryRailLoop& result)
+  int rail_id, BoundaryRailLoop& result, size_t candidate_limit,
+  RailSearchDeadline& deadline, BoundaryRailSearchStats& stats)
 {
+  stats = BoundaryRailSearchStats{};
   std::vector<VertexHandle> anchors;
   anchors.reserve(input_anchors.size());
   for (VertexHandle anchor : input_anchors)
@@ -789,7 +813,10 @@ bool construct_rail(
   for (VertexHandle anchor : anchors)
     unique_anchors.insert(anchor.idx());
   if (anchors.size() < 3 || unique_anchors.size() != anchors.size())
+  {
+    stats.outcome = anchors.size() < 3 ? "too_few_anchors" : "repeated_anchor";
     return false;
+  }
   // A ray hit may reuse a cage vertex that an earlier boundary component has
   // already claimed.  Endpoints are intentionally exempt from Dijkstra's
   // intermediate-vertex blocking, so reject that loop here instead of letting
@@ -797,7 +824,10 @@ bool construct_rail(
   for (VertexHandle anchor : anchors)
   {
     if (mesh.data(anchor).boundary_rail_id != kNoRail)
+    {
+      stats.outcome = "anchor_already_claimed";
       return false;
+    }
   }
 
   std::unordered_set<int> used_vertices;
@@ -808,6 +838,7 @@ bool construct_rail(
 
   std::function<bool(size_t)> select_paths = [&](size_t segment)
   {
+    if (deadline.expired()) return false;
     if (++search_nodes > max_search_nodes)
       return false;
     if (segment == anchors.size())
@@ -823,7 +854,8 @@ bool construct_rail(
     }
 
     const std::vector<GraphPath> candidates = candidate_paths(
-      mesh, source, target, blocked_vertices, used_edges, 8);
+      mesh, source, target, blocked_vertices, used_edges, candidate_limit, deadline);
+    if (deadline.timedOut) return false;
     for (const GraphPath& candidate : candidates)
     {
       std::vector<int> added_vertices;
@@ -864,17 +896,36 @@ bool construct_rail(
         used_edges.erase(edge);
       for (int vertex : added_vertices)
         used_vertices.erase(vertex);
+      if (deadline.timedOut) return false;
     }
     return false;
   };
 
-  if (!select_paths(0))
+  const bool connected = select_paths(0);
+  stats.recursiveCalls = search_nodes;
+  stats.exploredStates = std::min(search_nodes, max_search_nodes);
+  stats.stateLimitHits = search_nodes > max_search_nodes ? 1 : 0;
+  stats.timedOut = deadline.timedOut;
+  if (!connected)
+  {
+    stats.outcome = stats.timedOut ? "time_limit" :
+      (stats.stateLimitHits ? "state_limit" : "candidates_exhausted");
     return false;
+  }
 
   std::vector<VertexHandle> cycle_vertices;
   std::vector<EdgeHandle> cycle_edges;
   if (!validate_cycle(mesh, selected, anchors, cycle_vertices, cycle_edges))
+  {
+    stats.outcome = "cycle_validation_failed";
     return false;
+  }
+  if (deadline.expired())
+  {
+    stats.timedOut = true;
+    stats.outcome = "time_limit";
+    return false;
+  }
 
   for (VertexHandle vh : cycle_vertices)
     mesh.data(vh).boundary_rail_id = rail_id;
@@ -883,9 +934,98 @@ bool construct_rail(
   result.railId = rail_id;
   result.vertices = std::move(cycle_vertices);
   result.anchors = std::move(anchors);
+  stats.outcome = "success";
   return true;
 }
 }// namespace
+
+bool detail::construct_boundary_rail(
+  SMeshT& mesh, const std::vector<VertexHandle>& input_anchors,
+  const std::unordered_set<int>& all_anchor_vertices,
+  int rail_id, BoundaryRailLoop& result,
+  const BoundaryRailSearchOptions& options, BoundaryRailSearchStats& stats)
+{
+  if (options.candidateLimit == 0)
+    throw std::invalid_argument("boundary rail candidate limit must be positive");
+  if (!std::isfinite(options.maxSeconds) || options.maxSeconds < 0.0)
+    throw std::invalid_argument("boundary rail search seconds must be finite and nonnegative");
+  stats = BoundaryRailSearchStats{};
+  const auto started = RailSearchDeadline::Clock::now();
+  const auto finish = [&](bool success)
+  {
+    stats.seconds = std::chrono::duration<double>(RailSearchDeadline::Clock::now() - started).count();
+    return success;
+  };
+  std::vector<VertexHandle> anchors;
+  for (VertexHandle anchor : input_anchors)
+    if (anchors.empty() || anchors.back() != anchor) anchors.push_back(anchor);
+  if (anchors.size() > 1 && anchors.front() == anchors.back()) anchors.pop_back();
+  stats.anchors = anchors.size();
+  std::unordered_set<int> unique;
+  for (VertexHandle anchor : anchors) unique.insert(anchor.idx());
+  if (anchors.size() < 3 || unique.size() != anchors.size())
+  {
+    stats.outcome = anchors.size() < 3 ? "too_few_anchors" : "repeated_anchor";
+    return finish(false);
+  }
+  for (VertexHandle anchor : anchors)
+    if (mesh.data(anchor).boundary_rail_id != kNoRail)
+    {
+      stats.outcome = "anchor_already_claimed";
+      return finish(false);
+    }
+  // Original start first; every later attempt is a forward cyclic shift.
+  // The graph, global reservations, and previously completed rails stay fixed.
+  auto end = RailSearchDeadline::Clock::time_point::max();
+  if (options.maxSeconds > 0.0)
+  {
+    const double available = std::chrono::duration<double>(end - started).count();
+    if (options.maxSeconds < available)
+      end = started + std::chrono::duration_cast<RailSearchDeadline::Clock::duration>(
+        std::chrono::duration<double>(options.maxSeconds));
+  }
+  RailSearchDeadline deadline;
+  deadline.until = options.maxSeconds > 0.0 ? &end : nullptr;
+  const size_t starts = options.retryCyclicStarts ? anchors.size() : 1;
+  for (size_t shift = 0; shift < starts; ++shift)
+  {
+    if (deadline.expired())
+    {
+      stats.timedOut = true;
+      stats.outcome = "time_limit";
+      break;
+    }
+    auto trial_anchors = anchors;
+    std::rotate(trial_anchors.begin(), trial_anchors.begin() + shift, trial_anchors.end());
+    BoundaryRailLoop trial_result;
+    BoundaryRailSearchStats attempt;
+    ++stats.attempts;
+    const bool success = construct_rail_attempt(mesh, trial_anchors, all_anchor_vertices,
+      rail_id, trial_result, options.candidateLimit, deadline, attempt);
+    stats.exploredStates += attempt.exploredStates;
+    stats.recursiveCalls += attempt.recursiveCalls;
+    stats.stateLimitHits += attempt.stateLimitHits;
+    stats.timedOut = attempt.timedOut;
+    stats.outcome = attempt.outcome;
+    if (success)
+    {
+      stats.successfulShift = static_cast<int>(shift);
+      result = std::move(trial_result);
+      return finish(true);
+    }
+    if (stats.timedOut) break;
+  }
+  return finish(false);
+}
+
+size_t count_welded_boundary_edges(SMeshT& mesh)
+{
+  const std::vector<int> welded = weld_vertices_by_position(mesh);
+  size_t boundary_edges = 0;
+  for (const auto& edge : count_welded_edge_faces(mesh, welded))
+    boundary_edges += edge.second == 1;
+  return boundary_edges;
+}
 
 bool BoundaryRailBuilder::build()
 {
@@ -1497,9 +1637,20 @@ BoundaryRailBuildStats BoundaryRailBuilder::build_with_stats()
   {
     const int rail_id = static_cast<int>(built_rails);
     BoundaryRailLoop rail_loop;
-    if (construct_rail(
+    BoundaryRailSearchStats search_stats;
+    const bool rail_built = detail::construct_boundary_rail(
         *cage, loop.anchors, all_anchor_vertices,
-        rail_id, rail_loop))
+        rail_id, rail_loop, searchOptions, search_stats);
+    Logger::user_logger->info(
+      "rail_search mode={} component={} anchors={} candidates={} retry_cyclic={} time_limit_seconds={} attempts={} successful_shift={} states={} calls={} state_limit={} budget_hits={} timed_out={} outcome={} seconds={}",
+      mode == BoundaryRailAnchorMode::EdgeMidpoint ? "edge-midpoint" : "vertex-bisector",
+      loop.detected_loop_index, search_stats.anchors, searchOptions.candidateLimit,
+      searchOptions.retryCyclicStarts, searchOptions.maxSeconds,
+      search_stats.attempts, search_stats.successfulShift,
+      search_stats.exploredStates, search_stats.recursiveCalls,
+      std::max<size_t>(1024, search_stats.anchors * 16), search_stats.stateLimitHits,
+      search_stats.timedOut, search_stats.outcome, search_stats.seconds);
+    if (rail_built)
     {
       rail_loops.push_back(std::move(rail_loop));
       // Give the source boundary component the same id as its cage rail and

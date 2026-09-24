@@ -32,6 +32,8 @@ public:
   double max_distance_error;
   // See EdgeCollapser::set_rail_support.
   bool use_rail_support = false;
+  // See EdgeCollapser::set_keep_tetrahedra.
+  bool keep_tetrahedra = false;
 public:
   CollapseStage(
     SMeshT* original, SMeshT* cage, ParamCollapseStage* p,
@@ -260,6 +262,7 @@ private:
   {
     EdgeCollapser collapser(om, rm, ot, lrt, og);
     collapser.set_rail_support(use_rail_support);
+    collapser.set_keep_tetrahedra(keep_tetrahedra);
     return collapser;
   }
 };

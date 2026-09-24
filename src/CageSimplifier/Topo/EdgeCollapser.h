@@ -45,6 +45,10 @@ public:
   // Project rail-edge collapses onto the source-boundary half-strips instead
   // of clamping them to the collapsed rail edge.  Applies from the next init().
   void set_rail_support(bool enabled) { f_use_rail_support = enabled; }
+  // Reject collapsing an edge of a closed tetrahedron, so a closed component
+  // (e.g. the cage around a cavity) stops at four vertices instead of two
+  // coincident triangles.  Applies from the next init().
+  void set_keep_tetrahedra(bool enabled) { f_keep_tetrahedra = enabled; }
 
   bool try_collapse_edge(const Vec3d& new_point, const ExactPoint* new_ep);
   bool try_collapse_edge(EdgeHandle e, const Vec3d& new_point, const ExactPoint* new_ep);
@@ -88,6 +92,7 @@ private:
   bool f_check_selfinter;
   bool f_check_inter;
   bool f_use_rail_support = false;
+  bool f_keep_tetrahedra = false;
 
   void predict_faces_after_collapse();
   VertexHandle find_closer_end_point()const;

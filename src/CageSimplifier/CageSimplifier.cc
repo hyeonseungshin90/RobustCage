@@ -278,6 +278,9 @@ void CageSimplifier::run_phase3_energy_simplification()
     ot.get(), lrt.get(), og.get(), original_diagonal_length);
   collapse_stage->use_rail_support =
     param->enableBoundaryRails && param->enableRailSupport;
+  // Closed components such as the cage around a cavity stop at a tetrahedron.
+  // The fast (default) pipeline keeps its original collapse rule.
+  collapse_stage->keep_tetrahedra = true;
   if (param->phase3Mode == "linear_solve")
   {
     run_phase3_linear_solve_iterations();

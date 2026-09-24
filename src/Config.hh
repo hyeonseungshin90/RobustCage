@@ -53,6 +53,11 @@ struct ParamCageInitializer
   // "topological_offset" uses simplicial embedding and offset insertion.
   std::string phase1Mode = "subdivision";
 
+  // Decide whether the input is closed on the source welded by position, so
+  // the seams OpenMesh tears around non-manifold vertices do not count as
+  // holes.  Set by CageGenerator for every pipeline except the default one.
+  bool watertightFromWeldedSource = false;
+
   ParamTetrahedralizer paramTetrahedralizer;
 
   boost::json::object serialize()const
@@ -379,6 +384,11 @@ struct ParamCageSimplifier
   // bisector alternative, and "compare" runs both on copies of one Phase 1
   // cage without entering simplification.
   std::string boundaryRailAnchorMode = "edge";
+  // Phase 2 graph search: candidate paths per anchor pair, forward cyclic
+  // start retries, and a total wall-clock budget per boundary (zero disables).
+  size_t boundaryRailCandidateLimit = 8;
+  bool boundaryRailRetryCyclicStarts = true;
+  double boundaryRailSearchSeconds = 90.0;
   // Run the per-triangle rail relabeling pass after each linear-solve quality
   // flip stage.  Only meaningful with enableBoundaryRails; off by default so
   // the rails keep their initial construction unless the update is requested.
@@ -415,6 +425,9 @@ struct ParamCageSimplifier
     jo["phase3QualityPolishIterations"] = phase3QualityPolishIterations;
     jo["enableBoundaryRails"] = enableBoundaryRails;
     jo["boundaryRailAnchorMode"] = boundaryRailAnchorMode;
+    jo["boundaryRailCandidateLimit"] = boundaryRailCandidateLimit;
+    jo["boundaryRailRetryCyclicStarts"] = boundaryRailRetryCyclicStarts;
+    jo["boundaryRailSearchSeconds"] = boundaryRailSearchSeconds;
     jo["enableRailUpdate"] = enableRailUpdate;
     jo["enableRailSupport"] = enableRailSupport;
     jo["relaxErrorIterStep"] = relaxErrorIterStep;
@@ -444,6 +457,20 @@ struct ParamCageSimplifier
       "edge";
     if (boundaryRailAnchorMode == "compare")
       enableBoundaryRails = true;
+    const auto candidate_limit_it = jo.find("boundaryRailCandidateLimit");
+    const std::int64_t candidate_limit = candidate_limit_it != jo.end() ?
+      boost::json::value_to<std::int64_t>(candidate_limit_it->value()) : 8;
+    if (candidate_limit <= 0)
+      throw std::invalid_argument("boundaryRailCandidateLimit must be positive");
+    boundaryRailCandidateLimit = static_cast<size_t>(candidate_limit);
+    const auto retry_starts_it = jo.find("boundaryRailRetryCyclicStarts");
+    boundaryRailRetryCyclicStarts = retry_starts_it != jo.end() ?
+      retry_starts_it->value().as_bool() : true;
+    const auto search_seconds_it = jo.find("boundaryRailSearchSeconds");
+    boundaryRailSearchSeconds = search_seconds_it != jo.end() ?
+      boost::json::value_to<double>(search_seconds_it->value()) : 90.0;
+    if (!std::isfinite(boundaryRailSearchSeconds) || boundaryRailSearchSeconds < 0.0)
+      throw std::invalid_argument("boundaryRailSearchSeconds must be finite and nonnegative");
     auto rail_update_it = jo.find("enableRailUpdate");
     enableRailUpdate = rail_update_it != jo.end() ?
       rail_update_it->value().as_bool() : false;

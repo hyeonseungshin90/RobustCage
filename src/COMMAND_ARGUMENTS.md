@@ -58,6 +58,33 @@ config.json
 
 ## Supported Preset Tokens
 
+Phase 2의 graph rail 탐색 기본값은 anchor 쌍마다 후보 경로 최대 8개,
+시작 anchor의 순환 이동 재시도, boundary 하나당 총 90초입니다. 원래 시작점부터
+시도하고 실패하면 source의 같은 순방향 순서를 유지한 채 시작점을 하나씩 옮깁니다.
+성공하면 즉시 멈추며 순서를 뒤집지는 않습니다. 각 시작점에는 기존
+`max(1024, 16*m)` 조합 탐색 상한을 별도로 적용합니다 (`m`: 중복 제거 후 anchor 수).
+후보 생성은 기존처럼 최초 최단경로에서 최대 32개 edge를 균등하게 골라 하나씩
+제외하며, 후보 상한에 도달하면 멈춥니다. 이미 완성한 다른 rail은 재탐색하지 않습니다.
+
+JSON 설정의 `paramCageSimplifier` 안에서 다음 세 항목을 바꿀 수 있습니다.
+항목을 생략하면 아래 기본값을 사용하며, edge/vertex/compare 모두에 적용합니다.
+
+```json
+"boundaryRailCandidateLimit": 8,
+"boundaryRailRetryCyclicStarts": true,
+"boundaryRailSearchSeconds": 90.0
+```
+
+`boundaryRailCandidateLimit`는 양의 정수입니다. 고정 시작점 비교는
+`boundaryRailRetryCyclicStarts: false`와 후보 상한 8, 16, 32, 64 등으로 설정합니다.
+`boundaryRailSearchSeconds`는 모든 시작점에 공유되는 비음수 초 단위 예산이며,
+`0`은 시간 제한을 끕니다. 같은 시간 예산으로 비교하거나 기존 무제한 실행을
+재현하려면 이 값을 명시하세요. 시간은 경로 탐색 중 주기적으로 검사하므로
+실제 종료에는 짧은 지연이 있을 수 있습니다. 시간 초과 시 미완성 후보 목록이나
+rail은 채택하지 않으며, 이전에 완성한 rail은 보존합니다.
+각 boundary의 `rail_search` 로그에는 실제 설정, 시도한 시작점 수, 성공한 이동량,
+누적 탐색량, 조합 상한 도달 횟수와 시간 초과 여부가 기록됩니다.
+
 | 토큰 | 적용 대상 | 효과 |
 |---|---|---|
 | `default` | 전체 | 기존 Phase 1 절차를 그대로 사용합니다. 모든 tetrahedron을 1→12 subdivision하고 non-adjacent tetrahedron을 제거하는 과정을 2회 수행합니다. |
@@ -80,6 +107,19 @@ Phase 2 직전과 Phase 3 직전의 near-degeneracy cleanup은 기존 `default`
 지정한 경우에도 cleanup은 꺼지며, JSON 설정에도 같은 기준을 적용합니다.
 Timing JSON의 각 cleanup 항목은 `status`에 `run`, `disabled`, 또는 `skipped`를
 기록하고, 실행하지 않은 cleanup의 시간과 처리 건수는 0입니다.
+
+Phase 3 energy 모드(`linear_solve`, `newton_solve`, `qem_original`)의 edge collapse는
+닫힌 사면체의 edge를 collapse하지 않습니다. OpenMesh의 `is_collapse_ok()`는 이 경우를
+허용하며, collapse하면 같은 삼각형 두 장이 반대 방향으로 겹쳐 부피 0인 성분이 남습니다.
+cavity를 감싸는 안쪽 cage 성분처럼 따로 떨어진 닫힌 성분은 정점 4개의 사면체에서 멈춥니다.
+`default`(`fast`) 파이프라인의 collapse 규칙은 바뀌지 않습니다.
+
+Phase 1의 watertight 판정(inside/outside 분리 여부)은 `default` 조합을 제외한 모든 조합에서
+좌표가 정확히 같은 정점을 합친 source를 기준으로 합니다. 합친 뒤 face 하나만 쓰는 edge가
+없으면 watertight로 보고 inside/outside 분리를 수행합니다. OpenMesh importer는 non-manifold
+vertex 주변의 face를 정점을 복제해 붙이기 때문에 닫힌 입력에도 가짜 boundary edge가 생기는데,
+이 seam은 hole로 세지 않습니다. non-manifold vertex/edge는 그대로 둡니다.
+`default` 조합은 기존처럼 import된 half-edge mesh의 boundary edge로 판정합니다.
 
 양의 목표 정점 수를 지정한 `linear_solve`에서는 `collapse → flip → rail update`를 기본 최대 30회 반복한 뒤,
 마지막에 relocation 단계를 한 번 실행합니다.
